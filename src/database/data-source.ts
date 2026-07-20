@@ -1,7 +1,5 @@
 import 'dotenv/config';
 import { DataSource } from 'typeorm';
-import { User } from '../modules/users/entities/user.entity';
-import { CreateUsersTable1720375200000 } from '../migrations/1720375200000-CreateUsersTable';
 
 export default new DataSource({
   type: 'postgres',
@@ -14,7 +12,7 @@ export default new DataSource({
         password: process.env.DATABASE_PASSWORD,
         database: process.env.DATABASE_NAME,
       }),
-  entities: [User],
-  migrations: [CreateUsersTable1720375200000],
+  entities: [__dirname + '/../modules/**/*.entity{.ts,.js}'],
+  migrations: [__dirname + '/../migrations/*{.ts,.js}'],
   synchronize: false,
 });

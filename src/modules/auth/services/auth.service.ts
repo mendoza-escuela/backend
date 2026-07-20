@@ -1,34 +1,259 @@
-import { UnauthorizedException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
+import { createHash, randomBytes, randomUUID } from 'crypto';
+import { DataSource, IsNull, MoreThan, Repository } from 'typeorm';
+import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { UsersService } from '../../users/services/users.service';
+import { User } from '../../users/entities/user.entity';
+import { AuthSession } from '../entities/auth-session.entity';
+import { PasswordResetToken } from '../entities/password-reset-token.entity';
+import { assertStrongPassword } from '../utils/password-policy';
+import { MailService } from './mail.service';
+
+type SessionUser = AuthenticatedUser & {
+  mustChangePassword: boolean;
+  lastLoginAt: Date | null;
+};
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+  private readonly maxLoginAttempts: number;
+  private readonly lockMinutes: number;
+  private readonly sessionHours: number;
+
   constructor(
     private readonly jwtService: JwtService,
     private readonly usersService: UsersService,
-  ) {}
+    private readonly configService: ConfigService,
+    private readonly mailService: MailService,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
+    @InjectRepository(AuthSession)
+    private readonly sessionsRepository: Repository<AuthSession>,
+    @InjectRepository(PasswordResetToken)
+    private readonly resetTokensRepository: Repository<PasswordResetToken>,
+  ) {
+    this.maxLoginAttempts = Number(
+      configService.get('LOGIN_MAX_ATTEMPTS') ?? 5,
+    );
+    this.lockMinutes = Number(configService.get('LOGIN_LOCK_MINUTES') ?? 15);
+    this.sessionHours = Number(
+      configService.get('SESSION_DURATION_HOURS') ?? 8,
+    );
+  }
 
+  /** Autentica sin revelar si la cuenta existe y registra intentos y último acceso. */
   async login(email: string, password: string) {
-    const user = await this.usersService.findByEmailWithPassword(email);
+    const user = await this.usersService.findByEmailWithPassword(
+      email.trim().toLowerCase(),
+    );
+    const invalidCredentials = new UnauthorizedException(
+      'Correo o contraseña incorrectos.',
+    );
 
-    if (!user) {
-      throw new UnauthorizedException('Credenciales inválidas.');
+    if (!user || !user.isActive) throw invalidCredentials;
+    if (user.lockedUntil && user.lockedUntil > new Date()) {
+      throw new UnauthorizedException(
+        'La cuenta está bloqueada temporalmente. Intentá más tarde.',
+      );
     }
 
-    const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
-
-    if (!isPasswordValid) {
-      throw new UnauthorizedException('Credenciales inválidas.');
+    if (!(await bcrypt.compare(password, user.passwordHash))) {
+      await this.usersService.recordFailedLogin(
+        user,
+        this.maxLoginAttempts,
+        this.lockMinutes,
+      );
+      throw invalidCredentials;
     }
+
+    const previousLastLoginAt = user.lastLoginAt;
+    await this.usersService.recordSuccessfulLogin(user.id);
+    const tokenId = randomUUID();
+    const expiresAt = new Date(Date.now() + this.sessionHours * 60 * 60_000);
+    await this.sessionsRepository.save({
+      tokenId,
+      userId: user.id,
+      expiresAt,
+      revokedAt: null,
+    });
 
     return {
       accessToken: await this.jwtService.signAsync({
         sub: user.id,
+        sid: tokenId,
         email: user.email,
         role: user.role,
       }),
+      expiresAt,
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        mustChangePassword: user.mustChangePassword,
+        lastLoginAt: previousLastLoginAt,
+      },
     };
+  }
+
+  async validateSession(userId: string, tokenId: string): Promise<SessionUser> {
+    const session = await this.sessionsRepository.findOne({
+      where: {
+        tokenId,
+        userId,
+        revokedAt: IsNull(),
+        expiresAt: MoreThan(new Date()),
+      },
+    });
+    const user = session ? await this.usersService.findById(userId) : null;
+    if (!session || !user)
+      throw new UnauthorizedException('La sesión no es válida o venció.');
+    return {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      sessionId: tokenId,
+      mustChangePassword: user.mustChangePassword,
+      lastLoginAt: user.lastLoginAt,
+    };
+  }
+
+  async logout(tokenId: string): Promise<void> {
+    await this.sessionsRepository.update(
+      { tokenId, revokedAt: IsNull() },
+      { revokedAt: new Date() },
+    );
+  }
+
+  async requestPasswordReset(email: string): Promise<void> {
+    const user = await this.usersService.findByEmail(
+      email.trim().toLowerCase(),
+    );
+    if (!user || !user.isActive) return;
+
+    await this.resetTokensRepository.update(
+      { userId: user.id, usedAt: IsNull() },
+      { usedAt: new Date() },
+    );
+    const rawToken = randomBytes(32).toString('hex');
+    const expiresMinutes = Number(
+      this.configService.get('PASSWORD_RESET_TOKEN_EXPIRES_MINUTES') ?? 30,
+    );
+    const tokenHash = this.hashToken(rawToken);
+    await this.resetTokensRepository.save({
+      userId: user.id,
+      tokenHash,
+      expiresAt: new Date(Date.now() + expiresMinutes * 60_000),
+      usedAt: null,
+    });
+
+    try {
+      await this.mailService.sendPasswordReset(user.email, rawToken);
+    } catch {
+      await this.resetTokensRepository.update(
+        { tokenHash },
+        { usedAt: new Date() },
+      );
+      this.logger.error(
+        'Password recovery email could not be sent. The token was invalidated.',
+      );
+    }
+  }
+
+  async resetPassword(rawToken: string, newPassword: string): Promise<void> {
+    assertStrongPassword(newPassword);
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    const tokenHash = this.hashToken(rawToken);
+
+    await this.dataSource.transaction(async (manager) => {
+      const resetToken = await manager
+        .getRepository(PasswordResetToken)
+        .findOne({
+          where: {
+            tokenHash,
+            usedAt: IsNull(),
+            expiresAt: MoreThan(new Date()),
+          },
+          lock: { mode: 'pessimistic_write' },
+        });
+      if (!resetToken) {
+        throw new BadRequestException(
+          'El enlace es inválido, ya fue usado o venció.',
+        );
+      }
+
+      await manager.update(User, resetToken.userId, {
+        passwordHash,
+        mustChangePassword: false,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      });
+      await manager.update(PasswordResetToken, resetToken.id, {
+        usedAt: new Date(),
+      });
+      await manager
+        .createQueryBuilder()
+        .update(AuthSession)
+        .set({ revokedAt: new Date() })
+        .where('user_id = :userId', { userId: resetToken.userId })
+        .andWhere('revoked_at IS NULL')
+        .execute();
+    });
+  }
+
+  async changePassword(
+    user: AuthenticatedUser,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<void> {
+    assertStrongPassword(newPassword);
+    const persistedUser = await this.usersService.findByEmailWithPassword(
+      user.email,
+    );
+    if (
+      !persistedUser ||
+      !(await bcrypt.compare(currentPassword, persistedUser.passwordHash))
+    ) {
+      throw new BadRequestException('La contraseña actual es incorrecta.');
+    }
+    if (await bcrypt.compare(newPassword, persistedUser.passwordHash)) {
+      throw new BadRequestException(
+        'La nueva contraseña debe ser diferente a la actual.',
+      );
+    }
+
+    await this.usersService.updatePassword(
+      user.id,
+      await bcrypt.hash(newPassword, 12),
+    );
+    await this.revokeUserSessions(user.id, user.sessionId);
+  }
+
+  private async revokeUserSessions(
+    userId: string,
+    exceptTokenId?: string,
+  ): Promise<void> {
+    const query = this.sessionsRepository
+      .createQueryBuilder()
+      .update(AuthSession)
+      .set({ revokedAt: new Date() })
+      .where('user_id = :userId', { userId })
+      .andWhere('revoked_at IS NULL');
+    if (exceptTokenId)
+      query.andWhere('token_id <> :exceptTokenId', { exceptTokenId });
+    await query.execute();
+  }
+
+  private hashToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
   }
 }
