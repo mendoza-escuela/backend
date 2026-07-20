@@ -1,6 +1,7 @@
 import {
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   PrimaryColumn,
@@ -9,6 +10,7 @@ import { School } from '../../schools/entities/school.entity';
 import { User } from './user.entity';
 
 @Entity({ name: 'user_schools' })
+@Index('IDX_user_schools_one_school_per_user', ['userId'], { unique: true })
 export class UserSchool {
   @PrimaryColumn({ name: 'user_id', type: 'uuid' })
   userId: string;
@@ -16,7 +18,7 @@ export class UserSchool {
   @PrimaryColumn({ name: 'school_id', type: 'uuid' })
   schoolId: string;
 
-  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, (user) => user.userSchools, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: User;
 

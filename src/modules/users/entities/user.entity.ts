@@ -3,15 +3,23 @@ import {
   CreateDateColumn,
   Entity,
   Index,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
 import { UserRole } from './user-role.enum';
+import { UserSchool } from './user-school.entity';
 
 @Entity({ name: 'users' })
 export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
+
+  @Column({ name: 'first_name', type: 'varchar', length: 100 })
+  firstName: string;
+
+  @Column({ name: 'last_name', type: 'varchar', length: 100 })
+  lastName: string;
 
   @Index({ unique: true })
   @Column({ type: 'varchar', length: 255 })
@@ -46,6 +54,9 @@ export class User {
 
   @Column({ name: 'locked_until', type: 'timestamptz', nullable: true })
   lockedUntil: Date | null;
+
+  @OneToMany(() => UserSchool, (association) => association.user)
+  userSchools: UserSchool[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

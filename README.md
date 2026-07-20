@@ -34,6 +34,20 @@ El seed del administrador no forma parte del arranque automático: debe ejecutar
 
 El flujo queda implementado, pero el envío real solo es operativo si `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` y `SMTP_FROM` están configurados. Nunca se debe versionar `.env` ni registrar tokens o credenciales.
 
+## Administración de usuarios
+
+Las rutas bajo `/admin/users` requieren sesión válida, contraseña inicial ya cambiada y rol `admin`. Incluyen listado paginado, búsqueda y filtros, alta, edición, bloqueo, desbloqueo y restablecimiento administrativo de contraseña.
+
+Las operaciones sensibles generan registros en `audit_logs`. Nunca se guardan contraseñas ni hashes dentro del detalle de auditoría. Bloquear una cuenta o restablecer su contraseña revoca sus sesiones activas.
+
+La importación masiva acepta archivos `.csv` o `.xlsx` de hasta 2 MB y 500 filas. La plantilla se descarga desde `GET /admin/users/import/template` y utiliza estas columnas:
+
+```text
+nombre,apellido,correo,rol,colegio_codigo,contrasena_temporal,estado
+```
+
+Primero debe ejecutarse la vista previa. La importación es parcial: crea las filas válidas y devuelve los errores de las filas rechazadas.
+
 ## Verificación
 
 ```bash

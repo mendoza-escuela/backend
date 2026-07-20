@@ -27,6 +27,9 @@ async function seedInitialAdmin(): Promise<void> {
 
   await repository.save(
     repository.create({
+      firstName:
+        process.env.INITIAL_ADMIN_FIRST_NAME?.trim() || 'Administrador',
+      lastName: process.env.INITIAL_ADMIN_LAST_NAME?.trim() || 'Inicial',
       email,
       passwordHash: await bcrypt.hash(password, 12),
       role: UserRole.Admin,

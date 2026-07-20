@@ -97,6 +97,8 @@ export class AuthService {
       expiresAt,
       user: {
         id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
         email: user.email,
         role: user.role,
         mustChangePassword: user.mustChangePassword,
@@ -119,6 +121,8 @@ export class AuthService {
       throw new UnauthorizedException('La sesión no es válida o venció.');
     return {
       id: user.id,
+      firstName: user.firstName,
+      lastName: user.lastName,
       email: user.email,
       role: user.role,
       sessionId: tokenId,
