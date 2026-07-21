@@ -117,8 +117,10 @@ export class AuthController {
       httpOnly: true,
       secure: isProduction,
       // El frontend y la API se despliegan en hosts distintos. En producción,
-      // SameSite=None permite enviar la cookie en las peticiones CORS de Axios.
+      // SameSite=None permite CORS y Partitioned evita el bloqueo de cookies de
+      // terceros manteniendo el JWT aislado para este frontend.
       sameSite: isProduction ? ('none' as const) : ('lax' as const),
+      partitioned: isProduction,
       path: '/',
     };
   }

@@ -25,7 +25,7 @@ El seed del administrador no forma parte del arranque automático: debe ejecutar
 
 ## Seguridad de autenticación
 
-- El JWT se entrega en una cookie `HttpOnly`, `SameSite=Strict` y `Secure` en producción.
+- El JWT se entrega en una cookie `HttpOnly`, `Secure`, `SameSite=None` y particionada en producción, porque el frontend y la API se publican en hosts distintos.
 - Cada JWT referencia una sesión persistida que puede revocarse al cerrar sesión o recuperar la contraseña.
 - Cinco intentos fallidos bloquean temporalmente la cuenta durante 15 minutos por defecto.
 - Los tokens de recuperación se almacenan hasheados, vencen y son de un solo uso.
