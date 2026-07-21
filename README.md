@@ -43,10 +43,26 @@ Las operaciones sensibles generan registros en `audit_logs`. Nunca se guardan co
 La importación masiva acepta archivos `.csv` o `.xlsx` de hasta 2 MB y 500 filas. La plantilla se descarga desde `GET /admin/users/import/template` y utiliza estas columnas:
 
 ```text
-nombre,apellido,correo,rol,colegio_codigo,contrasena_temporal,estado
+nombre,apellido,correo,rol,colegio_cue,contrasena_temporal,estado
 ```
 
 Primero debe ejecutarse la vista previa. La importación es parcial: crea las filas válidas y devuelve los errores de las filas rechazadas.
+
+## Administración de colegios
+
+Las rutas protegidas bajo `/admin/schools` permiten alta, listado paginado, búsqueda por CUE/nombre/número, filtros territoriales e institucionales, detalle, edición, activación y desactivación. El detalle incluye el usuario Colegio, accesos recientes, historial de asociaciones y auditoría. Campañas y evaluaciones se informan explícitamente como no disponibles hasta que existan esos módulos; no se generan datos ficticios.
+
+Cada colegio admite un único usuario con rol `school`, y cada usuario sólo puede pertenecer a un colegio. Los reemplazos y desvinculaciones conservan un historial independiente. Un colegio inactivo conserva sus datos e historial; `SchoolsService.assertActiveForEvaluation` es la validación obligatoria que deberá usar el módulo de evaluaciones antes de crear una nueva.
+
+La importación acepta CSV/XLSX de hasta 2 MB y 500 filas, ofrece vista previa y realiza importación parcial. La plantilla se obtiene en `GET /admin/schools/import/template`. El padrón filtrado puede exportarse mediante `GET /admin/schools/export?format=csv` o `format=xlsx`; cada exportación queda auditada.
+
+Columnas de la plantilla de colegios:
+
+```text
+cue,nombre,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_correo,referente_telefono,matricula,caracteristicas,estado
+```
+
+`caracteristicas` debe ser un objeto JSON con hasta 30 valores simples, por ejemplo `{"comedor":true}`.
 
 ## Verificación
 

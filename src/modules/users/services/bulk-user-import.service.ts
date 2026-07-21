@@ -7,6 +7,7 @@ import { AuthenticatedUser } from '../../../common/types/authenticated-user.type
 import { assertStrongPassword } from '../../auth/utils/password-policy';
 import { School } from '../../schools/entities/school.entity';
 import { UserRole } from '../entities/user-role.enum';
+import { UserSchool } from '../entities/user-school.entity';
 import { User } from '../entities/user.entity';
 import { AdminUsersService } from './admin-users.service';
 
@@ -35,8 +36,8 @@ export class BulkUserImportService {
 
   template(): Buffer {
     const content = [
-      'nombre,apellido,correo,rol,colegio_codigo,contrasena_temporal,estado',
-      'María,Pérez,maria.perez@escuela.edu.ar,Colegio,ESC-001,Temporal!2026Clave,activo',
+      'nombre,apellido,correo,rol,colegio_cue,contrasena_temporal,estado',
+      'María,Pérez,maria.perez@escuela.edu.ar,Colegio,500012300,Temporal!2026Clave,activo',
       'Juan,Gómez,juan.gomez@mendoza.gov.ar,Administrador,,Temporal!2026Admin,activo',
     ].join('\r\n');
     return Buffer.from(`\uFEFF${content}`, 'utf8');
@@ -173,7 +174,7 @@ export class BulkUserImportService {
   ): Promise<ValidatedRow[]> {
     const schools = await this.dataSource.getRepository(School).find();
     const schoolByCode = new Map(
-      schools.map((school) => [school.code.toLowerCase(), school]),
+      schools.map((school) => [school.cue.toLowerCase(), school]),
     );
     const emails = records
       .map((record) => record.correo.trim().toLowerCase())
@@ -192,13 +193,40 @@ export class BulkUserImportService {
     emails.forEach((email) =>
       occurrences.set(email, (occurrences.get(email) ?? 0) + 1),
     );
+    const requestedSchoolCues = records
+      .map((record) =>
+        (record.colegio_cue ?? record.colegio_codigo ?? '')
+          .trim()
+          .toLowerCase(),
+      )
+      .filter(Boolean);
+    const schoolOccurrences = new Map<string, number>();
+    requestedSchoolCues.forEach((cue) =>
+      schoolOccurrences.set(cue, (schoolOccurrences.get(cue) ?? 0) + 1),
+    );
+    const schoolIds = schools.map((school) => school.id);
+    const occupied = schoolIds.length
+      ? await this.dataSource
+          .getRepository(UserSchool)
+          .createQueryBuilder('association')
+          .where('association.schoolId IN (:...schoolIds)', { schoolIds })
+          .getMany()
+      : [];
+    const occupiedSchoolIds = new Set(
+      occupied.map((association) => association.schoolId),
+    );
 
     return records.map((record, index) => {
       const role = this.parseRole(record.rol);
       const isActive = this.parseStatus(record.estado);
       const email = record.correo.trim().toLowerCase();
-      const school = record.colegio_codigo
-        ? schoolByCode.get(record.colegio_codigo.trim().toLowerCase())
+      const schoolCue = (
+        record.colegio_cue ??
+        record.colegio_codigo ??
+        ''
+      ).trim();
+      const school = schoolCue
+        ? schoolByCode.get(schoolCue.toLowerCase())
         : undefined;
       const row: ValidatedRow = {
         line: index + 2,
@@ -206,7 +234,7 @@ export class BulkUserImportService {
         lastName: record.apellido.trim(),
         email,
         role,
-        schoolCode: record.colegio_codigo.trim(),
+        schoolCode: schoolCue,
         schoolId: school?.id,
         temporaryPassword: record.contrasena_temporal,
         isActive,
@@ -226,9 +254,16 @@ export class BulkUserImportService {
       if ((occurrences.get(email) ?? 0) > 1)
         row.errors.push('El correo está repetido dentro del archivo.');
       if (role === UserRole.School && !row.schoolCode)
-        row.errors.push('El rol Colegio requiere colegio_codigo.');
+        row.errors.push('El rol Colegio requiere colegio_cue.');
       if (role === UserRole.School && row.schoolCode && !school)
         row.errors.push('El código de colegio no existe.');
+      if (school && occupiedSchoolIds.has(school.id))
+        row.errors.push('El colegio ya tiene un usuario asociado.');
+      if (
+        row.schoolCode &&
+        (schoolOccurrences.get(row.schoolCode.toLowerCase()) ?? 0) > 1
+      )
+        row.errors.push('El colegio está repetido dentro del archivo.');
       if (role === UserRole.Admin && row.schoolCode)
         row.errors.push('Un administrador no debe tener colegio asociado.');
       try {
@@ -267,11 +302,16 @@ export class BulkUserImportService {
       'apellido',
       'correo',
       'rol',
-      'colegio_codigo',
       'contrasena_temporal',
       'estado',
     ];
     const missing = required.filter((header) => !headers.includes(header));
+    if (
+      !headers.includes('colegio_cue') &&
+      !headers.includes('colegio_codigo')
+    ) {
+      missing.push('colegio_cue');
+    }
     if (missing.length)
       throw new BadRequestException(
         `Faltan columnas obligatorias: ${missing.join(', ')}.`,

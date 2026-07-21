@@ -13,6 +13,7 @@ import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { AuthSession } from '../../auth/entities/auth-session.entity';
 import { assertStrongPassword } from '../../auth/utils/password-policy';
 import { School } from '../../schools/entities/school.entity';
+import { SchoolUserAssignmentHistory } from '../../schools/entities/school-user-assignment-history.entity';
 import { CreateUserDto } from '../dto/create-user.dto';
 import { ListUsersQueryDto } from '../dto/list-users-query.dto';
 import { UpdateUserDto } from '../dto/update-user.dto';
@@ -72,9 +73,16 @@ export class AdminUsersService {
   }
 
   async listSchools() {
-    return this.dataSource
+    const schools = await this.dataSource
       .getRepository(School)
       .find({ order: { name: 'ASC' } });
+    return schools.map((school) => ({
+      id: school.id,
+      cue: school.cue,
+      code: school.cue,
+      name: school.name,
+      isActive: school.isActive,
+    }));
   }
 
   async create(dto: CreateUserDto, actor: AuthenticatedUser) {
@@ -108,6 +116,14 @@ export class AdminUsersService {
             userId: user.id,
             schoolId: school.id,
           });
+          await this.assignmentHistory(
+            manager,
+            school.id,
+            null,
+            user.id,
+            actor.id,
+            'assigned',
+          );
         }
         await this.audit(manager, actor.id, 'USER_CREATED', user.id, {
           firstName: user.firstName,
@@ -163,6 +179,7 @@ export class AdminUsersService {
           manager,
           targetRole,
           requestedSchoolId,
+          id,
         );
 
         user.firstName = dto.firstName
@@ -179,6 +196,26 @@ export class AdminUsersService {
         await manager.delete(UserSchool, { userId: id });
         if (school)
           await manager.save(UserSchool, { userId: id, schoolId: school.id });
+        if (currentSchoolId !== school?.id) {
+          if (currentSchoolId)
+            await this.assignmentHistory(
+              manager,
+              currentSchoolId,
+              id,
+              null,
+              actor.id,
+              'unassigned',
+            );
+          if (school)
+            await this.assignmentHistory(
+              manager,
+              school.id,
+              null,
+              id,
+              actor.id,
+              'assigned',
+            );
+        }
 
         const after = { ...this.snapshot(user), schoolId: school?.id ?? null };
         const changes = this.diff(before, after);
@@ -285,6 +322,7 @@ export class AdminUsersService {
     manager: EntityManager,
     role: UserRole,
     schoolId?: string,
+    exceptUserId?: string,
   ) {
     if (role === UserRole.Admin) {
       if (schoolId)
@@ -300,6 +338,16 @@ export class AdminUsersService {
     const school = await manager.findOneBy(School, { id: schoolId });
     if (!school)
       throw new BadRequestException('El colegio seleccionado no existe.');
+    const existingAssociation = await manager.findOneBy(UserSchool, {
+      schoolId,
+    });
+    if (!school.isActive && existingAssociation?.userId !== exceptUserId)
+      throw new BadRequestException('El colegio seleccionado está inactivo.');
+    if (existingAssociation && existingAssociation.userId !== exceptUserId) {
+      throw new ConflictException(
+        'El colegio ya tiene un usuario asociado. Reemplazalo desde el detalle del colegio.',
+      );
+    }
     return school;
   }
 
@@ -349,6 +397,23 @@ export class AdminUsersService {
       entityType: 'User',
       entityId,
       changes,
+    });
+  }
+
+  private assignmentHistory(
+    manager: EntityManager,
+    schoolId: string,
+    previousUserId: string | null,
+    newUserId: string | null,
+    actorUserId: string,
+    action: 'assigned' | 'unassigned',
+  ) {
+    return manager.save(SchoolUserAssignmentHistory, {
+      schoolId,
+      previousUserId,
+      newUserId,
+      actorUserId,
+      action,
     });
   }
 
@@ -410,7 +475,8 @@ export class AdminUsersService {
       school: association?.school
         ? {
             id: association.school.id,
-            code: association.school.code,
+            cue: association.school.cue,
+            code: association.school.cue,
             name: association.school.name,
           }
         : null,

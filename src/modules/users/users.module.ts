@@ -13,10 +13,18 @@ import { BulkUserImportService } from './services/bulk-user-import.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PasswordChangeRequiredGuard } from '../../common/guards/password-change-required.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
+import { SchoolUserAssignmentHistory } from '../schools/entities/school-user-assignment-history.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, UserSchool, School, AuthSession, AuditLog]),
+    TypeOrmModule.forFeature([
+      User,
+      UserSchool,
+      School,
+      SchoolUserAssignmentHistory,
+      AuthSession,
+      AuditLog,
+    ]),
   ],
   controllers: [AdminUsersController],
   providers: [

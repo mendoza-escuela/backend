@@ -6,6 +6,7 @@ import { HealthModule } from './modules/health/health.module';
 import { UsersModule } from './modules/users/users.module';
 import { DatabaseModule } from './database/database.module';
 import { validateEnvironment } from './config/env.validation';
+import { SchoolsModule } from './modules/schools/schools.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { validateEnvironment } from './config/env.validation';
     DatabaseModule,
     HealthModule,
     UsersModule,
+    SchoolsModule,
     AuthModule,
   ],
 })

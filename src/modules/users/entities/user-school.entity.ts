@@ -11,6 +11,7 @@ import { User } from './user.entity';
 
 @Entity({ name: 'user_schools' })
 @Index('IDX_user_schools_one_school_per_user', ['userId'], { unique: true })
+@Index('IDX_user_schools_one_user_per_school', ['schoolId'], { unique: true })
 export class UserSchool {
   @PrimaryColumn({ name: 'user_id', type: 'uuid' })
   userId: string;
