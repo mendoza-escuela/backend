@@ -111,10 +111,14 @@ export class AuthController {
   }
 
   private cookieOptions() {
+    const isProduction = this.configService.get('NODE_ENV') === 'production';
+
     return {
       httpOnly: true,
-      secure: this.configService.get('NODE_ENV') === 'production',
-      sameSite: 'strict' as const,
+      secure: isProduction,
+      // El frontend y la API se despliegan en hosts distintos. En producción,
+      // SameSite=None permite enviar la cookie en las peticiones CORS de Axios.
+      sameSite: isProduction ? ('none' as const) : ('lax' as const),
       path: '/',
     };
   }

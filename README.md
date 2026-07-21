@@ -2,6 +2,8 @@
 
 API NestJS con PostgreSQL y TypeORM.
 
+Todos los endpoints HTTP se publican bajo el prefijo `/api` (por ejemplo, `POST /api/auth/login`).
+
 ## Puesta en marcha local
 
 1. Copiar `.env.example` a `.env` y completar secretos.
