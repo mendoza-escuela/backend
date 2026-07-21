@@ -1,8 +1,9 @@
-type Environment = Record<string, string | undefined>;
+type Environment = Record<string, string | number | undefined>;
 
 const requiredAppEnvironmentVariables = [
   'JWT_SECRET',
   'JWT_EXPIRES_IN',
+  'FRONTEND_URL',
 ] as const;
 
 const requiredDatabaseEnvironmentVariables = [
@@ -25,7 +26,7 @@ export function validateEnvironment(config: Environment) {
   }
 
   if (config.DATABASE_URL) {
-    return config;
+    return validateNumericEnvironment(config);
   }
 
   const missingDatabaseVariables = requiredDatabaseEnvironmentVariables.filter(
@@ -44,8 +45,38 @@ export function validateEnvironment(config: Environment) {
     throw new Error('DATABASE_PORT must be a positive integer.');
   }
 
-  return {
+  return validateNumericEnvironment({
     ...config,
     DATABASE_PORT: databasePort,
-  };
+  });
+}
+
+function validateNumericEnvironment(config: Environment) {
+  for (const variableName of [
+    'SESSION_DURATION_HOURS',
+    'LOGIN_MAX_ATTEMPTS',
+    'LOGIN_LOCK_MINUTES',
+    'PASSWORD_RESET_TOKEN_EXPIRES_MINUTES',
+  ]) {
+    const value = Number(config[variableName]);
+    if (config[variableName] && (!Number.isInteger(value) || value <= 0)) {
+      throw new Error(`${variableName} must be a positive integer.`);
+    }
+  }
+
+  const smtpValues = [
+    'SMTP_HOST',
+    'SMTP_PORT',
+    'SMTP_USER',
+    'SMTP_PASSWORD',
+    'SMTP_FROM',
+  ];
+  const configuredSmtpValues = smtpValues.filter((name) => config[name]);
+  if (
+    configuredSmtpValues.length > 0 &&
+    configuredSmtpValues.length !== smtpValues.length
+  ) {
+    throw new Error('SMTP configuration must be complete or entirely empty.');
+  }
+  return config;
 }

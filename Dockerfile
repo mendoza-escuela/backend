@@ -19,7 +19,8 @@ FROM base AS runner
 ENV NODE_ENV=production
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY scripts ./scripts
 COPY package*.json ./
 USER node
 EXPOSE 4000
-CMD ["node", "dist/main.js"]
+CMD ["npm", "run", "start:prod"]
