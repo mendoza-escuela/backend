@@ -164,6 +164,21 @@ export class SchoolsService {
     };
   }
 
+  /** Devuelve únicamente el establecimiento asociado al usuario autenticado. */
+  async findForUser(userId: string) {
+    const association = await this.dataSource
+      .getRepository(UserSchool)
+      .findOne({
+        where: { userId },
+        relations: { school: true },
+      });
+    if (!association)
+      throw new NotFoundException(
+        'Tu cuenta todavía no tiene un establecimiento asociado.',
+      );
+    return association.school;
+  }
+
   async create(dto: CreateSchoolDto, actor: AuthenticatedUser) {
     const normalized = this.normalize(dto);
     this.validateCharacteristics(normalized.characteristics);

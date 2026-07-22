@@ -8,6 +8,7 @@ import { User } from '../users/entities/user.entity';
 import { PasswordChangeRequiredGuard } from '../../common/guards/password-change-required.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { AdminSchoolsController } from './controllers/admin-schools.controller';
+import { SchoolPortalController } from './controllers/school-portal.controller';
 import { SchoolUserAssignmentHistory } from './entities/school-user-assignment-history.entity';
 import { School } from './entities/school.entity';
 import { BulkSchoolImportService } from './services/bulk-school-import.service';
@@ -24,7 +25,7 @@ import { SchoolsService } from './services/schools.service';
       AuditLog,
     ]),
   ],
-  controllers: [AdminSchoolsController],
+  controllers: [AdminSchoolsController, SchoolPortalController],
   providers: [
     SchoolsService,
     BulkSchoolImportService,

@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Definiciones funcionales para validación del cliente</title>
+  <style>
+    @page { size: A4; margin: 1.8cm 1.7cm 1.8cm 1.7cm; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #1f2937;
+      font-family: REM, Inter, Arial, sans-serif;
+      font-size: 10.5pt;
+      line-height: 1.42;
+    }
+    h1, h2, h3, h4 { color: #000f9f; page-break-after: avoid; }
+    h1 { margin: 0 0 12pt; font-size: 27pt; line-height: 1.12; }
+    h2 {
+      margin: 22pt 0 9pt;
+      padding-bottom: 5pt;
+      border-bottom: 2px solid #c8a977;
+      font-size: 17pt;
+    }
+    h3 { margin: 18pt 0 7pt; font-size: 13.5pt; }
+    h4 { margin: 11pt 0 5pt; font-size: 11pt; }
+    p { margin: 0 0 8pt; }
+    ul, ol { margin: 4pt 0 10pt 20pt; padding: 0; }
+    li { margin: 0 0 4pt; }
+    table {
+      width: 100%;
+      margin: 8pt 0 14pt;
+      border-collapse: collapse;
+      page-break-inside: avoid;
+    }
+    th, td {
+      padding: 6pt 7pt;
+      border: 1px solid #d1d5db;
+      vertical-align: top;
+    }
+    th {
+      color: #ffffff;
+      background: #000f9f;
+      font-size: 9.5pt;
+      text-align: left;
+    }
+    tr:nth-child(even) td { background: #f8f9fa; }
+    .cover {
+      min-height: 23cm;
+      padding: 38pt 34pt;
+      border-top: 14pt solid #000f9f;
+      border-bottom: 6pt solid #c8a977;
+      background: #f7f4ef;
+      page-break-after: always;
+    }
+    .eyebrow {
+      margin-bottom: 58pt;
+      color: #000f9f;
+      font-size: 10pt;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .cover-subtitle {
+      max-width: 430pt;
+      margin: 0 0 34pt;
+      color: #4b5563;
+      font-size: 15pt;
+      line-height: 1.45;
+    }
+    .cover-meta {
+      width: 70%;
+      margin-top: 65pt;
+    }
+    .cover-meta td { background: transparent !important; border-color: #c8a977; }
+    .section-label {
+      color: #3cb4e5;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .intro {
+      padding: 10pt 12pt;
+      border-left: 5pt solid #3cb4e5;
+      background: #eef8fc;
+    }
+    .notice {
+      padding: 9pt 11pt;
+      border: 1px solid #c8a977;
+      background: #fbf7ef;
+    }
+    .decision { margin: 18pt 0 22pt; page-break-inside: avoid; }
+    .decision h3 {
+      margin-top: 0;
+      padding: 5pt 0 5pt 8pt;
+      border-left: 5pt solid #3cb4e5;
+      background: #eef8fc;
+    }
+    .options { margin: 5pt 0 8pt; }
+    .option { margin: 3pt 0; }
+    .answer {
+      height: 38pt;
+      margin-top: 7pt;
+      padding: 6pt 8pt;
+      border: 1px solid #9ca3af;
+      background: #ffffff;
+    }
+    .answer.large { height: 68pt; }
+    .small { color: #6b7280; font-size: 9pt; }
+    .check { font-family: Arial, sans-serif; white-space: nowrap; }
+    .priority-high { color: #b91c1c; font-weight: 700; }
+    .priority-medium { color: #92400e; font-weight: 700; }
+    .page-break { page-break-before: always; }
+    .signature td { height: 62pt; vertical-align: bottom; }
+    .footer-note {
+      margin-top: 20pt;
+      padding-top: 7pt;
+      border-top: 1px solid #e5e7eb;
+      color: #6b7280;
+      font-size: 8.5pt;
+    }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div class="eyebrow">Gobierno de Mendoza · Escuelas Promotoras de Salud</div>
+    <div class="section-label">Documento de trabajo</div>
+    <h1>Definiciones funcionales para validación del cliente</h1>
+    <p class="cover-subtitle">
+      Decisiones, entregables y matrices necesarias para completar la aplicación sin trasladar al cliente un cuestionario técnico extenso.
+    </p>
+
+    <table class="cover-meta">
+      <tr><td><strong>Versión</strong></td><td>1.0</td></tr>
+      <tr><td><strong>Fecha</strong></td><td>Julio de 2026</td></tr>
+      <tr><td><strong>Estado</strong></td><td>Para revisión y validación</td></tr>
+      <tr><td><strong>Programa</strong></td><td>Escuelas Promotoras de Salud Mendoza</td></tr>
+    </table>
+  </section>
+
+  <h2 class="page-break">1. Objetivo del documento</h2>
+
+  <p class="intro">
+    Este documento concentra las definiciones de negocio que deben ser confirmadas por el equipo responsable del programa. Su propósito es reemplazar un listado extenso de consultas por un conjunto reducido de decisiones, matrices y entregables fáciles de revisar.
+  </p>
+
+  <p>Al finalizar la validación deben quedar aprobados:</p>
+  <ul>
+    <li>El cuestionario definitivo y sus reglas de cálculo.</li>
+    <li>Las condiciones que determinan qué preguntas corresponden a cada escuela.</li>
+    <li>El flujo de campañas, borradores, envíos y validaciones.</li>
+    <li>Los roles y permisos.</li>
+    <li>Los datos institucionales obligatorios.</li>
+    <li>Los resultados, indicadores, reportes y notificaciones de la primera versión.</li>
+    <li>Los criterios que permitirán aceptar la aplicación para su puesta en producción.</li>
+  </ul>
+
+  <h3>Forma de trabajo propuesta</h3>
+  <ol>
+    <li>El equipo de desarrollo prepara las matrices precompletadas con la documentación existente.</li>
+    <li>El cliente selecciona opciones, corrige contenido y completa únicamente las reglas que le corresponden.</li>
+    <li>Las decisiones se revisan en talleres breves por temática.</li>
+    <li>El equipo de desarrollo registra los acuerdos y envía una versión final para aprobación escrita.</li>
+  </ol>
+
+  <div class="notice">
+    <strong>Importante:</strong> no se solicita al cliente que diseñe la arquitectura técnica. El cliente define las reglas del programa; el equipo de desarrollo transforma esas decisiones en una solución segura y mantenible.
+  </div>
+
+  <h2>2. Acuerdos ya documentados</h2>
+
+  <p>Los siguientes puntos se consideran parte de la línea base y no requieren una nueva definición, salvo que el cliente indique expresamente un cambio:</p>
+
+  <table>
+    <tr><th>Acuerdo</th><th>Definición vigente</th><th>Observación</th></tr>
+    <tr><td>Tipo de solución</td><td>Aplicación web responsive accesible desde navegador.</td><td>Debe dejarse sin efecto la referencia a una aplicación de escritorio Windows incluida en documentos anteriores.</td></tr>
+    <tr><td>Autenticación</td><td>Correo y contraseña administrados por la aplicación.</td><td>No se contempla SSO institucional en la primera versión.</td></tr>
+    <tr><td>Recuperación de contraseña</td><td>Enlace seguro, temporal y de un solo uso enviado por correo.</td><td>El envío real depende de las credenciales SMTP.</td></tr>
+    <tr><td>Archivos escolares</td><td>No se cargan evidencias, imágenes ni documentos adjuntos.</td><td>Las importaciones administrativas de padrón no se consideran evidencias escolares.</td></tr>
+    <tr><td>Volumen estimado</td><td>Aproximadamente 2.400 establecimientos.</td><td>La carga máxima se concentrará durante períodos de evaluación.</td></tr>
+    <tr><td>Cálculos</td><td>Puntajes, estrellas, exclusiones y áreas críticas se calculan en backend.</td><td>El frontend solo presenta los resultados.</td></tr>
+  </table>
+
+  <p><strong>Validación de la línea base:</strong></p>
+  <p class="check">☐ Aprobada sin cambios &nbsp;&nbsp;&nbsp; ☐ Aprobada con observaciones &nbsp;&nbsp;&nbsp; ☐ Requiere revisión</p>
+  <div class="answer"><strong>Observaciones:</strong></div>
+
+  <h2 class="page-break">3. Entregables solicitados</h2>
+
+  <p>Se solicitan materiales que pertenecen al programa o a los organismos responsables. Cuando no exista un documento formal, el contenido podrá definirse en conjunto durante los talleres.</p>
+
+  <table>
+    <tr>
+      <th style="width:7%">ID</th>
+      <th style="width:27%">Entregable</th>
+      <th>Contenido esperado</th>
+      <th style="width:22%">Estado</th>
+    </tr>
+    <tr><td>E1</td><td>Cuestionario definitivo editable</td><td>Preguntas, opciones, aclaraciones y orden aprobados.</td><td class="check">☐ Adjunta ☐ Pendiente ☐ No existe</td></tr>
+    <tr><td>E2</td><td>Reglas oficiales de evaluación</td><td>Puntajes, pesos, fórmula global, áreas críticas y certificación, si ya se encuentran formalizadas.</td><td class="check">☐ Adjunta ☐ Pendiente ☐ A construir</td></tr>
+    <tr><td>E3</td><td>Padrón y catálogos oficiales</td><td>Establecimientos, CUE, departamentos, localidades, niveles, sector, ámbito y jornada.</td><td class="check">☐ Adjunta ☐ Pendiente ☐ No existe</td></tr>
+    <tr><td>E4</td><td>Modelos de informes</td><td>Planillas, reportes, certificados o presentaciones utilizadas actualmente.</td><td class="check">☐ Adjunta ☐ Pendiente ☐ No existe</td></tr>
+    <tr><td>E5</td><td>Identidad institucional</td><td>Logos oficiales autorizados, variantes, archivos de fuente disponibles y datos institucionales.</td><td class="check">☐ Adjunta ☐ Pendiente ☐ No existe</td></tr>
+    <tr><td>E6</td><td>Textos institucionales y legales</td><td>Presentación del programa, contactos, privacidad, términos, pies de página y textos de correo.</td><td class="check">☐ Adjunta ☐ Pendiente ☐ A redactar</td></tr>
+    <tr><td>E7</td><td>Casos de evaluación conocidos</td><td>Ejemplos de escuelas con respuestas y resultado esperado para validar el motor de cálculo.</td><td class="check">☐ Adjunta ☐ Pendiente ☐ A construir</td></tr>
+  </table>
+
+  <table>
+    <tr><th>Responsable de reunir los entregables</th><th>Fecha comprometida</th></tr>
+    <tr><td style="height:34pt">&nbsp;</td><td>&nbsp;</td></tr>
+  </table>
+
+  <h2>4. Diez decisiones funcionales</h2>
+
+  <div class="decision">
+    <h3>Decisión 1. Alcance de la primera versión</h3>
+    <p><strong>Necesitamos definir qué debe estar operativo en la primera puesta en producción.</strong></p>
+    <p class="small">Marcar cada módulo como obligatorio, posterior o fuera de alcance.</p>
+    <table>
+      <tr><th>Módulo</th><th>Primera versión</th><th>Etapa posterior</th><th>Fuera de alcance</th></tr>
+      <tr><td>Usuarios y establecimientos</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td></tr>
+      <tr><td>Campañas</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td></tr>
+      <tr><td>Cuestionario y borradores</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td></tr>
+      <tr><td>Evaluación y estrellas</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td></tr>
+      <tr><td>Dashboard administrativo</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td></tr>
+      <tr><td>Informes y exportaciones</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td></tr>
+      <tr><td>Certificado institucional</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td></tr>
+      <tr><td>Notificaciones automáticas</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td></tr>
+      <tr><td>Comparación histórica</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td></tr>
+    </table>
+    <div class="answer"><strong>Observaciones y prioridades:</strong></div>
+  </div>
+
+  <div class="decision">
+    <h3>Decisión 2. Cuestionario y dimensiones oficiales</h3>
+    <p>El documento actual contiene 60 preguntas distribuidas bajo siete encabezados, mientras que el informe de resultados establece seis dimensiones.</p>
+    <p class="check">☐ Se aprueban exactamente 60 preguntas &nbsp;&nbsp; ☐ Se entregará una versión corregida</p>
+    <p class="check">☐ Existen seis dimensiones &nbsp;&nbsp; ☐ Existen siete dimensiones &nbsp;&nbsp; ☐ Otra cantidad: ______</p>
+    <p><strong>Definición requerida:</strong> completar y aprobar la matriz del cuestionario indicando la dimensión de cada pregunta, especialmente las preguntas 41 a 43.</p>
+    <table>
+      <tr><th>Responsable de contenido</th><th>Responsable de aprobación</th><th>Fecha de aprobación</th></tr>
+      <tr><td style="height:32pt">&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+    </table>
+    <div class="answer"><strong>Correcciones o comentarios:</strong></div>
+  </div>
+
+  <div class="decision">
+    <h3>Decisión 3. Puntajes y fórmula de evaluación</h3>
+    <p>La matriz del cuestionario deberá especificar el puntaje de cada opción. Además, seleccionar o detallar:</p>
+    <p class="check">Pesos de preguntas: ☐ Todos iguales ☐ Diferentes según matriz</p>
+    <p class="check">Pesos de dimensiones: ☐ Todos iguales ☐ Diferentes según matriz</p>
+    <p class="check">Cálculo global: ☐ Promedio simple ☐ Promedio ponderado ☐ Otro: __________________</p>
+    <p class="check">Decimales visibles: ☐ 0 ☐ 1 ☐ 2 &nbsp;&nbsp; Momento del redondeo: __________________</p>
+    <p><strong>Caso especial:</strong> indicar qué ocurre cuando todas las preguntas de una dimensión quedan excluidas.</p>
+    <div class="answer large"><strong>Fórmula aprobada y tratamiento de casos especiales:</strong></div>
+  </div>
+
+  <div class="decision">
+    <h3>Decisión 4. Preguntas condicionales y “No aplica”</h3>
+    <p>Debe aprobarse una matriz que relacione cada pregunta condicional con comedor, kiosco, albergue, jornada u otra característica.</p>
+    <p class="check">Presentación: ☐ Ocultar preguntas excluidas ☐ Mostrar deshabilitadas</p>
+    <p class="check">Selección manual “No aplica”: ☐ Permitida ☐ No permitida</p>
+    <p class="check">Motivo de exclusión: ☐ Visible para la escuela ☐ Solo para administración ☐ No visible</p>
+    <p><strong>También debe definirse:</strong> qué sucede con respuestas guardadas cuando cambia una característica que modifica la aplicabilidad.</p>
+    <div class="answer large"><strong>Comportamiento aprobado:</strong></div>
+  </div>
+
+  <div class="decision">
+    <h3>Decisión 5. Áreas críticas, estrellas y certificación</h3>
+    <p><strong>Umbral de área crítica:</strong> ______ puntos o ______ %.</p>
+    <p class="check">Una dimensión crítica: ☐ Solo genera alerta ☐ Limita las estrellas ☐ Impide la certificación ☐ Otro</p>
+    <p class="check">Cinco estrellas: ☐ Clasificación automática ☐ Certificación oficial ☐ Requiere aprobación</p>
+    <p class="check">Certificación: ☐ Sin vencimiento ☐ Con vencimiento de ______ meses/años</p>
+    <p class="check">Puede revocarse: ☐ Sí ☐ No &nbsp;&nbsp; Autoridad responsable: __________________</p>
+    <p><strong>Regla especial de salud mental:</strong> aclarar si se calcula con todas sus preguntas, de forma dicotómica o mediante un piso específico.</p>
+    <div class="answer large"><strong>Reglas aprobadas:</strong></div>
+  </div>
+
+  <div class="decision page-break">
+    <h3>Decisión 6. Campañas y flujo de presentación</h3>
+    <p class="check">Periodicidad: ☐ Una evaluación única ☐ Una campaña anual ☐ Varias campañas por año</p>
+    <p class="check">Participación: ☐ Todas las escuelas ☐ Escuelas seleccionadas</p>
+    <p><strong>Flujo inicial propuesto:</strong></p>
+    <p style="text-align:center;font-weight:700;color:#000f9f">No iniciada → Borrador → Enviada → Validada<br>↑&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;↓<br>└──────── Reabierta / Observada</p>
+    <p class="check">Resultado visible: ☐ Al enviar ☐ Al validar ☐ Al cerrar la campaña</p>
+    <p class="check">Envío incompleto: ☐ Bloqueado ☐ Permitido con advertencia ☐ Permitido</p>
+    <p class="check">Después del cierre: ☐ Bloquear borradores ☐ Período de gracia ☐ Definición manual</p>
+    <p class="check">Reapertura: ☐ Solo administrador ☐ Otro rol: __________ &nbsp;&nbsp; Motivo obligatorio: ☐ Sí ☐ No</p>
+    <div class="answer large"><strong>Cambios requeridos al flujo:</strong></div>
+  </div>
+
+  <div class="decision">
+    <h3>Decisión 7. Roles, usuarios y permisos</h3>
+    <p class="check">Relación de acceso: ☐ Un usuario por escuela y una escuela por usuario ☐ Requiere otro modelo</p>
+    <p class="check">Roles iniciales: ☐ Escuela ☐ Administrador ☐ Consulta ☐ Auditoría ☐ Soporte</p>
+    <p class="check">DGE y Salud: ☐ Comparten rol administrador ☐ Requieren permisos diferentes</p>
+    <p><strong>Definición requerida:</strong> completar la matriz de permisos incluida en el anexo A.</p>
+    <div class="answer"><strong>Observaciones:</strong></div>
+  </div>
+
+  <div class="decision">
+    <h3>Decisión 8. Datos de establecimientos y cuentas</h3>
+    <p>Debe aprobarse el diccionario definitivo de datos institucionales, incluyendo obligatoriedad, formato y permisos de edición.</p>
+    <p class="check">Correo de acceso: ☐ Debe coincidir con el institucional ☐ Puede ser diferente</p>
+    <p class="check">Edición por escuela: ☐ No permitida ☐ Permitida ☐ Requiere aprobación</p>
+    <p class="check">Matrícula: ☐ Solo total ☐ Por nivel y total ☐ Solo por nivel</p>
+    <p class="check">Referentes: ☐ Uno ☐ Referente que responde + referente de promoción ☐ Otro modelo</p>
+    <p class="check">Escuela inactiva: ☐ Conserva borrador ☐ Pierde acceso ☐ Finaliza evaluación ☐ Requiere decisión manual</p>
+    <div class="answer large"><strong>Campos o validaciones adicionales:</strong></div>
+  </div>
+
+  <div class="decision">
+    <h3>Decisión 9. Resultados y dashboard</h3>
+    <p>Priorizar las salidas en el anexo B y confirmar:</p>
+    <p class="check">La escuela ve: ☐ Resultado propio ☐ Respuestas propias ☐ Promedio provincial ☐ Distribución general</p>
+    <p class="check">El administrador ve resultados individuales: ☐ Sí ☐ No ☐ Según jurisdicción</p>
+    <p class="check">Promedios territoriales: ☐ Cada escuela pesa igual ☐ Se ponderan por matrícula ☐ Otra regla</p>
+    <p class="check">Radar territorial: ☐ Un promedio del grupo ☐ Líneas superpuestas por escuela</p>
+    <p class="check">Datos agregados mínimos: ☐ Sin mínimo ☐ Mínimo de ______ escuelas</p>
+    <div class="answer"><strong>Indicadores indispensables de la primera versión:</strong></div>
+  </div>
+
+  <div class="decision">
+    <h3>Decisión 10. Reportes, comunicación y aceptación</h3>
+    <p class="check">Formatos obligatorios: ☐ PDF ☐ Impresión web ☐ Excel ☐ CSV</p>
+    <p class="check">Reportes requeridos: ☐ Individual ☐ Territorial ☐ Provincial ☐ Certificado ☐ Respuestas crudas</p>
+    <p class="check">Notificaciones iniciales: ☐ Usuario creado ☐ Campaña abierta ☐ Recordatorio ☐ Envío confirmado ☐ Resultado disponible</p>
+    <p class="check">Privacidad/condiciones de uso: ☐ Se entregarán textos ☐ Deben redactarse en conjunto ☐ No se requieren</p>
+    <p><strong>Aceptación:</strong> indicar quién aprobará funcionalmente la aplicación y qué evidencia será necesaria para autorizar la puesta en producción.</p>
+    <div class="answer large"><strong>Responsable, condiciones y observaciones:</strong></div>
+  </div>
+
+  <h2 class="page-break">5. Anexo A · Matriz resumida de permisos</h2>
+  <p>Completar con <strong>Sí</strong>, <strong>No</strong> o <strong>Solo lectura</strong>. Agregar roles únicamente cuando respondan a una necesidad institucional real.</p>
+  <table>
+    <tr><th>Acción</th><th>Escuela</th><th>Administrador</th><th>Consulta</th><th>Observaciones</th></tr>
+    <tr><td>Ver datos del establecimiento</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Editar datos del establecimiento</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Completar y guardar borrador</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Enviar evaluación</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Reabrir u observar evaluación</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Validar resultado</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Ver resultado individual</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Ver resultados agregados</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Exportar padrón</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Exportar respuestas y resultados</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Administrar campañas</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Administrar usuarios</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Consultar auditoría</td><td></td><td></td><td></td><td></td></tr>
+  </table>
+
+  <h2>6. Anexo B · Priorización de resultados y reportes</h2>
+  <p>Marcar una única prioridad por elemento.</p>
+  <table>
+    <tr><th>Salida</th><th>Primera versión</th><th>Etapa posterior</th><th>No requerida</th><th>Observaciones</th></tr>
+    <tr><td>Puntaje global y estrellas</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td><td></td></tr>
+    <tr><td>Resultado por dimensión</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td><td></td></tr>
+    <tr><td>Radar individual</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td><td></td></tr>
+    <tr><td>Áreas críticas</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td><td></td></tr>
+    <tr><td>Fortalezas y recomendaciones</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td><td></td></tr>
+    <tr><td>Comparación con campaña anterior</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td><td></td></tr>
+    <tr><td>Distribución por estrellas</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td><td></td></tr>
+    <tr><td>Radar territorial agregado</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td><td></td></tr>
+    <tr><td>Indicadores de participación</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td><td></td></tr>
+    <tr><td>Informe individual descargable</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td><td></td></tr>
+    <tr><td>Informe territorial/provincial</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td><td></td></tr>
+    <tr><td>Certificado institucional</td><td class="check">☐</td><td class="check">☐</td><td class="check">☐</td><td></td></tr>
+  </table>
+
+  <h3>Filtros requeridos</h3>
+  <p class="check">
+    ☐ Campaña &nbsp; ☐ Año &nbsp; ☐ Departamento &nbsp; ☐ Localidad &nbsp; ☐ Región sanitaria<br>
+    ☐ Nivel &nbsp; ☐ Sector &nbsp; ☐ Ámbito &nbsp; ☐ Jornada &nbsp; ☐ Estado de carga<br>
+    ☐ Estrellas &nbsp; ☐ Área crítica &nbsp; ☐ Centro de salud &nbsp; ☐ Otro: __________________
+  </p>
+
+  <h2 class="page-break">7. Anexo C · Matriz inicial de notificaciones</h2>
+  <p>Esta matriz define qué comunicaciones forman parte de la primera versión. Los textos finales podrán entregarse posteriormente, antes de configurar SMTP en producción.</p>
+  <table>
+    <tr><th>Evento</th><th>¿Enviar?</th><th>Destinatario</th><th>Momento</th><th>Responsable del texto</th></tr>
+    <tr><td>Creación de usuario</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Recuperación de contraseña</td><td>Sí</td><td>Usuario</td><td>Inmediato</td><td></td></tr>
+    <tr><td>Apertura de campaña</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Recordatorio de evaluación pendiente</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Próximo vencimiento</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Confirmación de envío</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Evaluación observada o reabierta</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Resultado validado</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Certificación disponible</td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>Cambio de referente o bloqueo</td><td></td><td></td><td></td><td></td></tr>
+  </table>
+
+  <h2>8. Talleres de definición propuestos</h2>
+  <table>
+    <tr><th>Taller</th><th>Temas</th><th>Participantes sugeridos</th><th>Duración</th></tr>
+    <tr><td>1. Cuestionario y evaluación</td><td>Dimensiones, correcciones, puntajes, exclusiones, áreas críticas y certificación.</td><td>Responsables técnicos del programa y autoridad que aprueba el instrumento.</td><td>90 minutos</td></tr>
+    <tr><td>2. Operación y permisos</td><td>Campañas, estados, borradores, reaperturas, roles, datos escolares y auditoría.</td><td>Programa, DGE, Salud y futuros administradores.</td><td>60–90 minutos</td></tr>
+    <tr><td>3. Resultados y cierre</td><td>Dashboard, reportes, certificados, notificaciones, privacidad y aceptación.</td><td>Programa, comunicación, legal e infraestructura.</td><td>60–90 minutos</td></tr>
+  </table>
+
+  <h2>9. Registro de pendientes y decisiones</h2>
+  <table>
+    <tr><th>ID</th><th>Tema</th><th>Decisión o pendiente</th><th>Responsable</th><th>Fecha límite</th></tr>
+    <tr><td>D-01</td><td></td><td style="height:30pt"></td><td></td><td></td></tr>
+    <tr><td>D-02</td><td></td><td style="height:30pt"></td><td></td><td></td></tr>
+    <tr><td>D-03</td><td></td><td style="height:30pt"></td><td></td><td></td></tr>
+    <tr><td>D-04</td><td></td><td style="height:30pt"></td><td></td><td></td></tr>
+    <tr><td>D-05</td><td></td><td style="height:30pt"></td><td></td><td></td></tr>
+  </table>
+
+  <h2>10. Aprobación</h2>
+  <p>La firma o confirmación escrita de esta sección indica que las decisiones registradas representan el comportamiento esperado del sistema. Los puntos marcados como pendientes deberán resolverse antes de implementar el módulo afectado.</p>
+
+  <table class="signature">
+    <tr><th>Nombre y rol</th><th>Organismo</th><th>Firma / conformidad</th><th>Fecha</th></tr>
+    <tr><td>&nbsp;<br><br></td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+    <tr><td>&nbsp;<br><br></td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+    <tr><td>&nbsp;<br><br></td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+  </table>
+
+  <p class="footer-note">Documento de trabajo · Programa Escuelas Promotoras de Salud Mendoza · Versión 1.0 · Julio de 2026</p>
+</body>
+</html>
