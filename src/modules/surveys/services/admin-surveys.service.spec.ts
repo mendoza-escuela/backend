@@ -33,6 +33,58 @@ describe('AdminSurveysService', () => {
     );
   });
 
+  it('pagina cuestionarios y sus resúmenes de versión en base de datos', async () => {
+    const builder = {
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([
+        [
+          {
+            id: 'survey-id',
+            code: 'diagnostico',
+            name: 'Diagnóstico',
+            description: null,
+            isActive: true,
+            createdAt: new Date('2026-01-01'),
+            updatedAt: new Date('2026-01-01'),
+            versions: [version()],
+          },
+        ],
+        22,
+      ]),
+    };
+    const listDataSource = {
+      getRepository: jest.fn(() => ({
+        createQueryBuilder: jest.fn(() => builder),
+      })),
+    } as unknown as DataSource;
+    const listService = new AdminSurveysService(
+      listDataSource,
+      validator,
+      new SurveyVersionComparator(),
+    );
+
+    const response = await listService.list({
+      search: 'diag',
+      page: 2,
+      limit: 20,
+    });
+
+    expect(builder.orderBy).toHaveBeenCalledWith('survey.name', 'ASC');
+    expect(builder.skip).toHaveBeenCalledWith(20);
+    expect(builder.take).toHaveBeenCalledWith(20);
+    expect(response.pagination).toEqual({
+      page: 2,
+      limit: 20,
+      total: 22,
+      totalPages: 2,
+    });
+  });
+
   it('rechaza modificar una versión publicada antes de tocar su estructura', async () => {
     manager.findOne.mockResolvedValue(
       version({ status: SurveyVersionStatus.Published }),

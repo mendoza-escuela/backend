@@ -15,6 +15,7 @@ import { UserSchool } from '../../users/entities/user-school.entity';
 import { User } from '../../users/entities/user.entity';
 import { AssignSchoolUserDto } from '../dto/assign-school-user.dto';
 import { CreateSchoolDto } from '../dto/create-school.dto';
+import { ListAssignableUsersQueryDto } from '../dto/list-assignable-users-query.dto';
 import { ListSchoolsQueryDto } from '../dto/list-schools-query.dto';
 import { UpdateSchoolDto } from '../dto/update-school.dto';
 import { SchoolUserAssignmentHistory } from '../entities/school-user-assignment-history.entity';
@@ -26,11 +27,86 @@ export class SchoolsService {
 
   async list(query: ListSchoolsQueryDto) {
     const builder = this.filteredBuilder(query)
+      .select([
+        'school.id',
+        'school.cue',
+        'school.name',
+        'school.schoolNumber',
+        'school.department',
+        'school.locality',
+        'school.educationLevel',
+        'school.managementType',
+        'school.enrollment',
+        'school.isActive',
+      ])
       .skip((query.page - 1) * query.limit)
       .take(query.limit);
     const [items, total] = await builder.getManyAndCount();
     return {
       items,
+      pagination: {
+        page: query.page,
+        limit: query.limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / query.limit)),
+      },
+    };
+  }
+
+  /**
+   * Lista usuarios Colegio que pueden asociarse al establecimiento.
+   *
+   * La disponibilidad se resuelve y pagina en PostgreSQL para evitar descargar
+   * usuarios ocupados y filtrar grandes colecciones en el navegador.
+   */
+  async listAssignableUsers(
+    schoolId: string,
+    query: ListAssignableUsersQueryDto,
+  ) {
+    if (
+      !(await this.dataSource.getRepository(School).existsBy({ id: schoolId }))
+    )
+      throw new NotFoundException('Colegio no encontrado.');
+
+    const builder = this.dataSource
+      .getRepository(User)
+      .createQueryBuilder('user')
+      .leftJoin('user.userSchools', 'assignment')
+      .select([
+        'user.id',
+        'user.firstName',
+        'user.lastName',
+        'user.email',
+        'user.isActive',
+      ])
+      .where('user.role = :role', { role: UserRole.School })
+      .andWhere('user.isActive = true')
+      .andWhere(
+        '(assignment.userId IS NULL OR assignment.schoolId = :schoolId)',
+        { schoolId },
+      )
+      .orderBy('user.lastName', 'ASC')
+      .addOrderBy('user.firstName', 'ASC')
+      .addOrderBy('user.id', 'ASC')
+      .skip((query.page - 1) * query.limit)
+      .take(query.limit);
+
+    if (query.search) {
+      builder.andWhere(
+        `(LOWER(user.firstName) LIKE :search OR LOWER(user.lastName) LIKE :search OR LOWER(user.email) LIKE :search)`,
+        { search: `%${query.search.toLowerCase()}%` },
+      );
+    }
+
+    const [users, total] = await builder.getManyAndCount();
+    return {
+      items: users.map((user) => ({
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        isActive: user.isActive,
+      })),
       pagination: {
         page: query.page,
         limit: query.limit,
@@ -324,7 +400,27 @@ export class SchoolsService {
     format: 'csv' | 'xlsx',
     actor: AuthenticatedUser,
   ) {
-    const schools = await this.filteredBuilder(query).getMany();
+    const schools = await this.filteredBuilder(query)
+      .select([
+        'school.cue',
+        'school.name',
+        'school.schoolNumber',
+        'school.department',
+        'school.locality',
+        'school.address',
+        'school.postalCode',
+        'school.educationLevel',
+        'school.managementType',
+        'school.scope',
+        'school.shift',
+        'school.email',
+        'school.phone',
+        'school.referentFirstName',
+        'school.referentLastName',
+        'school.enrollment',
+        'school.isActive',
+      ])
+      .getMany();
     await this.dataSource.getRepository(AuditLog).save({
       actorUserId: actor.id,
       action: 'SCHOOLS_EXPORTED',
@@ -356,6 +452,7 @@ export class SchoolsService {
       school.department,
       school.locality,
       school.address,
+      school.postalCode ?? '',
       school.educationLevel,
       school.managementType,
       school.scope ?? '',

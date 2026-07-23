@@ -172,7 +172,24 @@ export class BulkUserImportService {
   private async validate(
     records: Array<Record<string, string>>,
   ): Promise<ValidatedRow[]> {
-    const schools = await this.dataSource.getRepository(School).find();
+    const requestedSchoolCues = records
+      .map((record) =>
+        (record.colegio_cue ?? record.colegio_codigo ?? '')
+          .trim()
+          .toLowerCase(),
+      )
+      .filter(Boolean);
+    const uniqueSchoolCues = [...new Set(requestedSchoolCues)];
+    const schools = uniqueSchoolCues.length
+      ? await this.dataSource
+          .getRepository(School)
+          .createQueryBuilder('school')
+          .select(['school.id', 'school.cue'])
+          .where('LOWER(school.cue) IN (:...schoolCues)', {
+            schoolCues: uniqueSchoolCues,
+          })
+          .getMany()
+      : [];
     const schoolByCode = new Map(
       schools.map((school) => [school.cue.toLowerCase(), school]),
     );
@@ -193,13 +210,6 @@ export class BulkUserImportService {
     emails.forEach((email) =>
       occurrences.set(email, (occurrences.get(email) ?? 0) + 1),
     );
-    const requestedSchoolCues = records
-      .map((record) =>
-        (record.colegio_cue ?? record.colegio_codigo ?? '')
-          .trim()
-          .toLowerCase(),
-      )
-      .filter(Boolean);
     const schoolOccurrences = new Map<string, number>();
     requestedSchoolCues.forEach((cue) =>
       schoolOccurrences.set(cue, (schoolOccurrences.get(cue) ?? 0) + 1),

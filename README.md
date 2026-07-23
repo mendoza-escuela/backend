@@ -42,6 +42,10 @@ Las rutas bajo `/admin/users` requieren sesión válida, contraseña inicial ya 
 
 Las operaciones sensibles generan registros en `audit_logs`. Nunca se guardan contraseñas ni hashes dentro del detalle de auditoría. Bloquear una cuenta o restablecer su contraseña revoca sus sesiones activas.
 
+El selector de colegio consulta `GET /api/admin/users/schools?search=texto&page=1&limit=20`. La búsqueda por CUE, número o nombre se procesa en PostgreSQL, devuelve una respuesta paginada y utiliza índices trigram creados por la migración `AddSchoolSearchIndexes1720375207000`; el frontend no descarga el padrón completo.
+
+`GET /api/admin/users` pagina en base de datos mediante `page` y `limit` (20 por defecto, máximo 100), aplica búsqueda y filtros antes de `skip/take` y devuelve únicamente los campos necesarios para la grilla. La migración `AddUserSearchIndexes1720375208000` agrega índices para nombre, apellido y correo. La importación consulta solamente los CUE incluidos en el archivo, nunca el padrón completo.
+
 La importación masiva acepta archivos `.csv` o `.xlsx` de hasta 2 MB y 500 filas. La plantilla se descarga desde `GET /admin/users/import/template` y utiliza estas columnas:
 
 ```text
@@ -55,6 +59,8 @@ Primero debe ejecutarse la vista previa. La importación es parcial: crea las fi
 Las rutas protegidas bajo `/admin/schools` permiten alta, listado paginado, búsqueda por CUE/nombre/número, filtros territoriales e institucionales, detalle, edición, activación y desactivación. El detalle incluye el usuario Colegio, accesos recientes, historial de asociaciones y auditoría. Campañas y evaluaciones se informan explícitamente como no disponibles hasta que existan esos módulos; no se generan datos ficticios.
 
 Cada colegio admite un único usuario con rol `school`, y cada usuario sólo puede pertenecer a un colegio. Los reemplazos y desvinculaciones conservan un historial independiente. Un colegio inactivo conserva sus datos e historial; `SchoolsService.assertActiveForEvaluation` es la validación obligatoria que deberá usar el módulo de evaluaciones antes de crear una nueva.
+
+`GET /api/admin/schools` pagina en PostgreSQL mediante `page` y `limit` y selecciona únicamente las columnas del listado. `GET /api/admin/schools/:id/assignable-users` busca y pagina usuarios disponibles para asociación en backend, evitando descargar cuentas ocupadas y filtrarlas en el navegador.
 
 La importación acepta CSV/XLSX de hasta 2 MB y 500 filas, ofrece vista previa y realiza importación parcial. La plantilla se obtiene en `GET /admin/schools/import/template`. El padrón filtrado puede exportarse mediante `GET /admin/schools/export?format=csv` o `format=xlsx`; cada exportación queda auditada.
 
@@ -93,7 +99,7 @@ Las versiones borrador no se exponen a las escuelas. Campañas, borradores de re
 
 Las rutas bajo `/api/admin/surveys` requieren sesión válida, contraseña inicial ya cambiada y rol `admin`:
 
-- `GET /api/admin/surveys` y `GET /api/admin/surveys/:surveyId`: listado, detalle, versiones y auditoría reciente.
+- `GET /api/admin/surveys?page=1&limit=20&search=texto` y `GET /api/admin/surveys/:surveyId`: listado paginado, detalle, versiones y auditoría reciente.
 - `POST /api/admin/surveys`, `PATCH /api/admin/surveys/:surveyId` y `DELETE /api/admin/surveys/:surveyId`: ABM de la definición general.
 - `POST /api/admin/surveys/:surveyId/versions`: alta de una versión vacía o clonada con `sourceVersionId`.
 - `GET`, `PUT` y `DELETE /api/admin/surveys/:surveyId/versions/:versionId`: consulta y ABM de una versión borrador.

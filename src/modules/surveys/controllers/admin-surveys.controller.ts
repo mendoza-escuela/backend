@@ -23,6 +23,7 @@ import { UserRole } from '../../users/entities/user-role.enum';
 import { CompareSurveyVersionsQueryDto } from '../dto/compare-survey-versions-query.dto';
 import { CreateSurveyVersionDto } from '../dto/create-survey-version.dto';
 import { CreateSurveyDto } from '../dto/create-survey.dto';
+import { ListSurveysQueryDto } from '../dto/list-surveys-query.dto';
 import { UpdateSurveyVersionDto } from '../dto/update-survey-version.dto';
 import { UpdateSurveyDto } from '../dto/update-survey.dto';
 import { AdminSurveysService } from '../services/admin-surveys.service';
@@ -34,8 +35,8 @@ export class AdminSurveysController {
   constructor(private readonly surveysService: AdminSurveysService) {}
 
   @Get()
-  list() {
-    return this.surveysService.list();
+  list(@Query() query: ListSurveysQueryDto) {
+    return this.surveysService.list(query);
   }
 
   @Post()

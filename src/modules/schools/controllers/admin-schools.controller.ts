@@ -24,6 +24,7 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { AssignSchoolUserDto } from '../dto/assign-school-user.dto';
 import { CreateSchoolDto } from '../dto/create-school.dto';
+import { ListAssignableUsersQueryDto } from '../dto/list-assignable-users-query.dto';
 import { ListSchoolsQueryDto } from '../dto/list-schools-query.dto';
 import { SetSchoolStatusDto } from '../dto/set-school-status.dto';
 import { UpdateSchoolDto } from '../dto/update-school.dto';
@@ -92,6 +93,12 @@ export class AdminSchoolsController {
       `attachment; filename="padron-colegios.${exported.extension}"`,
     );
     response.send(exported.buffer);
+  }
+  @Get(':id/assignable-users') assignableUsers(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: ListAssignableUsersQueryDto,
+  ) {
+    return this.schoolsService.listAssignableUsers(id, query);
   }
   @Get(':id') findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.schoolsService.findOne(id);

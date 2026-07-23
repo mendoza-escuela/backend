@@ -16,6 +16,7 @@ import { School } from '../../schools/entities/school.entity';
 import { SchoolUserAssignmentHistory } from '../../schools/entities/school-user-assignment-history.entity';
 import { CreateUserDto } from '../dto/create-user.dto';
 import { ListUsersQueryDto } from '../dto/list-users-query.dto';
+import { SearchSchoolOptionsQueryDto } from '../dto/search-school-options-query.dto';
 import { UpdateUserDto } from '../dto/update-user.dto';
 import { UserRole } from '../entities/user-role.enum';
 import { UserSchool } from '../entities/user-school.entity';
@@ -31,8 +32,27 @@ export class AdminUsersService {
       .createQueryBuilder('user')
       .leftJoinAndSelect('user.userSchools', 'association')
       .leftJoinAndSelect('association.school', 'school')
+      .select([
+        'user.id',
+        'user.firstName',
+        'user.lastName',
+        'user.email',
+        'user.role',
+        'user.isActive',
+        'user.mustChangePassword',
+        'user.lastLoginAt',
+        'user.createdAt',
+        'user.updatedAt',
+        'association.userId',
+        'association.schoolId',
+        'school.id',
+        'school.cue',
+        'school.name',
+        'school.isActive',
+      ])
       .orderBy('user.lastName', 'ASC')
       .addOrderBy('user.firstName', 'ASC')
+      .addOrderBy('user.id', 'ASC')
       .skip((query.page - 1) * query.limit)
       .take(query.limit);
 
@@ -72,17 +92,45 @@ export class AdminUsersService {
     return this.toResponse(user);
   }
 
-  async listSchools() {
-    const schools = await this.dataSource
+  /**
+   * Busca opciones de colegios en el servidor sin cargar el padrón completo.
+   *
+   * La respuesta limitada permite que el selector de usuarios mantenga un
+   * consumo estable de memoria y red aunque aumente la cantidad de colegios.
+   */
+  async listSchools(query: SearchSchoolOptionsQueryDto) {
+    const builder = this.dataSource
       .getRepository(School)
-      .find({ order: { name: 'ASC' } });
-    return schools.map((school) => ({
-      id: school.id,
-      cue: school.cue,
-      code: school.cue,
-      name: school.name,
-      isActive: school.isActive,
-    }));
+      .createQueryBuilder('school')
+      .select(['school.id', 'school.cue', 'school.name', 'school.isActive'])
+      .orderBy('school.name', 'ASC')
+      .addOrderBy('school.cue', 'ASC')
+      .skip((query.page - 1) * query.limit)
+      .take(query.limit);
+
+    if (query.search) {
+      builder.andWhere(
+        `(LOWER(school.cue) LIKE :search OR LOWER(school.name) LIKE :search OR LOWER(COALESCE(school.schoolNumber, '')) LIKE :search)`,
+        { search: `%${query.search.toLowerCase()}%` },
+      );
+    }
+
+    const [schools, total] = await builder.getManyAndCount();
+    return {
+      items: schools.map((school) => ({
+        id: school.id,
+        cue: school.cue,
+        code: school.cue,
+        name: school.name,
+        isActive: school.isActive,
+      })),
+      pagination: {
+        page: query.page,
+        limit: query.limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / query.limit)),
+      },
+    };
   }
 
   async create(dto: CreateUserDto, actor: AuthenticatedUser) {
@@ -478,6 +526,7 @@ export class AdminUsersService {
             cue: association.school.cue,
             code: association.school.cue,
             name: association.school.name,
+            isActive: association.school.isActive,
           }
         : null,
     };

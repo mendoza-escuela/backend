@@ -10,6 +10,7 @@ import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { CompareSurveyVersionsQueryDto } from '../dto/compare-survey-versions-query.dto';
 import { CreateSurveyVersionDto } from '../dto/create-survey-version.dto';
 import { CreateSurveyDto } from '../dto/create-survey.dto';
+import { ListSurveysQueryDto } from '../dto/list-surveys-query.dto';
 import {
   SurveyDimensionInputDto,
   UpdateSurveyVersionDto,
@@ -33,32 +34,51 @@ export class AdminSurveysService {
     private readonly comparator: SurveyVersionComparator,
   ) {}
 
-  async list() {
-    const surveys = await this.dataSource.getRepository(Survey).find({
-      relations: { versions: true },
-      order: { name: 'ASC' },
-    });
-    return surveys.map((survey) => ({
-      id: survey.id,
-      code: survey.code,
-      name: survey.name,
-      description: survey.description,
-      isActive: survey.isActive,
-      createdAt: survey.createdAt,
-      updatedAt: survey.updatedAt,
-      versions: survey.versions
-        .sort((a, b) => b.versionNumber - a.versionNumber)
-        .map((version) => this.versionSummary(version)),
-    }));
+  async list(query: ListSurveysQueryDto) {
+    const builder = this.dataSource
+      .getRepository(Survey)
+      .createQueryBuilder('survey')
+      .leftJoinAndSelect('survey.versions', 'version')
+      .orderBy('survey.name', 'ASC')
+      .addOrderBy('survey.id', 'ASC')
+      .addOrderBy('version.versionNumber', 'DESC')
+      .skip((query.page - 1) * query.limit)
+      .take(query.limit);
+
+    if (query.search) {
+      builder.andWhere(
+        '(LOWER(survey.code) LIKE :search OR LOWER(survey.name) LIKE :search)',
+        { search: `%${query.search.toLowerCase()}%` },
+      );
+    }
+
+    const [surveys, total] = await builder.getManyAndCount();
+    return {
+      items: surveys.map((survey) => ({
+        id: survey.id,
+        code: survey.code,
+        name: survey.name,
+        description: survey.description,
+        isActive: survey.isActive,
+        createdAt: survey.createdAt,
+        updatedAt: survey.updatedAt,
+        versions: survey.versions.map((version) =>
+          this.versionSummary(version),
+        ),
+      })),
+      pagination: {
+        page: query.page,
+        limit: query.limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / query.limit)),
+      },
+    };
   }
 
   async findOne(surveyId: string) {
     const survey = await this.getSurvey(surveyId);
     const versions = await this.dataSource.getRepository(SurveyVersion).find({
       where: { surveyId },
-      relations: {
-        dimensions: { sections: { questions: { options: true } } },
-      },
       order: { versionNumber: 'DESC' },
     });
     const versionIds = versions.map((version) => version.id);
@@ -75,10 +95,10 @@ export class AdminSurveysService {
         '(audit.entityType = :versionType AND audit.entityId IN (:...versionIds))',
         { versionType: 'SurveyVersion', versionIds },
       );
-    const audits = await auditBuilder
-      .orderBy('audit.createdAt', 'DESC')
-      .take(50)
-      .getMany();
+    const [audits, countsByVersion] = await Promise.all([
+      auditBuilder.orderBy('audit.createdAt', 'DESC').take(50).getMany(),
+      this.structureCountsForVersions(versionIds),
+    ]);
 
     return {
       id: survey.id,
@@ -90,7 +110,7 @@ export class AdminSurveysService {
       updatedAt: survey.updatedAt,
       versions: versions.map((version) => ({
         ...this.versionSummary(version),
-        counts: this.structureCounts(version),
+        counts: countsByVersion.get(version.id),
       })),
       audits: audits.map((audit) => ({
         id: audit.id,
@@ -591,6 +611,88 @@ export class AdminSurveysService {
 
   private structureCounts(version: SurveyVersion) {
     return this.inputCounts(this.versionToInput(version));
+  }
+
+  /**
+   * Cuenta la estructura de varias versiones mediante agregaciones SQL.
+   *
+   * Evita hidratar dimensiones, secciones, preguntas y opciones completas
+   * cuando el detalle administrativo sólo necesita mostrar cantidades.
+   */
+  private async structureCountsForVersions(versionIds: string[]) {
+    const counts = new Map<
+      string,
+      {
+        dimensions: number;
+        sections: number;
+        questions: number;
+        options: number;
+      }
+    >();
+    versionIds.forEach((versionId) =>
+      counts.set(versionId, {
+        dimensions: 0,
+        sections: 0,
+        questions: 0,
+        options: 0,
+      }),
+    );
+    if (!versionIds.length) return counts;
+
+    type CountRow = { versionId: string; count: string };
+    const [dimensions, sections, questions, options] = await Promise.all([
+      this.dataSource
+        .getRepository(SurveyDimension)
+        .createQueryBuilder('dimension')
+        .select('dimension.versionId', 'versionId')
+        .addSelect('COUNT(*)', 'count')
+        .where('dimension.versionId IN (:...versionIds)', { versionIds })
+        .groupBy('dimension.versionId')
+        .getRawMany<CountRow>(),
+      this.dataSource
+        .getRepository(SurveySection)
+        .createQueryBuilder('section')
+        .innerJoin('section.dimension', 'dimension')
+        .select('dimension.versionId', 'versionId')
+        .addSelect('COUNT(*)', 'count')
+        .where('dimension.versionId IN (:...versionIds)', { versionIds })
+        .groupBy('dimension.versionId')
+        .getRawMany<CountRow>(),
+      this.dataSource
+        .getRepository(SurveyQuestion)
+        .createQueryBuilder('question')
+        .innerJoin('question.section', 'section')
+        .innerJoin('section.dimension', 'dimension')
+        .select('dimension.versionId', 'versionId')
+        .addSelect('COUNT(*)', 'count')
+        .where('dimension.versionId IN (:...versionIds)', { versionIds })
+        .groupBy('dimension.versionId')
+        .getRawMany<CountRow>(),
+      this.dataSource
+        .getRepository(SurveyOption)
+        .createQueryBuilder('option')
+        .innerJoin('option.question', 'question')
+        .innerJoin('question.section', 'section')
+        .innerJoin('section.dimension', 'dimension')
+        .select('dimension.versionId', 'versionId')
+        .addSelect('COUNT(*)', 'count')
+        .where('dimension.versionId IN (:...versionIds)', { versionIds })
+        .groupBy('dimension.versionId')
+        .getRawMany<CountRow>(),
+    ]);
+
+    for (const [key, rows] of [
+      ['dimensions', dimensions],
+      ['sections', sections],
+      ['questions', questions],
+      ['options', options],
+    ] as const) {
+      rows.forEach((row) => {
+        const versionCounts = counts.get(row.versionId);
+        if (versionCounts) versionCounts[key] = Number(row.count);
+      });
+    }
+    return counts;
   }
 
   private inputCounts(dimensions: SurveyDimensionInputDto[]) {

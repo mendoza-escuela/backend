@@ -13,7 +13,11 @@ import {
 import { UserRole } from '../entities/user-role.enum';
 
 const optionalFilter = ({ value }: { value: unknown }) =>
-  value === '' ? undefined : value;
+  typeof value === 'string'
+    ? value.trim() || undefined
+    : value === ''
+      ? undefined
+      : value;
 const optionalBooleanFilter = ({ value }: { value: unknown }): unknown => {
   if (value === '' || value === undefined) return undefined;
   if (value === true || value === 'true') return true;
