@@ -66,6 +66,47 @@ cue,nombre,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,a
 
 `caracteristicas` debe ser un objeto JSON con hasta 30 valores simples, por ejemplo `{"comedor":true}`.
 
+## Portal del establecimiento
+
+`GET /api/schools/me` requiere rol `school` y devuelve únicamente el establecimiento asociado al usuario autenticado. La consulta no acepta un identificador enviado por el navegador, por lo que un usuario Escuela no puede seleccionar ni consultar otro establecimiento.
+
+## Cuestionarios versionados
+
+El módulo `surveys` modela la estructura `cuestionario → versión → dimensión → sección → pregunta → opción`. Cada nivel posee códigos y órdenes únicos dentro de su contenedor. Las versiones admiten los estados `draft`, `published` y `archived`; una versión publicada requiere fecha de publicación.
+
+Tipos de pregunta disponibles:
+
+```text
+single_choice, multiple_choice, boolean, short_text, long_text, number, date
+```
+
+Las reglas básicas de presentación y validación (`min`, `max`, longitudes, máximo de selecciones y placeholder) se almacenan separadas de cualquier regla de puntaje. El modelo no incorpora puntajes, estrellas ni condiciones porque esas definiciones funcionales siguen pendientes.
+
+Endpoints de lectura protegidos para roles `admin` y `school`:
+
+- `GET /api/surveys/available`: lista cuestionarios activos con una versión publicada.
+- `GET /api/surveys/available/:code`: devuelve la última versión publicada con toda su estructura ordenada.
+
+Las versiones borrador no se exponen a las escuelas. Campañas, borradores de respuestas y envíos finales siguen fuera de este módulo y no se simulan.
+
+### Administración de cuestionarios
+
+Las rutas bajo `/api/admin/surveys` requieren sesión válida, contraseña inicial ya cambiada y rol `admin`:
+
+- `GET /api/admin/surveys` y `GET /api/admin/surveys/:surveyId`: listado, detalle, versiones y auditoría reciente.
+- `POST /api/admin/surveys`, `PATCH /api/admin/surveys/:surveyId` y `DELETE /api/admin/surveys/:surveyId`: ABM de la definición general.
+- `POST /api/admin/surveys/:surveyId/versions`: alta de una versión vacía o clonada con `sourceVersionId`.
+- `GET`, `PUT` y `DELETE /api/admin/surveys/:surveyId/versions/:versionId`: consulta y ABM de una versión borrador.
+- `POST /api/admin/surveys/:surveyId/versions/:versionId/publish`: publicación definitiva.
+- `GET /api/admin/surveys/:surveyId/versions/:versionId/validation`: validación previa con todos los errores estructurales detectados.
+- `GET /api/admin/surveys/:surveyId/versions/compare`: comparación estructural mediante `fromVersionId` y `toVersionId`.
+
+Los borradores pueden guardarse incompletos para permitir construcción progresiva. Antes de publicar se exige, como mínimo, una dimensión, una sección por dimensión, una pregunta por sección y opciones para las preguntas de selección. En todos los guardados se controlan códigos repetidos, tipos incompatibles con opciones y rangos de validación inconsistentes.
+
+Publicar es una operación irreversible: el servicio impide editar o eliminar la versión y la migración `ProtectPublishedSurveyVersions1720375206000` agrega triggers PostgreSQL que también protegen la versión y todos sus descendientes ante escrituras por fuera de la API. Para cambiar contenido publicado debe clonarse como una versión borrador nueva.
+
+Las altas, cambios, clonaciones, publicaciones y bajas se registran en `audit_logs` con usuario, fecha, entidad y resumen del cambio. No se guardan secretos ni contenido de respuestas.
+
 ## Verificación
 
 ```bash
