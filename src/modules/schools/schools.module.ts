@@ -11,6 +11,7 @@ import { AdminSchoolsController } from './controllers/admin-schools.controller';
 import { SchoolPortalController } from './controllers/school-portal.controller';
 import { SchoolUserAssignmentHistory } from './entities/school-user-assignment-history.entity';
 import { School } from './entities/school.entity';
+import { SchoolRectification } from './entities/school-rectification.entity';
 import { BulkSchoolImportService } from './services/bulk-school-import.service';
 import { SchoolsService } from './services/schools.service';
 
@@ -18,6 +19,7 @@ import { SchoolsService } from './services/schools.service';
   imports: [
     TypeOrmModule.forFeature([
       School,
+      SchoolRectification,
       SchoolUserAssignmentHistory,
       User,
       UserSchool,

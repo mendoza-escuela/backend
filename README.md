@@ -67,7 +67,7 @@ La importación acepta CSV/XLSX de hasta 2 MB y 500 filas, ofrece vista previa y
 Columnas de la plantilla de colegios:
 
 ```text
-cue,nombre,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_correo,referente_telefono,matricula,caracteristicas,estado
+cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_correo,referente_telefono,matricula,caracteristicas,estado
 ```
 
 `caracteristicas` debe ser un objeto JSON con hasta 30 valores simples, por ejemplo `{"comedor":true}`.
@@ -75,6 +75,8 @@ cue,nombre,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,a
 ## Portal del establecimiento
 
 `GET /api/schools/me` requiere rol `school` y devuelve únicamente el establecimiento asociado al usuario autenticado. La consulta no acepta un identificador enviado por el navegador, por lo que un usuario Escuela no puede seleccionar ni consultar otro establecimiento.
+
+`PUT /api/schools/me/rectification` permite revisar y rectificar la ficha obligatoria del establecimiento asociado para el año calendario vigente. La operación conserva un snapshot con período, fecha y usuario y registra auditoría. Los administradores pueden realizar la misma confirmación mediante `PUT /api/admin/schools/:id/rectification`. Hasta que exista el módulo de campañas, la falta de rectificación se informa pero no bloquea evaluaciones.
 
 ## Cuestionarios versionados
 

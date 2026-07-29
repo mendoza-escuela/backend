@@ -25,7 +25,7 @@ describe('BulkSchoolImportService', () => {
     const csv = [
       headers(),
       validRow(),
-      'X,,1,,,,,,,,,,,,,,,menos-uno,no-json,desconocido',
+      'X,,,1,,,,,,,,,,,,,,,,menos-uno,no-json,desconocido',
     ].join('\n');
     const preview = await service.preview(
       file('colegios.csv', Buffer.from(csv)),
@@ -59,7 +59,7 @@ describe('BulkSchoolImportService', () => {
     const csv = [
       headers(),
       validRow(),
-      'X,,1,,,,,,,,,,,,,,,menos-uno,no-json,desconocido',
+      'X,,,1,,,,,,,,,,,,,,,,menos-uno,no-json,desconocido',
     ].join('\n');
     const result = await service.import(
       file('colegios.csv', Buffer.from(csv)),
@@ -71,9 +71,9 @@ describe('BulkSchoolImportService', () => {
 });
 
 const headers = () =>
-  'cue,nombre,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_correo,referente_telefono,matricula,caracteristicas,estado';
+  'cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_correo,referente_telefono,matricula,caracteristicas,estado';
 const validRow = () =>
-  '500012300,Escuela Uno,1-001,Capital,Mendoza,San Martín 1,5500,Primario,Estatal,Urbano,Completa,2614000000,escuela@ejemplo.edu.ar,Ana,Pérez,ana@ejemplo.edu.ar,2614000001,350,{},activo';
+  '500012300,Escuela Uno,María González,1-001,Capital,Mendoza,San Martín 1,5500,Primario,Estatal,Urbano,Completa,2614000000,escuela@ejemplo.edu.ar,Ana,Pérez,ana@ejemplo.edu.ar,2614000001,350,{},activo';
 function csvValues(line: string) {
   return line.split(',');
 }

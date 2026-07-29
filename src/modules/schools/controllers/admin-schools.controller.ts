@@ -7,6 +7,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   Res,
@@ -27,6 +28,7 @@ import { CreateSchoolDto } from '../dto/create-school.dto';
 import { ListAssignableUsersQueryDto } from '../dto/list-assignable-users-query.dto';
 import { ListSchoolsQueryDto } from '../dto/list-schools-query.dto';
 import { SetSchoolStatusDto } from '../dto/set-school-status.dto';
+import { RectifySchoolDto } from '../dto/rectify-school.dto';
 import { UpdateSchoolDto } from '../dto/update-school.dto';
 import { BulkSchoolImportService } from '../services/bulk-school-import.service';
 import { SchoolsService } from '../services/schools.service';
@@ -129,5 +131,14 @@ export class AdminSchoolsController {
     @Req() request: Request & { user: AuthenticatedUser },
   ) {
     return this.schoolsService.assignUser(id, dto, request.user);
+  }
+
+  @Put(':id/rectification')
+  rectify(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RectifySchoolDto,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    return this.schoolsService.rectify(id, dto, request.user);
   }
 }

@@ -19,6 +19,9 @@ export class School {
   @Column({ type: 'varchar', length: 255 })
   name: string;
 
+  @Column({ name: 'director_name', type: 'varchar', length: 200 })
+  directorName: string;
+
   @Index()
   @Column({
     name: 'school_number',
@@ -50,11 +53,11 @@ export class School {
   @Column({ name: 'management_type', type: 'varchar', length: 120 })
   managementType: string;
 
-  @Column({ type: 'varchar', length: 120, nullable: true })
-  scope: string | null;
+  @Column({ type: 'varchar', length: 120 })
+  scope: string;
 
-  @Column({ type: 'varchar', length: 120, nullable: true })
-  shift: string | null;
+  @Column({ type: 'varchar', length: 120 })
+  shift: string;
 
   @Column({ type: 'varchar', length: 40, nullable: true })
   phone: string | null;

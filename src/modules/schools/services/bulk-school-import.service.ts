@@ -12,6 +12,7 @@ type ValidatedSchoolRow = {
   line: number;
   cue: string;
   name: string;
+  directorName: string;
   schoolNumber: string;
   department: string;
   locality: string;
@@ -43,9 +44,9 @@ export class BulkSchoolImportService {
 
   template() {
     const headers =
-      'cue,nombre,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_correo,referente_telefono,matricula,caracteristicas,estado';
+      'cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_correo,referente_telefono,matricula,caracteristicas,estado';
     const example =
-      '500012300,Escuela Ejemplo,1-001,Capital,Mendoza,Av. Ejemplo 123,5500,Primario,Estatal,Urbano,Completa,2614000000,escuela@ejemplo.edu.ar,Ana,Pérez,ana.perez@ejemplo.edu.ar,2614000001,350,"{""comedor"":true}",activo';
+      '500012300,Escuela Ejemplo,María González,1-001,Capital,Mendoza,Av. Ejemplo 123,5500,Primario,Estatal,Urbano,Completa,2614000000,escuela@ejemplo.edu.ar,Ana,Pérez,ana.perez@ejemplo.edu.ar,2614000001,350,"{""comedor"":true}",activo';
     return Buffer.from(`\uFEFF${headers}\r\n${example}`, 'utf8');
   }
 
@@ -65,6 +66,7 @@ export class BulkSchoolImportService {
           {
             cue: row.cue,
             name: row.name,
+            directorName: row.directorName,
             schoolNumber: row.schoolNumber || undefined,
             department: row.department,
             locality: row.locality,
@@ -72,8 +74,8 @@ export class BulkSchoolImportService {
             postalCode: row.postalCode || undefined,
             educationLevel: row.educationLevel,
             managementType: row.managementType,
-            scope: row.scope || undefined,
-            shift: row.shift || undefined,
+            scope: row.scope,
+            shift: row.shift,
             phone: row.phone || undefined,
             email: row.email || undefined,
             referentFirstName: row.referentFirstName,
@@ -160,6 +162,7 @@ export class BulkSchoolImportService {
         line: index + 2,
         cue: record.cue.trim().toUpperCase(),
         name: record.nombre.trim(),
+        directorName: record.director.trim(),
         schoolNumber: record.numero.trim(),
         department: record.departamento.trim(),
         locality: record.localidad.trim(),
@@ -192,11 +195,14 @@ export class BulkSchoolImportService {
         row.errors.push('El CUE está repetido dentro del archivo.');
       for (const [label, value, max] of [
         ['Nombre', row.name, 255],
+        ['Director/a', row.directorName, 200],
         ['Departamento', row.department, 120],
         ['Localidad', row.locality, 120],
         ['Dirección', row.address, 255],
         ['Nivel', row.educationLevel, 120],
         ['Gestión', row.managementType, 120],
+        ['Ámbito', row.scope, 120],
+        ['Jornada', row.shift, 120],
         ['Nombre del referente', row.referentFirstName, 100],
         ['Apellido del referente', row.referentLastName, 100],
       ] as const)
@@ -205,8 +211,6 @@ export class BulkSchoolImportService {
       for (const [label, value, max] of [
         ['Número', row.schoolNumber, 30],
         ['Código postal', row.postalCode, 20],
-        ['Ámbito', row.scope, 120],
-        ['Jornada', row.shift, 120],
         ['Teléfono', row.phone, 40],
         ['Teléfono del referente', row.referentPhone, 40],
       ] as const)
@@ -236,6 +240,7 @@ export class BulkSchoolImportService {
         line: row.line,
         cue: row.cue,
         name: row.name,
+        directorName: row.directorName,
         schoolNumber: row.schoolNumber,
         department: row.department,
         locality: row.locality,
@@ -293,6 +298,7 @@ export class BulkSchoolImportService {
     const required = [
       'cue',
       'nombre',
+      'director',
       'numero',
       'departamento',
       'localidad',

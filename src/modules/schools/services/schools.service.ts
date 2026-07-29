@@ -18,7 +18,12 @@ import { CreateSchoolDto } from '../dto/create-school.dto';
 import { ListAssignableUsersQueryDto } from '../dto/list-assignable-users-query.dto';
 import { ListSchoolsQueryDto } from '../dto/list-schools-query.dto';
 import { UpdateSchoolDto } from '../dto/update-school.dto';
+import { RectifySchoolDto } from '../dto/rectify-school.dto';
 import { SchoolUserAssignmentHistory } from '../entities/school-user-assignment-history.entity';
+import {
+  SchoolRectification,
+  SchoolRectificationSnapshot,
+} from '../entities/school-rectification.entity';
 import { School } from '../entities/school.entity';
 
 @Injectable()
@@ -31,6 +36,7 @@ export class SchoolsService {
         'school.id',
         'school.cue',
         'school.name',
+        'school.directorName',
         'school.schoolNumber',
         'school.department',
         'school.locality',
@@ -200,8 +206,17 @@ export class SchoolsService {
       order: { createdAt: 'DESC' },
       take: 50,
     });
+    const rectifications = await this.rectificationHistory(id);
     return {
       ...school,
+      rectification: this.rectificationStatus(rectifications),
+      rectifications: rectifications.map((rectification) => ({
+        id: rectification.id,
+        periodYear: rectification.periodYear,
+        rectifiedAt: rectification.rectifiedAt,
+        actorUser: this.userSummary(rectification.actorUser),
+        snapshot: rectification.snapshot,
+      })),
       users: users.map((user) => ({
         id: user.id,
         firstName: user.firstName,
@@ -252,7 +267,72 @@ export class SchoolsService {
       throw new NotFoundException(
         'Tu cuenta todavía no tiene un establecimiento asociado.',
       );
-    return association.school;
+    const rectifications = await this.rectificationHistory(
+      association.schoolId,
+    );
+    return {
+      ...association.school,
+      rectification: this.rectificationStatus(rectifications),
+    };
+  }
+
+  /** Rectifica la ficha del colegio asociado sin aceptar IDs del navegador. */
+  async rectifyForUser(actor: AuthenticatedUser, dto: RectifySchoolDto) {
+    const association = await this.dataSource
+      .getRepository(UserSchool)
+      .findOneBy({ userId: actor.id });
+    if (!association)
+      throw new NotFoundException(
+        'Tu cuenta todavía no tiene un establecimiento asociado.',
+      );
+    await this.rectify(association.schoolId, dto, actor);
+    return this.findForUser(actor.id);
+  }
+
+  /**
+   * Confirma los datos obligatorios para el año calendario y conserva un
+   * snapshot independiente de futuras modificaciones de la ficha actual.
+   */
+  async rectify(
+    schoolId: string,
+    dto: RectifySchoolDto,
+    actor: AuthenticatedUser,
+  ) {
+    const periodYear = this.currentPeriodYear();
+    try {
+      await this.dataSource.transaction(async (manager) => {
+        const school = await manager.getRepository(School).findOne({
+          where: { id: schoolId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!school) throw new NotFoundException('Colegio no encontrado.');
+        const normalized = {
+          ...dto,
+          cue: dto.cue.toUpperCase(),
+        };
+        if (normalized.cue !== school.cue)
+          await this.assertCueUnique(manager, normalized.cue, schoolId);
+        const before = this.rectificationSnapshot(school);
+        Object.assign(school, normalized);
+        await manager.save(School, school);
+        const snapshot = this.rectificationSnapshot(school);
+        const rectification = await manager.save(SchoolRectification, {
+          schoolId,
+          periodYear,
+          actorUserId: actor.id,
+          snapshot,
+        });
+        await this.audit(manager, actor.id, 'SCHOOL_RECTIFIED', schoolId, {
+          periodYear,
+          rectificationId: rectification.id,
+          changes: this.diff(before, snapshot),
+          snapshot,
+        });
+      });
+      return this.findOne(schoolId);
+    } catch (error) {
+      this.rethrowUnique(error);
+    }
   }
 
   async create(dto: CreateSchoolDto, actor: AuthenticatedUser) {
@@ -402,8 +482,10 @@ export class SchoolsService {
   ) {
     const schools = await this.filteredBuilder(query)
       .select([
+        'school.id',
         'school.cue',
         'school.name',
+        'school.directorName',
         'school.schoolNumber',
         'school.department',
         'school.locality',
@@ -421,6 +503,23 @@ export class SchoolsService {
         'school.isActive',
       ])
       .getMany();
+    const currentYear = this.currentPeriodYear();
+    const rectifiedRows = schools.length
+      ? await this.dataSource
+          .getRepository(SchoolRectification)
+          .createQueryBuilder('rectification')
+          .select('rectification.schoolId', 'schoolId')
+          .addSelect('MAX(rectification.rectifiedAt)', 'rectifiedAt')
+          .where('rectification.schoolId IN (:...schoolIds)', {
+            schoolIds: schools.map((school) => school.id),
+          })
+          .andWhere('rectification.periodYear = :currentYear', { currentYear })
+          .groupBy('rectification.schoolId')
+          .getRawMany<{ schoolId: string; rectifiedAt: Date }>()
+      : [];
+    const rectifiedBySchool = new Map(
+      rectifiedRows.map((row) => [row.schoolId, row.rectifiedAt]),
+    );
     await this.dataSource.getRepository(AuditLog).save({
       actorUserId: actor.id,
       action: 'SCHOOLS_EXPORTED',
@@ -431,10 +530,12 @@ export class SchoolsService {
     const headers = [
       'CUE',
       'Nombre',
+      'Director/a',
       'Número',
       'Departamento',
       'Localidad',
       'Dirección',
+      'Código postal',
       'Nivel',
       'Gestión',
       'Ámbito',
@@ -444,10 +545,14 @@ export class SchoolsService {
       'Referente',
       'Matrícula',
       'Estado',
+      'Período de rectificación',
+      'Rectificada',
+      'Fecha de rectificación',
     ];
     const rows = schools.map((school) => [
       school.cue,
       school.name,
+      school.directorName,
       school.schoolNumber ?? '',
       school.department,
       school.locality,
@@ -462,6 +567,9 @@ export class SchoolsService {
       `${school.referentLastName}, ${school.referentFirstName}`,
       school.enrollment,
       school.isActive ? 'Activo' : 'Inactivo',
+      currentYear,
+      rectifiedBySchool.has(school.id) ? 'Sí' : 'No',
+      rectifiedBySchool.get(school.id)?.toISOString() ?? '',
     ]);
     if (format === 'csv')
       return {
@@ -603,6 +711,7 @@ export class SchoolsService {
     return {
       cue: school.cue,
       name: school.name,
+      directorName: school.directorName,
       schoolNumber: school.schoolNumber,
       department: school.department,
       locality: school.locality,
@@ -622,6 +731,50 @@ export class SchoolsService {
       characteristics: school.characteristics,
       isActive: school.isActive,
     };
+  }
+
+  private rectificationSnapshot(school: School): SchoolRectificationSnapshot {
+    return {
+      name: school.name,
+      cue: school.cue,
+      directorName: school.directorName,
+      address: school.address,
+      locality: school.locality,
+      scope: school.scope,
+      educationLevel: school.educationLevel,
+      shift: school.shift,
+    };
+  }
+
+  private rectificationHistory(schoolId: string) {
+    return this.dataSource.getRepository(SchoolRectification).find({
+      where: { schoolId },
+      relations: { actorUser: true },
+      order: { rectifiedAt: 'DESC' },
+      take: 50,
+    });
+  }
+
+  private rectificationStatus(rectifications: SchoolRectification[]) {
+    const periodYear = this.currentPeriodYear();
+    const latest = rectifications.find(
+      (rectification) => rectification.periodYear === periodYear,
+    );
+    return {
+      periodYear,
+      isRectified: Boolean(latest),
+      rectifiedAt: latest?.rectifiedAt ?? null,
+      rectifiedBy: this.userSummary(latest?.actorUser ?? null),
+    };
+  }
+
+  private currentPeriodYear() {
+    return Number(
+      new Intl.DateTimeFormat('en', {
+        timeZone: 'America/Argentina/Mendoza',
+        year: 'numeric',
+      }).format(new Date()),
+    );
   }
   private diff(
     before: Record<string, unknown>,
