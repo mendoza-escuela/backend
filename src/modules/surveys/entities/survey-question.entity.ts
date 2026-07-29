@@ -11,6 +11,7 @@ import {
 import { SurveyOption } from './survey-option.entity';
 import { SurveyQuestionType } from './survey-question-type.enum';
 import { SurveySection } from './survey-section.entity';
+import { SurveyApplicabilityRule } from './survey-applicability-rule.entity';
 
 export type SurveyQuestionValidation = {
   min?: number;
@@ -75,4 +76,7 @@ export class SurveyQuestion {
 
   @OneToMany(() => SurveyOption, (option) => option.question)
   options: SurveyOption[];
+
+  @OneToMany(() => SurveyApplicabilityRule, (rule) => rule.question)
+  applicabilityRules: SurveyApplicabilityRule[];
 }

@@ -7,11 +7,7 @@ import {
   SurveySectionInputDto,
 } from '../dto/update-survey-version.dto';
 import { SurveyQuestionType } from '../entities/survey-question-type.enum';
-import {
-  getOfficialDimensionCodeForQuestion,
-  OFFICIAL_SURVEY_DIMENSIONS,
-  OfficialSurveyDimensionCode,
-} from '../templates/official-survey-dimensions.template';
+import { OFFICIAL_SURVEY_DIMENSIONS } from '../templates/official-survey-dimensions.template';
 import { isForbiddenInstitutionalSurveyOption } from '../policies/institutional-survey-option.policy';
 import { AdminSurveysService } from './admin-surveys.service';
 import {
@@ -33,7 +29,6 @@ type ValidatedSurveyRow = {
   score: number | null;
   required: boolean | null;
   order: number | null;
-  condition: string;
   errors: string[];
 };
 
@@ -104,35 +99,38 @@ export class BulkSurveyImportService {
       OFFICIAL_SURVEY_DIMENSIONS.map((dimension) => dimension.code),
     );
     return records.map((record, index) => {
-      const dimensionCode = this.code(record.dimension_codigo);
-      const questionCode = this.code(record.pregunta_codigo);
+      const dimensionCode = this.dimensionCode(
+        record.dimension || record.dimension_codigo,
+      );
+      const questionCode = this.code(
+        record.codigo_pregunta || record.pregunta_codigo,
+      );
       const score = this.integer(record.puntaje);
       const required = this.boolean(record.obligatoria);
       const order = this.integer(record.orden);
       const row: ValidatedSurveyRow = {
         line: index + 2,
         dimensionCode,
-        sectionCode: this.code(record.seccion_codigo),
+        sectionCode: this.code(record.seccion_codigo || record.seccion),
         sectionTitle: record.seccion.trim(),
         questionCode,
         question: record.pregunta.trim(),
         helpText: record.texto_ayuda.trim(),
-        optionCode: this.code(record.opcion_codigo),
+        optionCode: this.code(record.opcion_codigo || record.opcion),
         option: record.opcion.trim(),
         score,
         required,
         order,
-        condition: record.condicion.trim(),
         errors: [],
       };
 
       if (!officialCodes.has(dimensionCode))
         row.errors.push(
-          `dimension_codigo: usá uno de los seis códigos oficiales: ${[...officialCodes].join(', ')}.`,
+          `dimension: usá el código o título de una de las seis dimensiones oficiales: ${[...officialCodes].join(', ')}.`,
         );
-      this.validateCode(row, 'seccion_codigo', row.sectionCode);
-      this.validateCode(row, 'pregunta_codigo', row.questionCode);
-      this.validateCode(row, 'opcion_codigo', row.optionCode, 120);
+      this.validateCode(row, 'seccion', row.sectionCode);
+      this.validateCode(row, 'codigo_pregunta', row.questionCode);
+      this.validateCode(row, 'opcion', row.optionCode, 120);
       this.validateText(row, 'seccion', row.sectionTitle, 255);
       this.validateText(row, 'pregunta', row.question, 5000);
       this.validateText(row, 'opcion', row.option, 500);
@@ -143,31 +141,13 @@ export class BulkSurveyImportService {
       if (required === null) row.errors.push('obligatoria: usá sí o no.');
       if (order === null || order < 1)
         row.errors.push('orden: debe ser un entero mayor o igual a 1.');
-      if (row.condition)
+      if (record.condicion?.trim())
         row.errors.push(
-          'condicion: todavía no puede importarse hasta definir el modelo formal de condicionalidad.',
+          'condicion: las reglas deben configurarse desde la administración de aplicabilidad; dejá esta celda vacía.',
         );
-
-      if (isForbiddenInstitutionalSurveyOption(row.optionCode, row.option))
+      if (isForbiddenInstitutionalSurveyOption('', row.option))
         row.errors.push(
           'opcion: el cuestionario institucional no admite “Otro” ni “No aplica”.',
-        );
-
-      const expectedDimension = getOfficialDimensionCodeForQuestion(
-        this.questionNumber(questionCode),
-      );
-      if (expectedDimension && dimensionCode !== String(expectedDimension))
-        row.errors.push(
-          `dimension_codigo: las preguntas 41 a 43 deben pertenecer a ${OfficialSurveyDimensionCode.MentalHealth}.`,
-        );
-
-      const allowedScores =
-        dimensionCode === String(OfficialSurveyDimensionCode.MentalHealth)
-          ? [0, 33, 66, 100]
-          : [0, 50, 100];
-      if (score !== null && !allowedScores.includes(score))
-        row.errors.push(
-          `puntaje: para esta dimensión los valores permitidos son ${allowedScores.join(', ')}.`,
         );
 
       return row;
@@ -206,7 +186,7 @@ export class BulkSurveyImportService {
       if (groupedRows.some((row) => metadata(row) !== metadata(first)))
         groupedRows.forEach((row) =>
           row.errors.push(
-            'pregunta_codigo: sus datos deben ser iguales en todas las filas de opciones.',
+            'codigo_pregunta: sus datos deben ser iguales en todas las filas de opciones.',
           ),
         );
 
@@ -216,9 +196,7 @@ export class BulkSurveyImportService {
       groupedRows
         .filter((row) => (optionOccurrences.get(row.optionCode) ?? 0) > 1)
         .forEach((row) =>
-          row.errors.push(
-            'opcion_codigo: está repetido dentro de la pregunta.',
-          ),
+          row.errors.push('opcion: está repetida dentro de la pregunta.'),
         );
     }
 
@@ -232,7 +210,7 @@ export class BulkSurveyImportService {
     for (const row of rows)
       if ((questionLocations.get(row.questionCode)?.size ?? 0) > 1)
         row.errors.push(
-          'pregunta_codigo: debe ser único en todo el cuestionario.',
+          'codigo_pregunta: debe ser único en todo el cuestionario.',
         );
 
     const orderGroups = this.groupBy(
@@ -331,6 +309,9 @@ export class BulkSurveyImportService {
       (dimension) => dimension.sections,
     );
     const questions = sections.flatMap((section) => section.questions);
+    const detectedDimensions = analysis.dimensions
+      .filter((dimension) => dimension.sections.length)
+      .map(({ code, title }) => ({ code, title }));
     return {
       totalRows: analysis.rows.length,
       validCount: analysis.rows.length - errors.length,
@@ -345,6 +326,15 @@ export class BulkSurveyImportService {
           0,
         ),
       },
+      detectedDimensions,
+      detectedSections: sections.map(({ code, title }) => ({ code, title })),
+      groupedQuestions: questions.map((question) => ({
+        code: question.code,
+        prompt: question.prompt,
+        options: question.options.map(({ label, score }) => ({ label, score })),
+      })),
+      warnings: [],
+      summary: `Se creará una versión borrador con ${questions.length} preguntas y ${questions.reduce((total, question) => total + question.options.length, 0)} opciones.`,
       rows: analysis.rows.map((row) => ({
         line: row.line,
         dimensionCode: row.dimensionCode,
@@ -357,6 +347,15 @@ export class BulkSurveyImportService {
         required: row.required,
         order: row.order,
         errors: row.errors,
+        issues: row.errors.map((message) => {
+          const separator = message.indexOf(':');
+          return {
+            field: separator > 0 ? message.slice(0, separator) : 'fila',
+            receivedValue: null,
+            reason:
+              separator > 0 ? message.slice(separator + 1).trim() : message,
+          };
+        }),
       })),
     };
   }
@@ -409,9 +408,15 @@ export class BulkSurveyImportService {
     return null;
   }
 
-  private questionNumber(code: string) {
-    const match = code.match(/(\d+)$/);
-    return match ? Number(match[1]) : Number.NaN;
+  private dimensionCode(value = '') {
+    const normalized = this.normalizeText(value);
+    return (
+      OFFICIAL_SURVEY_DIMENSIONS.find(
+        (dimension) =>
+          this.normalizeText(String(dimension.code)) === normalized ||
+          this.normalizeText(dimension.title) === normalized,
+      )?.code ?? this.code(value)
+    );
   }
 
   private occurrences(values: string[]) {

@@ -35,6 +35,12 @@ import { UpdateSurveyVersionDto } from '../dto/update-survey-version.dto';
 import { UpdateSurveyDto } from '../dto/update-survey.dto';
 import { AdminSurveysService } from '../services/admin-surveys.service';
 import { BulkSurveyImportService } from '../services/bulk-survey-import.service';
+import {
+  PreviewApplicabilityDto,
+  ReorderApplicabilityRulesDto,
+  WriteApplicabilityRuleDto,
+} from '../dto/applicability-rule.dto';
+import { ApplicabilityRulesService } from '../services/applicability-rules.service';
 
 @Controller('admin/surveys')
 @UseGuards(JwtAuthGuard, PasswordChangeRequiredGuard, RolesGuard)
@@ -43,6 +49,7 @@ export class AdminSurveysController {
   constructor(
     private readonly surveysService: AdminSurveysService,
     private readonly bulkImportService: BulkSurveyImportService,
+    private readonly applicabilityRulesService: ApplicabilityRulesService,
   ) {}
 
   @Get()
@@ -82,7 +89,11 @@ export class AdminSurveysController {
   @Post(':surveyId/import/preview')
   @UseInterceptors(
     FileInterceptor('file', {
-      limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+      limits: {
+        fileSize:
+          Number(process.env.SURVEY_IMPORT_MAX_FILE_MB ?? 5) * 1024 * 1024,
+        files: 1,
+      },
     }),
   )
   previewImport(
@@ -95,7 +106,11 @@ export class AdminSurveysController {
   @Post(':surveyId/import')
   @UseInterceptors(
     FileInterceptor('file', {
-      limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+      limits: {
+        fileSize:
+          Number(process.env.SURVEY_IMPORT_MAX_FILE_MB ?? 5) * 1024 * 1024,
+        files: 1,
+      },
     }),
   )
   importVersion(
@@ -180,6 +195,129 @@ export class AdminSurveysController {
       surveyId,
       versionId,
       request.user,
+    );
+  }
+
+  @Post(':surveyId/versions/:versionId/archive')
+  archiveVersion(
+    @Param('surveyId', ParseUUIDPipe) surveyId: string,
+    @Param('versionId', ParseUUIDPipe) versionId: string,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    return this.surveysService.archiveVersion(
+      surveyId,
+      versionId,
+      request.user,
+    );
+  }
+
+  @Get('templates/applicability-metadata')
+  applicabilityMetadata() {
+    return this.applicabilityRulesService.metadata();
+  }
+
+  @Get(':surveyId/versions/:versionId/applicability-rules')
+  listApplicabilityRules(
+    @Param('surveyId', ParseUUIDPipe) surveyId: string,
+    @Param('versionId', ParseUUIDPipe) versionId: string,
+    @Query('questionId') questionId?: string,
+  ) {
+    return this.applicabilityRulesService.list(surveyId, versionId, questionId);
+  }
+
+  @Post(
+    ':surveyId/versions/:versionId/questions/:questionId/applicability-rules',
+  )
+  createApplicabilityRule(
+    @Param('surveyId', ParseUUIDPipe) surveyId: string,
+    @Param('versionId', ParseUUIDPipe) versionId: string,
+    @Param('questionId', ParseUUIDPipe) questionId: string,
+    @Body() dto: WriteApplicabilityRuleDto,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    return this.applicabilityRulesService.create(
+      surveyId,
+      versionId,
+      questionId,
+      dto,
+      request.user,
+    );
+  }
+
+  @Put(
+    ':surveyId/versions/:versionId/questions/:questionId/applicability-rules/:ruleId',
+  )
+  updateApplicabilityRule(
+    @Param('surveyId', ParseUUIDPipe) surveyId: string,
+    @Param('versionId', ParseUUIDPipe) versionId: string,
+    @Param('questionId', ParseUUIDPipe) questionId: string,
+    @Param('ruleId', ParseUUIDPipe) ruleId: string,
+    @Body() dto: WriteApplicabilityRuleDto,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    return this.applicabilityRulesService.update(
+      surveyId,
+      versionId,
+      questionId,
+      ruleId,
+      dto,
+      request.user,
+    );
+  }
+
+  @Delete(
+    ':surveyId/versions/:versionId/questions/:questionId/applicability-rules/:ruleId',
+  )
+  @HttpCode(204)
+  removeApplicabilityRule(
+    @Param('surveyId', ParseUUIDPipe) surveyId: string,
+    @Param('versionId', ParseUUIDPipe) versionId: string,
+    @Param('questionId', ParseUUIDPipe) questionId: string,
+    @Param('ruleId', ParseUUIDPipe) ruleId: string,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    return this.applicabilityRulesService.remove(
+      surveyId,
+      versionId,
+      questionId,
+      ruleId,
+      request.user,
+    );
+  }
+
+  @Put(
+    ':surveyId/versions/:versionId/questions/:questionId/applicability-rules-order',
+  )
+  reorderApplicabilityRules(
+    @Param('surveyId', ParseUUIDPipe) surveyId: string,
+    @Param('versionId', ParseUUIDPipe) versionId: string,
+    @Param('questionId', ParseUUIDPipe) questionId: string,
+    @Body() dto: ReorderApplicabilityRulesDto,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    return this.applicabilityRulesService.reorder(
+      surveyId,
+      versionId,
+      questionId,
+      dto,
+      request.user,
+    );
+  }
+
+  @Post(
+    ':surveyId/versions/:versionId/questions/:questionId/applicability-preview',
+  )
+  previewApplicability(
+    @Param('surveyId', ParseUUIDPipe) surveyId: string,
+    @Param('versionId', ParseUUIDPipe) versionId: string,
+    @Param('questionId', ParseUUIDPipe) questionId: string,
+    @Body() dto: PreviewApplicabilityDto,
+  ) {
+    return this.applicabilityRulesService.preview(
+      surveyId,
+      versionId,
+      questionId,
+      dto.schoolId,
     );
   }
 

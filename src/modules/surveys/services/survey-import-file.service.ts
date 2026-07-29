@@ -9,6 +9,18 @@ export type SurveyImportRawRecord = Record<string, string>;
 export type SurveyImportTemplateFormat = 'csv' | 'xlsx';
 
 export const SURVEY_IMPORT_HEADERS = [
+  'dimension',
+  'seccion',
+  'codigo_pregunta',
+  'pregunta',
+  'texto_ayuda',
+  'opcion',
+  'puntaje',
+  'obligatoria',
+  'orden',
+] as const;
+
+const LEGACY_SURVEY_IMPORT_HEADERS = [
   'dimension_codigo',
   'seccion_codigo',
   'seccion',
@@ -29,7 +41,7 @@ export const SURVEY_IMPORT_HEADERS = [
  */
 @Injectable()
 export class SurveyImportFileService {
-  static readonly maxRows = 2_000;
+  static readonly maxRows = Number(process.env.SURVEY_IMPORT_MAX_ROWS ?? 2_000);
 
   async template(format: SurveyImportTemplateFormat) {
     if (format === 'csv')
@@ -110,9 +122,9 @@ export class SurveyImportFileService {
     };
     headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
     headerRow.height = 28;
-    sheet.autoFilter = { from: 'A1', to: 'L1' };
+    sheet.autoFilter = { from: 'A1', to: 'I1' };
     sheet.columns.forEach((column, index) => {
-      column.width = [28, 22, 32, 20, 55, 40, 20, 35, 12, 14, 10, 35][index];
+      column.width = [32, 32, 20, 55, 40, 35, 12, 14, 10][index];
     });
     for (let row = 2; row <= SurveyImportFileService.maxRows + 1; row += 1) {
       sheet.getCell(`A${row}`).dataValidation = {
@@ -122,18 +134,18 @@ export class SurveyImportFileService {
           `"${OFFICIAL_SURVEY_DIMENSIONS.map((dimension) => dimension.code).join(',')}"`,
         ],
       };
-      sheet.getCell(`I${row}`).dataValidation = {
+      sheet.getCell(`G${row}`).dataValidation = {
         type: 'whole',
         operator: 'between',
         allowBlank: false,
         formulae: [0, 100],
       };
-      sheet.getCell(`J${row}`).dataValidation = {
+      sheet.getCell(`H${row}`).dataValidation = {
         type: 'list',
         allowBlank: false,
         formulae: ['"si,no"'],
       };
-      sheet.getCell(`K${row}`).dataValidation = {
+      sheet.getCell(`I${row}`).dataValidation = {
         type: 'whole',
         operator: 'greaterThanOrEqual',
         allowBlank: false,
@@ -148,29 +160,23 @@ export class SurveyImportFileService {
     ];
     instructions.addRow(['Campo', 'Descripción']);
     for (const [field, description] of [
-      ['dimension_codigo', 'Código de una de las seis dimensiones oficiales.'],
-      ['seccion_codigo', 'Código interno estable de la sección.'],
       [
-        'seccion',
-        'Título visible de la sección. Se agrega porque el código no reemplaza el texto para el usuario.',
+        'dimension',
+        'Código o título de una de las seis dimensiones oficiales.',
       ],
+      ['seccion', 'Título visible de la sección.'],
       [
-        'pregunta_codigo',
+        'codigo_pregunta',
         'Código único y estable, por ejemplo p001. Repetirlo en cada opción de la misma pregunta.',
       ],
       ['pregunta', 'Texto visible de la pregunta.'],
       ['texto_ayuda', 'Ayuda opcional para comprender la pregunta.'],
-      ['opcion_codigo', 'Código estable de la opción.'],
       ['opcion', 'Texto visible de la opción.'],
       ['puntaje', 'Entero entre 0 y 100.'],
       ['obligatoria', 'Usar si o no.'],
       [
         'orden',
         'Orden de la pregunta dentro de la sección. Repetir el mismo valor en todas sus opciones.',
-      ],
-      [
-        'condicion',
-        'Reservado. Debe quedar vacío hasta definir el modelo formal de condicionalidad.',
       ],
     ])
       instructions.addRow([field, description]);
@@ -197,32 +203,27 @@ export class SurveyImportFileService {
 
   private exampleRecords(): SurveyImportRawRecord[] {
     const base = {
-      dimension_codigo: OfficialSurveyDimensionCode.InstitutionalCommitment,
-      seccion_codigo: 'compromiso',
+      dimension: OfficialSurveyDimensionCode.InstitutionalCommitment,
       seccion: 'Compromiso institucional',
-      pregunta_codigo: 'p001',
+      codigo_pregunta: 'p001',
       pregunta: '¿La institución cuenta con un acta compromiso vigente?',
       texto_ayuda: '',
       obligatoria: 'si',
       orden: '1',
-      condicion: '',
     };
     return [
       {
         ...base,
-        opcion_codigo: 'optimo',
         opcion: 'Sí',
         puntaje: '100',
       },
       {
         ...base,
-        opcion_codigo: 'en_proceso',
         opcion: 'En proceso',
         puntaje: '50',
       },
       {
         ...base,
-        opcion_codigo: 'inicial',
         opcion: 'No',
         puntaje: '0',
       },
@@ -278,12 +279,30 @@ export class SurveyImportFileService {
   }
 
   private assertHeaders(receivedHeaders: string[]) {
-    const missing = SURVEY_IMPORT_HEADERS.filter(
-      (requiredHeader) => !receivedHeaders.includes(requiredHeader),
-    );
+    const aliases: Record<string, string[]> = {
+      dimension: ['dimension', 'dimension_codigo'],
+      codigo_pregunta: ['codigo_pregunta', 'pregunta_codigo'],
+    };
+    const missing = SURVEY_IMPORT_HEADERS.filter((requiredHeader) => {
+      const acceptedNames = aliases[requiredHeader] ?? [requiredHeader];
+      return !acceptedNames.some((header) => receivedHeaders.includes(header));
+    });
     if (missing.length)
       throw new BadRequestException(
         `Faltan columnas obligatorias: ${missing.join(', ')}.`,
+      );
+    const unknown = receivedHeaders.filter(
+      (header) =>
+        !SURVEY_IMPORT_HEADERS.includes(
+          header as (typeof SURVEY_IMPORT_HEADERS)[number],
+        ) &&
+        !LEGACY_SURVEY_IMPORT_HEADERS.includes(
+          header as (typeof LEGACY_SURVEY_IMPORT_HEADERS)[number],
+        ),
+    );
+    if (unknown.length)
+      throw new BadRequestException(
+        `La plantilla contiene columnas desconocidas: ${unknown.join(', ')}.`,
       );
   }
 

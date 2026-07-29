@@ -59,45 +59,81 @@ describe('BulkSurveyImportService', () => {
     );
   });
 
-  it('informa puntajes inválidos y condiciones no soportadas por fila', async () => {
+  it('acepta planillas existentes con los encabezados anteriores', async () => {
+    const legacyHeaders = [
+      'dimension_codigo',
+      'seccion_codigo',
+      'seccion',
+      'pregunta_codigo',
+      'pregunta',
+      'texto_ayuda',
+      'opcion_codigo',
+      'opcion',
+      'puntaje',
+      'obligatoria',
+      'orden',
+      'condicion',
+    ];
+    const legacyRow = {
+      dimension_codigo: OfficialSurveyDimensionCode.InstitutionalCommitment,
+      seccion_codigo: 'general',
+      seccion: 'General',
+      pregunta_codigo: 'p001',
+      pregunta: '¿Pregunta de prueba?',
+      texto_ayuda: '',
+      opcion_codigo: 'si',
+      opcion: 'Sí',
+      puntaje: '100',
+      obligatoria: 'si',
+      orden: '1',
+      condicion: '',
+    };
+
+    const preview = await service.preview(
+      csvFileWithHeaders(legacyHeaders, [legacyRow]),
+    );
+
+    expect(preview.canImport).toBe(true);
+    expect(preview.rows[0]).toMatchObject({
+      dimensionCode: OfficialSurveyDimensionCode.InstitutionalCommitment,
+      sectionCode: 'general',
+      questionCode: 'p001',
+      optionCode: 'si',
+    });
+  });
+
+  it('informa puntajes inválidos por fila', async () => {
     const preview = await service.preview(
       csvFile([
         validRow({
-          puntaje: '75',
-          condicion: 'si tiene kiosco',
+          puntaje: '101',
         }),
       ]),
     );
 
     expect(preview.canImport).toBe(false);
     expect(preview.rows[0].errors).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('valores permitidos'),
-        expect.stringContaining('condicion'),
-      ]),
+      expect.arrayContaining([expect.stringContaining('entre 0 y 100')]),
     );
   });
 
-  it('exige que las preguntas 41 a 43 pertenezcan a Salud Mental', async () => {
+  it('acepta cualquier puntaje entero del rango sin inferir escalas por pregunta', async () => {
     const preview = await service.preview(
       csvFile([
         validRow({
-          pregunta_codigo: 'p041',
-          dimension_codigo: OfficialSurveyDimensionCode.InstitutionalCommitment,
+          codigo_pregunta: 'p041',
+          puntaje: '66',
         }),
       ]),
     );
 
-    expect(preview.rows[0].errors).toEqual(
-      expect.arrayContaining([expect.stringContaining('preguntas 41 a 43')]),
-    );
+    expect(preview.canImport).toBe(true);
   });
 
   it('permite la palabra otro dentro de una respuesta que no representa una opción Otro', async () => {
     const preview = await service.preview(
       csvFile([
         validRow({
-          opcion_codigo: 'enfoque_integral',
           opcion:
             'Implementa Escuelas Promotoras u otro enfoque de promoción de la salud',
         }),
@@ -115,10 +151,8 @@ describe('BulkSurveyImportService', () => {
     ['no_corresponde', 'No corresponde a este establecimiento'],
   ])(
     'rechaza la opción institucional reservada %s',
-    async (opcion_codigo, opcion) => {
-      const preview = await service.preview(
-        csvFile([validRow({ opcion_codigo, opcion })]),
-      );
+    async (_optionKey, opcion) => {
+      const preview = await service.preview(csvFile([validRow({ opcion })]));
 
       expect(preview.canImport).toBe(false);
       expect(preview.rows[0].errors).toEqual(
@@ -166,6 +200,49 @@ describe('BulkSurveyImportService', () => {
 
     expect(adminSurveysService.createImportedVersion).not.toHaveBeenCalled();
   });
+
+  it('rechaza encabezados faltantes', async () => {
+    const content = Buffer.from(
+      'dimension,seccion,codigo_pregunta\r\ncompromiso_institucional,General,p001',
+      'utf8',
+    );
+    await expect(
+      service.preview(file('incompleto.csv', content)),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('detecta metadatos inconsistentes para un código repetido', async () => {
+    const preview = await service.preview(
+      csvFile([
+        validRow({ opcion: 'Sí' }),
+        validRow({ pregunta: 'Texto diferente', opcion: 'No', puntaje: '0' }),
+      ]),
+    );
+    expect(preview.canImport).toBe(false);
+    expect(preview.rows[0].errors.join(' ')).toContain(
+      'datos deben ser iguales',
+    );
+  });
+
+  it('detecta opciones duplicadas', async () => {
+    const preview = await service.preview(
+      csvFile([validRow({ opcion: 'Sí' }), validRow({ opcion: 'Sí' })]),
+    );
+    expect(preview.canImport).toBe(false);
+    expect(preview.rows[0].errors.join(' ')).toContain('repetida');
+  });
+
+  it('detecta orden inválido', async () => {
+    const preview = await service.preview(csvFile([validRow({ orden: '0' })]));
+    expect(preview.canImport).toBe(false);
+    expect(preview.rows[0].errors.join(' ')).toContain('mayor o igual a 1');
+  });
+
+  it('rechaza archivos vacíos', async () => {
+    await expect(
+      service.preview(file('vacio.csv', Buffer.from('', 'utf8'))),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
 });
 
 const actor: AuthenticatedUser = {
@@ -180,43 +257,44 @@ const actor: AuthenticatedUser = {
 };
 
 const csvHeaders = [
-  'dimension_codigo',
-  'seccion_codigo',
+  'dimension',
   'seccion',
-  'pregunta_codigo',
+  'codigo_pregunta',
   'pregunta',
   'texto_ayuda',
-  'opcion_codigo',
   'opcion',
   'puntaje',
   'obligatoria',
   'orden',
-  'condicion',
 ];
 
 function validRow(overrides: Record<string, string> = {}) {
   return {
-    dimension_codigo: OfficialSurveyDimensionCode.InstitutionalCommitment,
-    seccion_codigo: 'general',
+    dimension: OfficialSurveyDimensionCode.InstitutionalCommitment,
     seccion: 'General',
-    pregunta_codigo: 'p001',
+    codigo_pregunta: 'p001',
     pregunta: '¿Pregunta de prueba?',
     texto_ayuda: '',
-    opcion_codigo: 'si',
     opcion: 'Sí',
     puntaje: '100',
     obligatoria: 'si',
     orden: '1',
-    condicion: '',
     ...overrides,
   };
 }
 
 function csvFile(rows: Array<Record<string, string>>) {
+  return csvFileWithHeaders(csvHeaders, rows);
+}
+
+function csvFileWithHeaders(
+  headers: string[],
+  rows: Array<Record<string, string>>,
+) {
   const content = [
-    csvHeaders.join(','),
+    headers.join(','),
     ...rows.map((row) =>
-      csvHeaders
+      headers
         .map((header) => `"${(row[header] ?? '').replace(/"/g, '""')}"`)
         .join(','),
     ),

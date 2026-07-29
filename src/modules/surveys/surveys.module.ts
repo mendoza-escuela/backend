@@ -16,6 +16,12 @@ import { SurveyStructureValidator } from './services/survey-structure-validator.
 import { SurveyVersionComparator } from './services/survey-version-comparator.service';
 import { BulkSurveyImportService } from './services/bulk-survey-import.service';
 import { SurveyImportFileService } from './services/survey-import-file.service';
+import { SurveyApplicabilityRule } from './entities/survey-applicability-rule.entity';
+import { SurveyApplicabilityCondition } from './entities/survey-applicability-condition.entity';
+import { ApplicabilityEngine } from './services/applicability-engine.service';
+import { ApplicabilityRulesService } from './services/applicability-rules.service';
+import { SurveyEvaluationService } from './services/survey-evaluation.service';
+import { School } from '../schools/entities/school.entity';
 
 @Module({
   imports: [
@@ -28,6 +34,9 @@ import { SurveyImportFileService } from './services/survey-import-file.service';
       SurveyQuestion,
       SurveyOption,
       AuditLog,
+      School,
+      SurveyApplicabilityRule,
+      SurveyApplicabilityCondition,
     ]),
   ],
   controllers: [SurveysController, AdminSurveysController],
@@ -38,7 +47,10 @@ import { SurveyImportFileService } from './services/survey-import-file.service';
     SurveyVersionComparator,
     BulkSurveyImportService,
     SurveyImportFileService,
+    ApplicabilityEngine,
+    ApplicabilityRulesService,
+    SurveyEvaluationService,
   ],
-  exports: [SurveysService],
+  exports: [SurveysService, SurveyEvaluationService],
 })
 export class SurveysModule {}

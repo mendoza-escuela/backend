@@ -35,6 +35,9 @@ import {
 } from '../templates/official-survey-dimensions.template';
 import { SurveyStructureValidator } from './survey-structure-validator.service';
 import { SurveyVersionComparator } from './survey-version-comparator.service';
+import { SurveyApplicabilityRule } from '../entities/survey-applicability-rule.entity';
+import { SurveyApplicabilityCondition } from '../entities/survey-applicability-condition.entity';
+import { ApplicabilityRulesService } from './applicability-rules.service';
 
 @Injectable()
 export class AdminSurveysService {
@@ -42,6 +45,7 @@ export class AdminSurveysService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly structureValidator: SurveyStructureValidator,
     private readonly comparator: SurveyVersionComparator,
+    private readonly applicabilityRules: ApplicabilityRulesService,
   ) {}
 
   async list(query: ListSurveysQueryDto) {
@@ -319,6 +323,8 @@ export class AdminSurveysService {
           version.id,
           this.versionToInput(source),
         );
+      if (source)
+        await this.cloneApplicabilityRules(manager, source, version.id);
       const selectedTemplate =
         dto.template ?? SurveyVersionTemplate.OfficialDimensions;
       if (
@@ -404,12 +410,18 @@ export class AdminSurveysService {
     await this.dataSource.transaction(async (manager) => {
       const version = await this.getLockedVersion(manager, surveyId, versionId);
       this.assertDraft(version);
-      const beforeCounts = await this.loadCounts(manager, surveyId, versionId);
+      const beforeVersion = await this.getVersionWithContent(
+        surveyId,
+        versionId,
+        manager,
+      );
+      const beforeCounts = this.structureCounts(beforeVersion);
       version.title = dto.title.trim();
       version.instructions = this.nullable(dto.instructions);
       await manager.save(SurveyVersion, version);
       await manager.delete(SurveyDimension, { versionId });
       await this.persistStructure(manager, versionId, dto.dimensions);
+      await this.cloneApplicabilityRules(manager, beforeVersion, versionId);
       await this.audit(
         manager,
         actor.id,
@@ -441,6 +453,20 @@ export class AdminSurveysService {
         manager,
       );
       this.structureValidator.validate(this.versionToInput(withContent), true);
+      const applicabilityErrors = this.applicabilityRules.validateRules(
+        withContent.dimensions.flatMap((dimension) =>
+          dimension.sections.flatMap((section) =>
+            section.questions.flatMap(
+              (question) => question.applicabilityRules ?? [],
+            ),
+          ),
+        ),
+      );
+      if (applicabilityErrors.length)
+        throw new BadRequestException({
+          message: 'Las reglas de aplicabilidad contienen errores.',
+          errors: applicabilityErrors,
+        });
       version.status = SurveyVersionStatus.Published;
       version.publishedAt = new Date();
       await manager.save(SurveyVersion, version);
@@ -454,6 +480,37 @@ export class AdminSurveysService {
           surveyId,
           versionNumber: version.versionNumber,
           counts: this.structureCounts(withContent),
+        },
+      );
+    });
+    return this.findVersion(surveyId, versionId);
+  }
+
+  async archiveVersion(
+    surveyId: string,
+    versionId: string,
+    actor: AuthenticatedUser,
+  ) {
+    await this.dataSource.transaction(async (manager) => {
+      const version = await this.getLockedVersion(manager, surveyId, versionId);
+      if (version.status !== SurveyVersionStatus.Published)
+        throw new ConflictException(
+          'Sólo una versión publicada puede archivarse.',
+        );
+      const previousStatus = version.status;
+      version.status = SurveyVersionStatus.Archived;
+      await manager.save(SurveyVersion, version);
+      await this.audit(
+        manager,
+        actor.id,
+        'SURVEY_VERSION_ARCHIVED',
+        'SurveyVersion',
+        versionId,
+        {
+          surveyId,
+          versionNumber: version.versionNumber,
+          previousStatus,
+          newStatus: SurveyVersionStatus.Archived,
         },
       );
     });
@@ -522,7 +579,14 @@ export class AdminSurveysService {
     const version = await manager.findOne(SurveyVersion, {
       where: { id: versionId, surveyId },
       relations: {
-        dimensions: { sections: { questions: { options: true } } },
+        dimensions: {
+          sections: {
+            questions: {
+              options: true,
+              applicabilityRules: { conditions: true },
+            },
+          },
+        },
       },
       order: {
         dimensions: {
@@ -625,6 +689,67 @@ export class AdminSurveysService {
     }
   }
 
+  private async cloneApplicabilityRules(
+    manager: EntityManager,
+    source: SurveyVersion,
+    targetVersionId: string,
+  ) {
+    const hasRules = source.dimensions.some((dimension) =>
+      dimension.sections.some((section) =>
+        section.questions.some(
+          (question) => (question.applicabilityRules?.length ?? 0) > 0,
+        ),
+      ),
+    );
+    if (!hasRules) return;
+    const target = await this.getVersionWithContent(
+      source.surveyId,
+      targetVersionId,
+      manager,
+    );
+    const targetQuestions = new Map<string, SurveyQuestion>();
+    for (const dimension of target.dimensions)
+      for (const section of dimension.sections)
+        for (const question of section.questions)
+          targetQuestions.set(
+            `${dimension.code}/${section.code}/${question.code}`,
+            question,
+          );
+
+    for (const sourceDimension of source.dimensions)
+      for (const sourceSection of sourceDimension.sections)
+        for (const sourceQuestion of sourceSection.questions) {
+          const targetQuestion = targetQuestions.get(
+            `${sourceDimension.code}/${sourceSection.code}/${sourceQuestion.code}`,
+          );
+          if (!targetQuestion) continue;
+          for (const sourceRule of sourceQuestion.applicabilityRules ?? []) {
+            const targetRule = await manager.save(
+              SurveyApplicabilityRule,
+              manager.create(SurveyApplicabilityRule, {
+                questionId: targetQuestion.id,
+                groupOperator: sourceRule.groupOperator,
+                action: sourceRule.action,
+                defaultAction: sourceRule.defaultAction,
+                order: sourceRule.order,
+              }),
+            );
+            await manager.save(
+              SurveyApplicabilityCondition,
+              sourceRule.conditions.map((condition) =>
+                manager.create(SurveyApplicabilityCondition, {
+                  ruleId: targetRule.id,
+                  feature: condition.feature,
+                  operator: condition.operator,
+                  expectedValue: condition.expectedValue,
+                  order: condition.order,
+                }),
+              ),
+            );
+          }
+        }
+  }
+
   private versionToInput(version: SurveyVersion): SurveyDimensionInputDto[] {
     return version.dimensions.map((dimension) => ({
       code: dimension.code,
@@ -695,6 +820,16 @@ export class AdminSurveysService {
               score: option.score,
               order: option.order,
             })),
+            applicabilityRules: (question.applicabilityRules ?? []).map(
+              (rule) => ({
+                id: rule.id,
+                groupOperator: rule.groupOperator,
+                action: rule.action,
+                defaultAction: rule.defaultAction,
+                order: rule.order,
+                conditions: rule.conditions,
+              }),
+            ),
           })),
         })),
       })),

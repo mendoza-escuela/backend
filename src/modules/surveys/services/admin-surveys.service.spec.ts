@@ -12,6 +12,7 @@ import { SurveyQuestionType } from '../entities/survey-question-type.enum';
 import { AdminSurveysService } from './admin-surveys.service';
 import { SurveyStructureValidator } from './survey-structure-validator.service';
 import { SurveyVersionComparator } from './survey-version-comparator.service';
+import { ApplicabilityRulesService } from './applicability-rules.service';
 
 describe('AdminSurveysService', () => {
   const manager = {
@@ -37,6 +38,9 @@ describe('AdminSurveysService', () => {
       dataSource as unknown as DataSource,
       validator,
       new SurveyVersionComparator(),
+      {
+        validateRules: jest.fn(() => []),
+      } as unknown as ApplicabilityRulesService,
     );
   });
 
@@ -73,6 +77,9 @@ describe('AdminSurveysService', () => {
       listDataSource,
       validator,
       new SurveyVersionComparator(),
+      {
+        validateRules: jest.fn(() => []),
+      } as unknown as ApplicabilityRulesService,
     );
 
     const response = await listService.list({
@@ -336,6 +343,26 @@ describe('AdminSurveysService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
 
     expect(dataSource.transaction).not.toHaveBeenCalled();
+  });
+
+  it('archiva una versión publicada y audita la transición', async () => {
+    const published = version({ status: SurveyVersionStatus.Published });
+    manager.findOne.mockResolvedValue(published);
+    manager.save.mockImplementation(
+      (_entity: unknown, value: Record<string, unknown>) =>
+        Promise.resolve(value),
+    );
+    jest.spyOn(service, 'findVersion').mockResolvedValue({
+      id: published.id,
+    } as never);
+
+    await service.archiveVersion('survey-id', published.id, actor);
+
+    expect(published.status).toBe(SurveyVersionStatus.Archived);
+    const serializedCalls = JSON.stringify(manager.save.mock.calls);
+    expect(serializedCalls).toContain('SURVEY_VERSION_ARCHIVED');
+    expect(serializedCalls).toContain('"previousStatus":"published"');
+    expect(serializedCalls).toContain('"newStatus":"archived"');
   });
 });
 
