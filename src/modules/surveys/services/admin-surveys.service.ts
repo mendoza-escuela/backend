@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -11,6 +12,7 @@ import { CompareSurveyVersionsQueryDto } from '../dto/compare-survey-versions-qu
 import { CreateSurveyVersionDto } from '../dto/create-survey-version.dto';
 import { CreateSurveyDto } from '../dto/create-survey.dto';
 import { ListSurveysQueryDto } from '../dto/list-surveys-query.dto';
+import { ImportSurveyVersionDto } from '../dto/import-survey-version.dto';
 import {
   SurveyDimensionInputDto,
   UpdateSurveyVersionDto,
@@ -21,8 +23,16 @@ import { SurveyOption } from '../entities/survey-option.entity';
 import { SurveyQuestion } from '../entities/survey-question.entity';
 import { SurveySection } from '../entities/survey-section.entity';
 import { SurveyVersionStatus } from '../entities/survey-version-status.enum';
+import { SurveyVersionTemplate } from '../entities/survey-version-template.enum';
 import { SurveyVersion } from '../entities/survey-version.entity';
 import { Survey } from '../entities/survey.entity';
+import {
+  createOfficialSurveyDimensionInputs,
+  isOfficialSurveyStructure,
+  OFFICIAL_SOCIOEMOTIONAL_QUESTION_NUMBERS,
+  OFFICIAL_SURVEY_DIMENSIONS,
+  OfficialSurveyDimensionCode,
+} from '../templates/official-survey-dimensions.template';
 import { SurveyStructureValidator } from './survey-structure-validator.service';
 import { SurveyVersionComparator } from './survey-version-comparator.service';
 
@@ -135,6 +145,19 @@ export class AdminSurveysService {
     await this.getSurvey(surveyId);
     const version = await this.getVersionWithContent(surveyId, versionId);
     return this.serializeVersion(version);
+  }
+
+  getOfficialDimensionsTemplate() {
+    return {
+      code: SurveyVersionTemplate.OfficialDimensions,
+      dimensions: OFFICIAL_SURVEY_DIMENSIONS,
+      questionAssignments: [
+        {
+          questionNumbers: OFFICIAL_SOCIOEMOTIONAL_QUESTION_NUMBERS,
+          dimensionCode: OfficialSurveyDimensionCode.MentalHealth,
+        },
+      ],
+    };
   }
 
   async createSurvey(dto: CreateSurveyDto, actor: AuthenticatedUser) {
@@ -254,6 +277,11 @@ export class AdminSurveysService {
     dto: CreateSurveyVersionDto,
     actor: AuthenticatedUser,
   ) {
+    if (dto.sourceVersionId && dto.template)
+      throw new BadRequestException(
+        'Elegí una versión de origen o una plantilla, no ambas opciones.',
+      );
+
     const versionId = await this.dataSource.transaction(async (manager) => {
       const survey = await manager.findOne(Survey, {
         where: { id: surveyId },
@@ -291,6 +319,17 @@ export class AdminSurveysService {
           version.id,
           this.versionToInput(source),
         );
+      const selectedTemplate =
+        dto.template ?? SurveyVersionTemplate.OfficialDimensions;
+      if (
+        !source &&
+        selectedTemplate === SurveyVersionTemplate.OfficialDimensions
+      )
+        await this.persistStructure(
+          manager,
+          version.id,
+          createOfficialSurveyDimensionInputs(),
+        );
       await this.audit(
         manager,
         actor.id,
@@ -301,6 +340,53 @@ export class AdminSurveysService {
           surveyId,
           versionNumber: version.versionNumber,
           sourceVersionId: source?.id ?? null,
+          template: source ? null : selectedTemplate,
+        },
+      );
+      return version.id;
+    });
+    return this.findVersion(surveyId, versionId);
+  }
+
+  async createImportedVersion(
+    surveyId: string,
+    dto: ImportSurveyVersionDto,
+    dimensions: SurveyDimensionInputDto[],
+    actor: AuthenticatedUser,
+  ) {
+    this.structureValidator.validate(dimensions, false);
+    const versionId = await this.dataSource.transaction(async (manager) => {
+      const survey = await manager.findOne(Survey, {
+        where: { id: surveyId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!survey) throw new NotFoundException('Cuestionario no encontrado.');
+      const latest = await manager.findOne(SurveyVersion, {
+        where: { surveyId },
+        order: { versionNumber: 'DESC' },
+      });
+      const version = await manager.save(
+        SurveyVersion,
+        manager.create(SurveyVersion, {
+          surveyId,
+          versionNumber: (latest?.versionNumber ?? 0) + 1,
+          title: dto.title.trim(),
+          instructions: this.nullable(dto.instructions),
+          status: SurveyVersionStatus.Draft,
+          publishedAt: null,
+        }),
+      );
+      await this.persistStructure(manager, version.id, dimensions);
+      await this.audit(
+        manager,
+        actor.id,
+        'SURVEY_VERSION_IMPORTED',
+        'SurveyVersion',
+        version.id,
+        {
+          surveyId,
+          versionNumber: version.versionNumber,
+          counts: this.inputCounts(dimensions),
         },
       );
       return version.id;
@@ -530,6 +616,7 @@ export class AdminSurveysService {
                 value: this.normalizeCode(optionInput.value),
                 label: optionInput.label.trim(),
                 helpText: this.nullable(optionInput.helpText),
+                score: optionInput.score ?? null,
                 order: optionOrder,
               }),
             );
@@ -558,6 +645,7 @@ export class AdminSurveysService {
             value: option.value,
             label: option.label,
             helpText: option.helpText,
+            score: option.score,
           })),
         })),
       })),
@@ -575,6 +663,9 @@ export class AdminSurveysService {
       publishedAt: version.publishedAt,
       createdAt: version.createdAt,
       updatedAt: version.updatedAt,
+      profile: isOfficialSurveyStructure(version.dimensions)
+        ? 'institutional'
+        : 'generic',
       dimensions: version.dimensions.map((dimension) => ({
         id: dimension.id,
         code: dimension.code,
@@ -601,6 +692,7 @@ export class AdminSurveysService {
               value: option.value,
               label: option.label,
               helpText: option.helpText,
+              score: option.score,
               order: option.order,
             })),
           })),

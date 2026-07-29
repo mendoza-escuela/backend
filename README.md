@@ -86,7 +86,7 @@ Tipos de pregunta disponibles:
 single_choice, multiple_choice, boolean, short_text, long_text, number, date
 ```
 
-Las reglas básicas de presentación y validación (`min`, `max`, longitudes, máximo de selecciones y placeholder) se almacenan separadas de cualquier regla de puntaje. El modelo no incorpora puntajes, estrellas ni condiciones porque esas definiciones funcionales siguen pendientes.
+Las reglas básicas de presentación (`min`, `max`, longitudes, máximo de selecciones y placeholder) se almacenan en cada pregunta. Las opciones admiten un puntaje entero entre 0 y 100. La columna es nullable únicamente para conservar sin inventar valores en datos anteriores a la migración; toda opción debe tener puntaje antes de publicar una versión nueva. Estrellas, condiciones y exclusiones todavía no se calculan porque sus modelos funcionales se implementan por separado.
 
 Endpoints de lectura protegidos para roles `admin` y `school`:
 
@@ -101,13 +101,21 @@ Las rutas bajo `/api/admin/surveys` requieren sesión válida, contraseña inici
 
 - `GET /api/admin/surveys?page=1&limit=20&search=texto` y `GET /api/admin/surveys/:surveyId`: listado paginado, detalle, versiones y auditoría reciente.
 - `POST /api/admin/surveys`, `PATCH /api/admin/surveys/:surveyId` y `DELETE /api/admin/surveys/:surveyId`: ABM de la definición general.
-- `POST /api/admin/surveys/:surveyId/versions`: alta de una versión vacía o clonada con `sourceVersionId`.
+- `GET /api/admin/surveys/templates/official-dimensions`: catálogo central de las seis dimensiones oficiales y la reasignación de las preguntas 41 a 43 a Salud Mental.
+- `GET /api/admin/surveys/import/template?format=xlsx|csv`: descarga la plantilla de carga con instrucciones y códigos oficiales.
+- `POST /api/admin/surveys/:surveyId/import/preview`: valida un archivo CSV/XLSX y devuelve errores por fila sin guardar datos.
+- `POST /api/admin/surveys/:surveyId/import`: vuelve a validar el archivo y crea atómicamente una versión borrador; nunca modifica una versión existente.
+- `POST /api/admin/surveys/:surveyId/versions`: alta de una versión con la plantilla `official_dimensions` (predeterminada), vacía con `blank` o clonada con `sourceVersionId`.
 - `GET`, `PUT` y `DELETE /api/admin/surveys/:surveyId/versions/:versionId`: consulta y ABM de una versión borrador.
 - `POST /api/admin/surveys/:surveyId/versions/:versionId/publish`: publicación definitiva.
 - `GET /api/admin/surveys/:surveyId/versions/:versionId/validation`: validación previa con todos los errores estructurales detectados.
 - `GET /api/admin/surveys/:surveyId/versions/compare`: comparación estructural mediante `fromVersionId` y `toVersionId`.
 
-Los borradores pueden guardarse incompletos para permitir construcción progresiva. Antes de publicar se exige, como mínimo, una dimensión, una sección por dimensión, una pregunta por sección y opciones para las preguntas de selección. En todos los guardados se controlan códigos repetidos, tipos incompatibles con opciones y rangos de validación inconsistentes.
+Los borradores pueden guardarse incompletos para permitir construcción progresiva. Antes de publicar se exige, como mínimo, una dimensión, una sección por dimensión, una pregunta por sección, opciones para las preguntas de selección y puntaje en cada opción. En todos los guardados se controlan códigos repetidos, tipos incompatibles con opciones, puntajes fuera de 0–100 y rangos de validación inconsistentes.
+
+La plantilla `official_dimensions` crea únicamente el esqueleto aprobado: nombres, descripciones, códigos internos y orden de las seis dimensiones. No precarga secciones ni preguntas. “Entorno Socioemocional” no se registra como una séptima dimensión; las preguntas 41, 42 y 43 quedan identificadas para su futura carga dentro de `salud_mental`.
+
+La importación institucional admite exclusivamente preguntas de selección simple, no genera ni permite “Otro” o “No aplica” y valida las escalas `100/50/0` para las dimensiones generales y `100/66/33/0` para Salud Mental. La columna `condicion` se incluye como reserva, pero debe permanecer vacía hasta contar con el modelo formal de reglas; no se persiste texto opaco que el motor de evaluación no pueda ejecutar.
 
 Publicar es una operación irreversible: el servicio impide editar o eliminar la versión y la migración `ProtectPublishedSurveyVersions1720375206000` agrega triggers PostgreSQL que también protegen la versión y todos sus descendientes ante escrituras por fuera de la API. Para cambiar contenido publicado debe clonarse como una versión borrador nueva.
 

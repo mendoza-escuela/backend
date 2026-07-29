@@ -99,6 +99,7 @@ export class SurveysService {
                 value: option.value,
                 label: option.label,
                 helpText: option.helpText,
+                score: option.score,
                 order: option.order,
               })),
             })),

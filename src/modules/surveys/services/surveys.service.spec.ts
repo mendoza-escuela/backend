@@ -84,13 +84,23 @@ describe('SurveysService', () => {
                   {
                     id: 'question-1',
                     code: 'Q1',
-                    type: SurveyQuestionType.Boolean,
+                    type: SurveyQuestionType.SingleChoice,
                     prompt: '¿Cuenta con una política institucional?',
                     helpText: null,
                     required: true,
                     order: 0,
                     validation: {},
-                    options: [],
+                    options: [
+                      {
+                        id: 'option-1',
+                        questionId: 'question-1',
+                        value: 'si',
+                        label: 'Sí',
+                        helpText: null,
+                        score: 100,
+                        order: 0,
+                      },
+                    ],
                   },
                 ],
               },
@@ -106,6 +116,9 @@ describe('SurveysService', () => {
     expect(published.version.dimensions[0].sections[0].questions[0]).toEqual(
       expect.objectContaining({ code: 'Q1', required: true }),
     );
+    expect(
+      published.version.dimensions[0].sections[0].questions[0].options[0],
+    ).toEqual(expect.objectContaining({ value: 'si', score: 100 }));
     expect(versionsRepository.findOne).toHaveBeenCalledTimes(1);
   });
 

@@ -14,6 +14,8 @@ import { SurveysService } from './services/surveys.service';
 import { AdminSurveysService } from './services/admin-surveys.service';
 import { SurveyStructureValidator } from './services/survey-structure-validator.service';
 import { SurveyVersionComparator } from './services/survey-version-comparator.service';
+import { BulkSurveyImportService } from './services/bulk-survey-import.service';
+import { SurveyImportFileService } from './services/survey-import-file.service';
 
 @Module({
   imports: [
@@ -34,6 +36,8 @@ import { SurveyVersionComparator } from './services/survey-version-comparator.se
     AdminSurveysService,
     SurveyStructureValidator,
     SurveyVersionComparator,
+    BulkSurveyImportService,
+    SurveyImportFileService,
   ],
   exports: [SurveysService],
 })

@@ -1,10 +1,12 @@
 import {
+  IsEnum,
   IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
 } from 'class-validator';
+import { SurveyVersionTemplate } from '../entities/survey-version-template.enum';
 
 export class CreateSurveyVersionDto {
   @IsString()
@@ -20,4 +22,8 @@ export class CreateSurveyVersionDto {
   @IsOptional()
   @IsUUID()
   sourceVersionId?: string;
+
+  @IsOptional()
+  @IsEnum(SurveyVersionTemplate)
+  template?: SurveyVersionTemplate;
 }

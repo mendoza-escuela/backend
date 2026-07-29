@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   Param,
   ParseUUIDPipe,
@@ -11,9 +12,14 @@ import {
   Put,
   Query,
   Req,
+  Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request } from 'express';
+import type { Response } from 'express';
 import { Roles } from '../../../common/decorators/roles.decorator';
 import { PasswordChangeRequiredGuard } from '../../../common/guards/password-change-required.guard';
 import { RolesGuard } from '../../../common/guards/roles.guard';
@@ -24,15 +30,20 @@ import { CompareSurveyVersionsQueryDto } from '../dto/compare-survey-versions-qu
 import { CreateSurveyVersionDto } from '../dto/create-survey-version.dto';
 import { CreateSurveyDto } from '../dto/create-survey.dto';
 import { ListSurveysQueryDto } from '../dto/list-surveys-query.dto';
+import { ImportSurveyVersionDto } from '../dto/import-survey-version.dto';
 import { UpdateSurveyVersionDto } from '../dto/update-survey-version.dto';
 import { UpdateSurveyDto } from '../dto/update-survey.dto';
 import { AdminSurveysService } from '../services/admin-surveys.service';
+import { BulkSurveyImportService } from '../services/bulk-survey-import.service';
 
 @Controller('admin/surveys')
 @UseGuards(JwtAuthGuard, PasswordChangeRequiredGuard, RolesGuard)
 @Roles(UserRole.Admin)
 export class AdminSurveysController {
-  constructor(private readonly surveysService: AdminSurveysService) {}
+  constructor(
+    private readonly surveysService: AdminSurveysService,
+    private readonly bulkImportService: BulkSurveyImportService,
+  ) {}
 
   @Get()
   list(@Query() query: ListSurveysQueryDto) {
@@ -45,6 +56,55 @@ export class AdminSurveysController {
     @Req() request: Request & { user: AuthenticatedUser },
   ) {
     return this.surveysService.createSurvey(dto, request.user);
+  }
+
+  @Get('templates/official-dimensions')
+  officialDimensionsTemplate() {
+    return this.surveysService.getOfficialDimensionsTemplate();
+  }
+
+  @Get('import/template')
+  @Header('Cache-Control', 'no-store')
+  async importTemplate(
+    @Query('format') requestedFormat: string,
+    @Res() response: Response,
+  ) {
+    const format = requestedFormat === 'csv' ? 'csv' : 'xlsx';
+    const template = await this.bulkImportService.template(format);
+    response.setHeader('Content-Type', template.mime);
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="plantilla-cuestionario.${template.extension}"`,
+    );
+    response.send(template.buffer);
+  }
+
+  @Post(':surveyId/import/preview')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+    }),
+  )
+  previewImport(
+    @Param('surveyId', ParseUUIDPipe) _surveyId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.bulkImportService.preview(file);
+  }
+
+  @Post(':surveyId/import')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+    }),
+  )
+  importVersion(
+    @Param('surveyId', ParseUUIDPipe) surveyId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() dto: ImportSurveyVersionDto,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    return this.bulkImportService.import(surveyId, file, dto, request.user);
   }
 
   @Get(':surveyId')

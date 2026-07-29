@@ -17,6 +17,10 @@ import { SurveyQuestion } from './survey-question.entity';
   unique: true,
 })
 @Check('CHK_survey_options_order', '"order" >= 0')
+@Check(
+  'CHK_survey_options_score_range',
+  '"score" IS NULL OR ("score" >= 0 AND "score" <= 100)',
+)
 export class SurveyOption {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -41,6 +45,9 @@ export class SurveyOption {
 
   @Column({ name: 'help_text', type: 'text', nullable: true })
   helpText: string | null;
+
+  @Column({ type: 'integer', nullable: true })
+  score: number | null;
 
   @Column({ type: 'integer' })
   order: number;
