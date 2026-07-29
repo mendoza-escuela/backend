@@ -14,6 +14,7 @@ import { AuthenticatedUser } from '../../../common/types/authenticated-user.type
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { AdminSurveysService } from '../services/admin-surveys.service';
+import { ApplicabilityRulesService } from '../services/applicability-rules.service';
 import { BulkSurveyImportService } from '../services/bulk-survey-import.service';
 import { SurveysService } from '../services/surveys.service';
 import { AdminSurveysController } from './admin-surveys.controller';
@@ -65,6 +66,7 @@ describe('Survey routes authorization', () => {
         { provide: SurveysService, useValue: surveysService },
         { provide: AdminSurveysService, useValue: adminSurveysService },
         { provide: BulkSurveyImportService, useValue: {} },
+        { provide: ApplicabilityRulesService, useValue: {} },
         JwtAuthGuard,
         PasswordChangeRequiredGuard,
         RolesGuard,
