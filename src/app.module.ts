@@ -8,6 +8,9 @@ import { DatabaseModule } from './database/database.module';
 import { validateEnvironment } from './config/env.validation';
 import { SchoolsModule } from './modules/schools/schools.module';
 import { SurveysModule } from './modules/surveys/surveys.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { CampaignsModule } from './modules/campaigns/campaigns.module';
+import { SubmissionsModule } from './modules/submissions/submissions.module';
 
 @Module({
   imports: [
@@ -21,11 +24,14 @@ import { SurveysModule } from './modules/surveys/surveys.module';
         limit: 100,
       },
     ]),
+    ScheduleModule.forRoot(),
     DatabaseModule,
     HealthModule,
     UsersModule,
     SchoolsModule,
     SurveysModule,
+    CampaignsModule,
+    SubmissionsModule,
     AuthModule,
   ],
 })

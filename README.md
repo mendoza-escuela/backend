@@ -95,7 +95,7 @@ Endpoints de lectura protegidos para roles `admin` y `school`:
 - `GET /api/surveys/available`: lista cuestionarios activos con una versión publicada.
 - `GET /api/surveys/available/:code`: devuelve la última versión publicada con toda su estructura ordenada.
 
-Las versiones borrador no se exponen a las escuelas. Campañas, borradores de respuestas y envíos finales siguen fuera de este módulo y no se simulan.
+Las versiones borrador no se exponen a las escuelas. Las campañas y respuestas pertenecen a los módulos `campaigns` y `submissions`; `surveys` conserva exclusivamente la definición versionada e inmutable.
 
 ### Administración de cuestionarios
 
@@ -122,6 +122,31 @@ La importación institucional admite exclusivamente preguntas de selección simp
 Publicar es una operación irreversible: el servicio impide editar o eliminar la versión y la migración `ProtectPublishedSurveyVersions1720375206000` agrega triggers PostgreSQL que también protegen la versión y todos sus descendientes ante escrituras por fuera de la API. Para cambiar contenido publicado debe clonarse como una versión borrador nueva.
 
 Las altas, cambios, clonaciones, publicaciones y bajas se registran en `audit_logs` con usuario, fecha, entidad y resumen del cambio. No se guardan secretos ni contenido de respuestas.
+
+## Administración de campañas
+
+Las rutas bajo `/api/admin/campaigns` requieren rol `admin`. Permiten listar, crear, consultar, editar y eliminar campañas borrador, además de ejecutar el ciclo irreversible `draft → active → closed → archived`.
+
+Cada campaña es anual o semestral y referencia obligatoriamente una versión publicada de un cuestionario activo. Al activarse, su configuración queda protegida; sólo los borradores pueden editarse o eliminarse. `GET /api/admin/campaigns/survey-versions` devuelve las versiones habilitadas para el selector administrativo.
+
+Las fechas ingresan como fechas civiles `AAAA-MM-DD`. El inicio se almacena a las `00:00:00` y el cierre a las `23:59:59.999` de Mendoza (`America/Argentina/Mendoza`, UTC-3). Un proceso periódico cierra las campañas activas vencidas y registra el evento en `audit_logs`; el valor de `closed_at` conserva el instante exacto configurado, aunque la detección ocurra unos segundos después.
+
+La migración `AddCampaignManagement1720375211000` crea la tabla, enumeraciones, índice de estado/fechas y la relación protegida con `survey_versions`.
+
+## Presentaciones y borradores escolares
+
+`GET /api/school/campaigns` lista para el usuario Escuela todas las campañas activas cuyo período está abierto. No existe una asignación cerrada de escuelas por campaña: cualquier establecimiento activo incorporado durante el período puede verla inmediatamente. La respuesta informa si la ficha está rectificada para el año vigente y el motivo que impide iniciar, cuando corresponda.
+
+El flujo escolar utiliza:
+
+- `POST /api/school/campaigns/:campaignId/submission`: crea o recupera la presentación única de la escuela.
+- `GET /api/school/campaigns/:campaignId/submission`: recupera estructura, respuestas y progreso.
+- `PUT /api/school/campaigns/:campaignId/submission/draft`: reemplaza atómicamente el borrador completo con respuestas validadas.
+- `POST /api/school/campaigns/:campaignId/submission/submit`: valida las preguntas obligatorias y realiza el envío definitivo.
+
+La escuela se obtiene siempre de la asociación del usuario autenticado. El primer borrador exige establecimiento activo y rectificación anual; posteriores usuarios asociados a la misma escuela recuperan ese borrador porque la unicidad se define por `school_id + campaign_id`. También se conserva un snapshot del usuario que inició la carga.
+
+Cada presentación referencia la versión publicada fijada por la campaña. Las respuestas enviadas son inmutables en el servicio y mediante triggers PostgreSQL. La migración `AddSurveySubmissions1720375212000` crea presentaciones, respuestas, índices, relaciones y protecciones de integridad.
 
 ## Verificación
 

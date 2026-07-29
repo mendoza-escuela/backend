@@ -239,7 +239,8 @@ export class SchoolsService {
       campaigns: {
         available: false,
         items: [],
-        message: 'El módulo de campañas aún no está implementado.',
+        message:
+          'El seguimiento administrativo de campañas por colegio se incorporará en el módulo de presentaciones.',
       },
       evaluations: {
         available: false,
@@ -273,6 +274,40 @@ export class SchoolsService {
     return {
       ...association.school,
       rectification: this.rectificationStatus(rectifications),
+    };
+  }
+
+  /**
+   * Resuelve el establecimiento desde la sesión y verifica la rectificación
+   * anual sin aceptar identificadores enviados por el navegador.
+   */
+  async evaluationContextForUser(
+    userId: string,
+    manager: EntityManager = this.dataSource.manager,
+  ) {
+    const association = await manager.findOne(UserSchool, {
+      where: { userId },
+      relations: { school: true },
+    });
+    if (!association)
+      throw new NotFoundException(
+        'Tu cuenta todavía no tiene un establecimiento asociado.',
+      );
+    const periodYear = this.currentPeriodYear();
+    const rectification = await manager.findOne(SchoolRectification, {
+      where: {
+        schoolId: association.schoolId,
+        periodYear,
+      },
+      order: { rectifiedAt: 'DESC' },
+    });
+    return {
+      school: association.school,
+      rectification: {
+        periodYear,
+        isRectified: Boolean(rectification),
+        rectifiedAt: rectification?.rectifiedAt ?? null,
+      },
     };
   }
 
