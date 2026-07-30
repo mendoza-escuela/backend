@@ -6,6 +6,7 @@ import { SurveyVersion } from '../surveys/entities/survey-version.entity';
 import { AdminCampaignsController } from './controllers/admin-campaigns.controller';
 import { Campaign } from './entities/campaign.entity';
 import { CampaignsService } from './services/campaigns.service';
+import { CampaignTrackingService } from './services/campaign-tracking.service';
 
 @Module({
   imports: [
@@ -13,7 +14,7 @@ import { CampaignsService } from './services/campaigns.service';
     TypeOrmModule.forFeature([Campaign, SurveyVersion, AuditLog]),
   ],
   controllers: [AdminCampaignsController],
-  providers: [CampaignsService],
+  providers: [CampaignsService, CampaignTrackingService],
   exports: [CampaignsService],
 })
 export class CampaignsModule {}

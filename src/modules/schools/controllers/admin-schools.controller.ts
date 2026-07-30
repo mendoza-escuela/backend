@@ -47,6 +47,9 @@ export class AdminSchoolsController {
   @Get('filters') filters() {
     return this.schoolsService.filterOptions();
   }
+  @Get('rectification/catalogs') rectificationCatalogs() {
+    return this.schoolsService.rectificationCatalogs();
+  }
   @Get('import/template')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   template(@Res({ passthrough: true }) response: Response) {

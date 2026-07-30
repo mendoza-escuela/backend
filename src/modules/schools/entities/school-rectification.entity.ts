@@ -5,12 +5,27 @@ import {
   Index,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
+import { SchoolRectificationEducationLevel } from './school-rectification-education-level.entity';
 import { School } from './school.entity';
 
+export type SchoolCatalogSnapshot = {
+  id: string;
+  code: string;
+  label: string;
+};
+
+export type SchoolEducationLevelSnapshot = SchoolCatalogSnapshot & {
+  enrollment: number | null;
+};
+
 export type SchoolRectificationSnapshot = {
+  schemaVersion?: number;
+  sourceRectificationId?: string;
+  capturedAt?: string;
   name: string;
   cue: string;
   directorName: string;
@@ -19,6 +34,12 @@ export type SchoolRectificationSnapshot = {
   scope: string;
   educationLevel: string;
   shift: string;
+  hasKiosk?: boolean | null;
+  hasFoodService?: boolean | null;
+  isBoarding?: boolean | null;
+  shiftCatalog?: SchoolCatalogSnapshot | null;
+  educationLevels?: SchoolEducationLevelSnapshot[];
+  enrollmentTotal?: number | null;
 };
 
 @Entity({ name: 'school_rectifications' })
@@ -50,6 +71,12 @@ export class SchoolRectification {
 
   @Column({ type: 'jsonb' })
   snapshot: SchoolRectificationSnapshot;
+
+  @OneToMany(
+    () => SchoolRectificationEducationLevel,
+    (level) => level.rectification,
+  )
+  educationLevels: SchoolRectificationEducationLevel[];
 
   @CreateDateColumn({ name: 'rectified_at', type: 'timestamptz' })
   rectifiedAt: Date;

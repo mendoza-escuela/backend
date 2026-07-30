@@ -10,6 +10,7 @@ import { AuthenticatedUser } from '../../../common/types/authenticated-user.type
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { CampaignStatus } from '../../campaigns/entities/campaign-status.enum';
 import { CampaignsService } from '../../campaigns/services/campaigns.service';
+import { EvaluationResultsService } from '../../evaluation/services/evaluation-results.service';
 import { SchoolsService } from '../../schools/services/schools.service';
 import { SurveyQuestionType } from '../../surveys/entities/survey-question-type.enum';
 import {
@@ -18,7 +19,13 @@ import {
 } from '../../surveys/entities/survey-question.entity';
 import { SurveyVersionStatus } from '../../surveys/entities/survey-version-status.enum';
 import { SurveyVersion } from '../../surveys/entities/survey-version.entity';
+import {
+  QuestionApplicabilityResolution,
+  SurveyApplicabilityResult,
+  SurveyApplicabilityService,
+} from '../../surveys/services/survey-applicability.service';
 import { SaveSubmissionDraftDto } from '../dto/save-submission-draft.dto';
+import { SubmissionQuestionApplicability } from '../entities/submission-question-applicability.entity';
 import { SubmissionStatus } from '../entities/submission-status.enum';
 import {
   SurveyAnswer,
@@ -32,6 +39,8 @@ export class SubmissionsService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly campaignsService: CampaignsService,
     private readonly schoolsService: SchoolsService,
+    private readonly surveyApplicability: SurveyApplicabilityService,
+    private readonly evaluationResults: EvaluationResultsService,
   ) {}
 
   async availableCampaigns(actor: AuthenticatedUser) {
@@ -46,7 +55,7 @@ export class SubmissionsService {
             schoolId: school.id,
             campaignId: In(campaignIds),
           },
-          relations: { answers: true },
+          relations: { answers: true, applicabilityDecisions: true },
         })
       : [];
     const submissionsByCampaign = new Map(
@@ -102,7 +111,11 @@ export class SubmissionsService {
           throw new ConflictException(
             'El establecimiento está inactivo y no puede iniciar una evaluación.',
           );
-        if (!rectification.isRectified)
+        if (
+          !rectification.isRectified ||
+          !rectification.id ||
+          !rectification.snapshot
+        )
           throw new ConflictException(
             `Antes de comenzar debés rectificar la ficha escolar para ${rectification.periodYear}.`,
           );
@@ -113,6 +126,8 @@ export class SubmissionsService {
             campaignId: campaign.id,
             schoolId: school.id,
             surveyVersionId: campaign.surveyVersionId,
+            schoolRectificationId: rectification.id,
+            schoolProfileSnapshot: structuredClone(rectification.snapshot),
             originalRespondentId: actor.id,
             originalRespondentSnapshot: {
               id: actor.id,
@@ -135,6 +150,7 @@ export class SubmissionsService {
             campaignId: campaign.id,
             schoolId: school.id,
             surveyVersionId: campaign.surveyVersionId,
+            schoolRectificationId: rectification.id,
           },
         );
         return submission.id;
@@ -160,18 +176,34 @@ export class SubmissionsService {
   }
 
   async workspace(campaignId: string, actor: AuthenticatedUser) {
-    const { school } = await this.schoolsService.evaluationContextForUser(
-      actor.id,
-    );
-    const submission = await this.getSubmission(
-      this.dataSource.manager,
-      campaignId,
-      school.id,
-      false,
-    );
+    const { school, submission, applicability } =
+      await this.dataSource.transaction(async (manager) => {
+        const context = await this.schoolsService.evaluationContextForUser(
+          actor.id,
+          manager,
+        );
+        const loaded = await this.getSubmission(
+          manager,
+          campaignId,
+          context.school.id,
+          true,
+        );
+        await this.refreshDraftRectification(
+          manager,
+          loaded,
+          context.rectification,
+          actor.id,
+        );
+        return {
+          school: context.school,
+          submission: loaded,
+          applicability: await this.resolveApplicability(manager, loaded),
+        };
+      });
     const campaignOpen = this.isCampaignOpen(submission.campaign);
     return this.serializeWorkspace(
       submission,
+      applicability,
       school.isActive &&
         campaignOpen &&
         submission.status === SubmissionStatus.Draft,
@@ -191,10 +223,8 @@ export class SubmissionsService {
     actor: AuthenticatedUser,
   ) {
     await this.dataSource.transaction(async (manager) => {
-      const { school } = await this.schoolsService.evaluationContextForUser(
-        actor.id,
-        manager,
-      );
+      const { school, rectification } =
+        await this.schoolsService.evaluationContextForUser(actor.id, manager);
       await this.schoolsService.assertActiveForEvaluation(school.id, manager);
       await this.campaignsService.assertOperational(campaignId, manager);
       const submission = await this.getSubmission(
@@ -204,13 +234,28 @@ export class SubmissionsService {
         true,
       );
       this.assertDraft(submission);
+      await this.refreshDraftRectification(
+        manager,
+        submission,
+        rectification,
+        actor.id,
+      );
       const version = await this.getVersion(
         manager,
         submission.surveyVersionId,
       );
-      const answers = this.validateAnswers(version, dto);
+      const applicability = await this.resolveApplicability(
+        manager,
+        submission,
+        version,
+      );
+      const answers = this.validateAnswers(version, dto, applicability);
 
-      await manager.delete(SurveyAnswer, { submissionId: submission.id });
+      if (applicability.applicableQuestionIds.size)
+        await manager.delete(SurveyAnswer, {
+          submissionId: submission.id,
+          questionId: In([...applicability.applicableQuestionIds]),
+        });
       if (answers.length)
         await manager.save(
           SurveyAnswer,
@@ -231,10 +276,8 @@ export class SubmissionsService {
 
   async submit(campaignId: string, actor: AuthenticatedUser) {
     await this.dataSource.transaction(async (manager) => {
-      const { school } = await this.schoolsService.evaluationContextForUser(
-        actor.id,
-        manager,
-      );
+      const { school, rectification } =
+        await this.schoolsService.evaluationContextForUser(actor.id, manager);
       await this.schoolsService.assertActiveForEvaluation(school.id, manager);
       await this.campaignsService.assertOperational(campaignId, manager);
       const submission = await this.getSubmission(
@@ -244,16 +287,33 @@ export class SubmissionsService {
         true,
       );
       this.assertDraft(submission);
+      await this.refreshDraftRectification(
+        manager,
+        submission,
+        rectification,
+        actor.id,
+      );
       const version = await this.getVersion(
         manager,
         submission.surveyVersionId,
       );
-      const missing = this.requiredQuestions(version).filter(
-        (question) =>
-          !submission.answers.some(
-            (answer) => answer.questionId === question.id,
-          ),
+      const applicability = await this.resolveApplicability(
+        manager,
+        submission,
+        version,
       );
+      this.assertApplicabilityComplete(applicability);
+      const applicableQuestions = this.questions(version).filter((question) =>
+        applicability.applicableQuestionIds.has(question.id),
+      );
+      const missing = applicableQuestions
+        .filter((question) => question.required)
+        .filter(
+          (question) =>
+            !submission.answers.some(
+              (answer) => answer.questionId === question.id,
+            ),
+        );
       if (missing.length)
         throw new BadRequestException(
           `Faltan ${missing.length} preguntas obligatorias: ${missing
@@ -270,6 +330,14 @@ export class SubmissionsService {
         submittedAt: submission.submittedAt,
         lastSavedAt: submission.lastSavedAt,
       });
+      const result = await this.evaluationResults.calculateAndPersist(
+        manager,
+        submission,
+        version,
+        applicability,
+        actor.id,
+        'submission_finalization',
+      );
       await this.audit(
         manager,
         actor.id,
@@ -279,7 +347,18 @@ export class SubmissionsService {
           campaignId,
           schoolId: school.id,
           surveyVersionId: submission.surveyVersionId,
-          answerCount: submission.answers.length,
+          answerCount: submission.answers.filter((answer) =>
+            applicability.applicableQuestionIds.has(answer.questionId),
+          ).length,
+          applicability: {
+            applicableCount: applicability.applicableQuestionIds.size,
+            excludedCount: applicability.excludedQuestionIds.size,
+          },
+          evaluationResult: {
+            id: result.id,
+            generalScore: result.generalScore,
+            algorithmVersion: result.algorithmVersion,
+          },
           originalRespondent: submission.originalRespondentSnapshot,
         },
       );
@@ -308,11 +387,15 @@ export class SubmissionsService {
       relations: {
         campaign: { surveyVersion: { survey: true } },
         answers: { option: true },
+        applicabilityDecisions: true,
         surveyVersion: {
           survey: true,
           dimensions: {
             sections: {
-              questions: { options: true },
+              questions: {
+                options: true,
+                applicabilityRules: { conditions: true },
+              },
             },
           },
         },
@@ -326,6 +409,10 @@ export class SubmissionsService {
               questions: {
                 order: 'ASC',
                 options: { order: 'ASC' },
+                applicabilityRules: {
+                  order: 'ASC',
+                  conditions: { order: 'ASC' },
+                },
               },
             },
           },
@@ -346,7 +433,10 @@ export class SubmissionsService {
         survey: true,
         dimensions: {
           sections: {
-            questions: { options: true },
+            questions: {
+              options: true,
+              applicabilityRules: { conditions: true },
+            },
           },
         },
       },
@@ -358,6 +448,10 @@ export class SubmissionsService {
             questions: {
               order: 'ASC',
               options: { order: 'ASC' },
+              applicabilityRules: {
+                order: 'ASC',
+                conditions: { order: 'ASC' },
+              },
             },
           },
         },
@@ -370,27 +464,36 @@ export class SubmissionsService {
     return version;
   }
 
-  private validateAnswers(version: SurveyVersion, dto: SaveSubmissionDraftDto) {
+  private validateAnswers(
+    version: SurveyVersion,
+    dto: SaveSubmissionDraftDto,
+    applicability: SurveyApplicabilityResult,
+  ) {
     const questions = this.questions(version);
     const questionsById = new Map(
       questions.map((question) => [question.id, question]),
     );
     const seen = new Set<string>();
-    return dto.answers
-      .filter((answer) => !this.isEmptyAnswer(answer.optionId, answer.value))
-      .map((answer) => {
-        if (seen.has(answer.questionId))
-          throw new BadRequestException(
-            'No se puede enviar dos respuestas para la misma pregunta.',
-          );
-        seen.add(answer.questionId);
-        const question = questionsById.get(answer.questionId);
-        if (!question)
-          throw new BadRequestException(
-            'Una de las preguntas no pertenece a la versión de la campaña.',
-          );
-        return this.validateAnswer(question, answer.optionId, answer.value);
-      });
+    return dto.answers.flatMap((answer) => {
+      if (seen.has(answer.questionId))
+        throw new BadRequestException(
+          'No se puede enviar dos respuestas para la misma pregunta.',
+        );
+      seen.add(answer.questionId);
+      const question = questionsById.get(answer.questionId);
+      if (!question)
+        throw new BadRequestException(
+          'Una de las preguntas no pertenece a la versión de la campaña.',
+        );
+      if (this.isEmptyAnswer(answer.optionId, answer.value)) return [];
+      if (!applicability.applicableQuestionIds.has(question.id))
+        throw new BadRequestException(
+          applicability.incompleteQuestionIds.has(question.id)
+            ? `No se puede responder ${question.code} hasta completar los datos escolares requeridos.`
+            : `La pregunta ${question.code} no es aplicable a este establecimiento.`,
+        );
+      return [this.validateAnswer(question, answer.optionId, answer.value)];
+    });
   }
 
   private validateAnswer(
@@ -482,19 +585,27 @@ export class SubmissionsService {
 
   private serializeWorkspace(
     submission: SurveySubmission,
+    applicability: SurveyApplicabilityResult,
     editable: boolean,
     blockingReason: string | null,
   ) {
-    const questions = this.questions(submission.surveyVersion);
+    const questions = this.questions(submission.surveyVersion).filter(
+      (question) => applicability.applicableQuestionIds.has(question.id),
+    );
     const required = questions.filter((question) => question.required);
     const answeredIds = new Set(
-      submission.answers.map((answer) => answer.questionId),
+      submission.answers
+        .filter((answer) =>
+          applicability.applicableQuestionIds.has(answer.questionId),
+        )
+        .map((answer) => answer.questionId),
     );
     const answerValues = Object.fromEntries(
-      submission.answers.map((answer) => [
-        answer.questionId,
-        answer.optionId ?? answer.value,
-      ]),
+      submission.answers
+        .filter((answer) =>
+          applicability.applicableQuestionIds.has(answer.questionId),
+        )
+        .map((answer) => [answer.questionId, answer.optionId ?? answer.value]),
     );
     return {
       campaign: this.campaignSummary(submission.campaign),
@@ -505,8 +616,11 @@ export class SubmissionsService {
         lastSavedAt: submission.lastSavedAt,
         submittedAt: submission.submittedAt,
         originalRespondent: submission.originalRespondentSnapshot,
+        schoolRectificationId: submission.schoolRectificationId,
+        schoolProfileSnapshot: submission.schoolProfileSnapshot,
         editable,
         blockingReason,
+        canSubmit: editable && applicability.status === 'ready',
         progress: {
           answered: answeredIds.size,
           total: questions.length,
@@ -519,12 +633,42 @@ export class SubmissionsService {
           requiredTotal: required.length,
         },
       },
+      applicability: {
+        status: applicability.status,
+        source: applicability.source,
+        evaluatedAt: applicability.evaluatedAt,
+        missingFields: applicability.missingFields,
+        excluded: applicability.decisions
+          .filter(({ status }) => status === 'excluded')
+          .map((decision) => ({
+            questionId: decision.questionId,
+            questionCode: decision.questionCode,
+            appliedRuleId: decision.appliedRuleId,
+            reasonCode: decision.reasonCode,
+            reasonDescription: decision.reasonDescription,
+          })),
+        incomplete: applicability.decisions
+          .filter(({ status }) => status === 'incomplete')
+          .map((decision) => ({
+            questionId: decision.questionId,
+            questionCode: decision.questionCode,
+            reasonCode: decision.reasonCode,
+            reasonDescription: decision.reasonDescription,
+            missingFeatures: decision.missingFeatures,
+          })),
+      },
       answers: answerValues,
-      survey: this.serializeSurvey(submission.surveyVersion),
+      survey: this.serializeSurvey(
+        submission.surveyVersion,
+        applicability.applicableQuestionIds,
+      ),
     };
   }
 
-  private serializeSurvey(version: SurveyVersion) {
+  private serializeSurvey(
+    version: SurveyVersion,
+    applicableQuestionIds: Set<string>,
+  ) {
     return {
       code: version.survey.code,
       name: version.survey.name,
@@ -535,40 +679,201 @@ export class SubmissionsService {
         title: version.title,
         instructions: version.instructions,
         publishedAt: version.publishedAt,
-        dimensions: version.dimensions.map((dimension) => ({
-          id: dimension.id,
-          code: dimension.code,
-          title: dimension.title,
-          description: dimension.description,
-          order: dimension.order,
-          sections: dimension.sections.map((section) => ({
-            id: section.id,
-            code: section.code,
-            title: section.title,
-            description: section.description,
-            order: section.order,
-            questions: section.questions.map((question) => ({
-              id: question.id,
-              code: question.code,
-              type: question.type,
-              prompt: question.prompt,
-              helpText: question.helpText,
-              required: question.required,
-              order: question.order,
-              validation: question.validation,
-              options: question.options.map((option) => ({
-                id: option.id,
-                value: option.value,
-                label: option.label,
-                helpText: option.helpText,
-                score: null,
-                order: option.order,
-              })),
-            })),
-          })),
-        })),
+        dimensions: version.dimensions.flatMap((dimension) => {
+          const sections = dimension.sections.flatMap((section) => {
+            const questions = section.questions
+              .filter((question) => applicableQuestionIds.has(question.id))
+              .map((question) => ({
+                id: question.id,
+                code: question.code,
+                type: question.type,
+                prompt: question.prompt,
+                helpText: question.helpText,
+                required: question.required,
+                order: question.order,
+                validation: question.validation,
+                options: question.options.map((option) => ({
+                  id: option.id,
+                  value: option.value,
+                  label: option.label,
+                  helpText: option.helpText,
+                  score: null,
+                  order: option.order,
+                })),
+              }));
+            return questions.length
+              ? [
+                  {
+                    id: section.id,
+                    code: section.code,
+                    title: section.title,
+                    description: section.description,
+                    order: section.order,
+                    questions,
+                  },
+                ]
+              : [];
+          });
+          return sections.length
+            ? [
+                {
+                  id: dimension.id,
+                  code: dimension.code,
+                  title: dimension.title,
+                  description: dimension.description,
+                  order: dimension.order,
+                  sections,
+                },
+              ]
+            : [];
+        }),
       },
     };
+  }
+
+  /**
+   * Un borrador puede adoptar una rectificación posterior para resolver datos
+   * faltantes. La actualización queda auditada y nunca se ejecuta sobre una
+   * presentación enviada, cuya identidad continúa protegida por base de datos.
+   */
+  private async refreshDraftRectification(
+    manager: EntityManager,
+    submission: SurveySubmission,
+    rectification: {
+      id: string | null;
+      isRectified: boolean;
+      snapshot: SurveySubmission['schoolProfileSnapshot'];
+    },
+    actorUserId: string,
+  ) {
+    if (
+      submission.status !== SubmissionStatus.Draft ||
+      !rectification.isRectified ||
+      !rectification.id ||
+      !rectification.snapshot ||
+      (submission.schoolRectificationId === rectification.id &&
+        submission.schoolProfileSnapshot)
+    )
+      return;
+    const previousRectificationId = submission.schoolRectificationId;
+    submission.schoolRectificationId = rectification.id;
+    submission.schoolProfileSnapshot = structuredClone(rectification.snapshot);
+    await manager.update(SurveySubmission, submission.id, {
+      schoolRectificationId: submission.schoolRectificationId,
+      schoolProfileSnapshot: submission.schoolProfileSnapshot,
+    });
+    await this.audit(
+      manager,
+      actorUserId,
+      'SUBMISSION_RECTIFICATION_REFRESHED',
+      submission.id,
+      {
+        previousRectificationId,
+        schoolRectificationId: rectification.id,
+      },
+    );
+  }
+
+  /**
+   * Resuelve la aplicabilidad usando siempre el snapshot vinculado. Los
+   * borradores se recalculan y reemplazan sus decisiones; los envíos leen las
+   * decisiones congeladas. Un envío legado sin decisiones sólo puede
+   * reconstruirse a partir de su snapshot histórico, nunca de la ficha actual.
+   */
+  private async resolveApplicability(
+    manager: EntityManager,
+    submission: SurveySubmission,
+    version = submission.surveyVersion,
+  ) {
+    if (
+      !version ||
+      version.id !== submission.surveyVersionId ||
+      version.status !== SurveyVersionStatus.Published
+    )
+      throw new ConflictException(
+        'La versión asociada a la presentación no está disponible.',
+      );
+    const stored = submission.applicabilityDecisions ?? [];
+    if (submission.status === SubmissionStatus.Submitted && stored.length)
+      return this.applicabilityFromStored(version, stored);
+
+    const evaluated = this.surveyApplicability.evaluate(
+      version,
+      submission.schoolProfileSnapshot,
+    );
+    if (submission.status === SubmissionStatus.Draft)
+      await this.persistApplicability(manager, submission, evaluated);
+    return {
+      ...evaluated,
+      source:
+        submission.status === SubmissionStatus.Submitted
+          ? ('reconstructed' as const)
+          : evaluated.source,
+    };
+  }
+
+  private applicabilityFromStored(
+    version: SurveyVersion,
+    stored: SubmissionQuestionApplicability[],
+  ) {
+    const questionCodes = new Map(
+      this.questions(version).map((question) => [question.id, question.code]),
+    );
+    const decisions: QuestionApplicabilityResolution[] = stored.map(
+      (decision) => ({
+        questionId: decision.questionId,
+        questionCode: questionCodes.get(decision.questionId) ?? '',
+        surveyVersionId: decision.surveyVersionId,
+        status: decision.status,
+        appliedRuleId: decision.appliedRuleId,
+        reasonCode: decision.reasonCode,
+        reasonDescription: decision.reasonDescription,
+        missingFeatures: decision.missingFeatures,
+        relevantSchoolFacts:
+          decision.relevantSchoolFacts as QuestionApplicabilityResolution['relevantSchoolFacts'],
+        evaluatedAt: decision.evaluatedAt,
+      }),
+    );
+    return this.surveyApplicability.result(version.id, decisions, 'persisted');
+  }
+
+  private async persistApplicability(
+    manager: EntityManager,
+    submission: SurveySubmission,
+    applicability: SurveyApplicabilityResult,
+  ) {
+    await manager.delete(SubmissionQuestionApplicability, {
+      submissionId: submission.id,
+    });
+    const entities = applicability.decisions.map((decision) =>
+      manager.create(SubmissionQuestionApplicability, {
+        submissionId: submission.id,
+        questionId: decision.questionId,
+        surveyVersionId: decision.surveyVersionId,
+        appliedRuleId: decision.appliedRuleId,
+        status: decision.status,
+        reasonCode: decision.reasonCode,
+        reasonDescription: decision.reasonDescription,
+        missingFeatures: decision.missingFeatures,
+        relevantSchoolFacts: decision.relevantSchoolFacts,
+        evaluatedAt: decision.evaluatedAt,
+      }),
+    );
+    if (entities.length)
+      await manager.save(SubmissionQuestionApplicability, entities);
+    submission.applicabilityDecisions = entities;
+  }
+
+  private assertApplicabilityComplete(
+    applicability: SurveyApplicabilityResult,
+  ) {
+    if (applicability.status === 'ready') return;
+    const fields = applicability.missingFields
+      .map(({ label }) => label)
+      .join(', ');
+    throw new BadRequestException(
+      `No se puede enviar la presentación porque faltan datos en la ficha escolar: ${fields}. Rectificá la ficha y volvé a intentar.`,
+    );
   }
 
   private async questionCounts(versionIds: string[]) {
@@ -594,15 +899,22 @@ export class SubmissionsService {
     );
   }
 
-  private requiredQuestions(version: SurveyVersion) {
-    return this.questions(version).filter((question) => question.required);
-  }
-
   private submissionSummary(
     submission: SurveySubmission,
     totalQuestions: number,
   ) {
-    const answered = submission.answers.length;
+    const storedApplicableIds = new Set(
+      (submission.applicabilityDecisions ?? [])
+        .filter(({ status }) => status === 'applicable')
+        .map(({ questionId }) => questionId),
+    );
+    const hasResolution = (submission.applicabilityDecisions ?? []).length > 0;
+    const total = hasResolution ? storedApplicableIds.size : totalQuestions;
+    const answered = hasResolution
+      ? submission.answers.filter(({ questionId }) =>
+          storedApplicableIds.has(questionId),
+        ).length
+      : submission.answers.length;
     return {
       id: submission.id,
       status: submission.status,
@@ -611,10 +923,8 @@ export class SubmissionsService {
       submittedAt: submission.submittedAt,
       progress: {
         answered,
-        total: totalQuestions,
-        percentage: totalQuestions
-          ? Math.round((answered / totalQuestions) * 100)
-          : 0,
+        total,
+        percentage: total ? Math.round((answered / total) * 100) : 0,
       },
     };
   }

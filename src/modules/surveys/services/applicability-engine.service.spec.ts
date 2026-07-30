@@ -134,4 +134,27 @@ describe('ApplicabilityEngine', () => {
     expect(decision.status).toBe('incomplete');
     expect(decision.missingFeatures).toEqual(['has_kiosk']);
   });
+
+  it('no salta una regla prioritaria indeterminada para aplicar otra posterior', () => {
+    const decision = engine.evaluate(
+      [
+        rule(
+          [{ feature: 'has_kiosk', operator: 'equals', expectedValue: false }],
+          ApplicabilityGroupOperator.All,
+          ApplicabilityAction.Omit,
+          0,
+        ),
+        rule(
+          [{ feature: 'is_boarding', operator: 'equals', expectedValue: true }],
+          ApplicabilityGroupOperator.All,
+          ApplicabilityAction.Show,
+          1,
+        ),
+      ],
+      { has_kiosk: null, is_boarding: true },
+    );
+
+    expect(decision.status).toBe('incomplete');
+    expect(decision.missingFeatures).toEqual(['has_kiosk']);
+  });
 });

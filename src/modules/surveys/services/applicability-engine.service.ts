@@ -61,8 +61,8 @@ export class ApplicabilityEngine {
         'La pregunta no tiene reglas y se muestra de forma predeterminada.',
       );
 
-    const missing = new Set<string>();
     for (const rule of rules) {
+      const missing = new Set<string>();
       const results = [...rule.conditions]
         .sort((left, right) => left.order - right.order)
         .map((condition) => {
@@ -84,18 +84,16 @@ export class ApplicabilityEngine {
           rule.id ?? null,
           `Coincidió la regla de prioridad ${rule.order + 1}; acción: ${rule.action === ApplicabilityAction.Show ? 'mostrar' : 'omitir'}.`,
         );
-      if (matched === 'unknown') continue;
+      if (matched === 'unknown')
+        return {
+          status: 'incomplete',
+          applicable: null,
+          action: null,
+          matchedRuleId: null,
+          explanation: `Falta información escolar para evaluar: ${[...missing].join(', ')}.`,
+          missingFeatures: [...missing],
+        };
     }
-
-    if (missing.size)
-      return {
-        status: 'incomplete',
-        applicable: null,
-        action: null,
-        matchedRuleId: null,
-        explanation: `Falta información escolar para evaluar: ${[...missing].join(', ')}.`,
-        missingFeatures: [...missing],
-      };
 
     return this.decision(
       rules[0].defaultAction,
@@ -154,6 +152,14 @@ export class ApplicabilityEngine {
         return expectedArray.some((value) => actualArray.includes(value));
       case 'contains_all':
         return expectedArray.every((value) => actualArray.includes(value));
+      case 'greater_than':
+        return typeof actual === 'number' && actual > Number(expected);
+      case 'greater_than_or_equal':
+        return typeof actual === 'number' && actual >= Number(expected);
+      case 'less_than':
+        return typeof actual === 'number' && actual < Number(expected);
+      case 'less_than_or_equal':
+        return typeof actual === 'number' && actual <= Number(expected);
       default:
         return false;
     }

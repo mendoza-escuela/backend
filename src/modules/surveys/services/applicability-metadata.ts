@@ -1,4 +1,5 @@
-export type SchoolFeatureType = 'boolean' | 'string' | 'string_array';
+export type SchoolFeatureType =
+  'boolean' | 'string' | 'string_array' | 'number';
 
 export type ApplicabilityFeatureDefinition = {
   key: string;
@@ -51,6 +52,19 @@ export const APPLICABILITY_FEATURES: ApplicabilityFeatureDefinition[] = [
     type: 'string_array',
     operators: ['contains', 'not_contains', 'contains_any', 'contains_all'],
   },
+  {
+    key: 'enrollment_total',
+    label: 'Matrícula total',
+    type: 'number',
+    operators: [
+      'equals',
+      'not_equals',
+      'greater_than',
+      'greater_than_or_equal',
+      'less_than',
+      'less_than_or_equal',
+    ],
+  },
 ];
 
 export const APPLICABILITY_OPERATORS = [
@@ -61,6 +75,10 @@ export const APPLICABILITY_OPERATORS = [
   { key: 'not_contains', label: 'No contiene' },
   { key: 'contains_any', label: 'Contiene alguno' },
   { key: 'contains_all', label: 'Contiene todos' },
+  { key: 'greater_than', label: 'Es mayor que' },
+  { key: 'greater_than_or_equal', label: 'Es mayor o igual que' },
+  { key: 'less_than', label: 'Es menor que' },
+  { key: 'less_than_or_equal', label: 'Es menor o igual que' },
 ];
 
 export function getFeatureDefinition(key: string) {

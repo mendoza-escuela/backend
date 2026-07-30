@@ -12,6 +12,10 @@ import { SchoolPortalController } from './controllers/school-portal.controller';
 import { SchoolUserAssignmentHistory } from './entities/school-user-assignment-history.entity';
 import { School } from './entities/school.entity';
 import { SchoolRectification } from './entities/school-rectification.entity';
+import { EducationLevelCatalog } from './entities/education-level-catalog.entity';
+import { SchoolEducationLevel } from './entities/school-education-level.entity';
+import { SchoolRectificationEducationLevel } from './entities/school-rectification-education-level.entity';
+import { SchoolShiftCatalog } from './entities/school-shift-catalog.entity';
 import { BulkSchoolImportService } from './services/bulk-school-import.service';
 import { SchoolsService } from './services/schools.service';
 
@@ -20,6 +24,10 @@ import { SchoolsService } from './services/schools.service';
     TypeOrmModule.forFeature([
       School,
       SchoolRectification,
+      SchoolRectificationEducationLevel,
+      SchoolEducationLevel,
+      SchoolShiftCatalog,
+      EducationLevelCatalog,
       SchoolUserAssignmentHistory,
       User,
       UserSchool,

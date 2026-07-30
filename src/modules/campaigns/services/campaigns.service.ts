@@ -72,6 +72,20 @@ export class CampaignsService {
     return this.serialize(await this.getCampaign(id));
   }
 
+  /** Opciones históricas completas para el selector de seguimiento. */
+  async trackingOptions() {
+    await this.closeExpiredCampaigns();
+    const campaigns = await this.dataSource
+      .getRepository(Campaign)
+      .createQueryBuilder('campaign')
+      .innerJoinAndSelect('campaign.surveyVersion', 'version')
+      .innerJoinAndSelect('version.survey', 'survey')
+      .orderBy('campaign.startsAt', 'DESC')
+      .addOrderBy('campaign.name', 'ASC')
+      .getMany();
+    return campaigns.map((campaign) => this.serialize(campaign));
+  }
+
   /** Lista únicamente versiones publicadas de cuestionarios activos. */
   async publishedVersionOptions() {
     const versions = await this.dataSource

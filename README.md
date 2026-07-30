@@ -76,7 +76,11 @@ cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,
 
 `GET /api/schools/me` requiere rol `school` y devuelve únicamente el establecimiento asociado al usuario autenticado. La consulta no acepta un identificador enviado por el navegador, por lo que un usuario Escuela no puede seleccionar ni consultar otro establecimiento.
 
-`PUT /api/schools/me/rectification` permite revisar y rectificar la ficha obligatoria del establecimiento asociado para el año calendario vigente. La operación conserva un snapshot con período, fecha y usuario y registra auditoría. Los administradores pueden realizar la misma confirmación mediante `PUT /api/admin/schools/:id/rectification`. Hasta que exista el módulo de campañas, la falta de rectificación se informa pero no bloquea evaluaciones.
+`PUT /api/schools/me/rectification` permite revisar y rectificar la ficha obligatoria del establecimiento asociado para el año calendario vigente. La operación conserva un snapshot autocontenido con período, fecha, usuario, características ternarias, jornada catalogada, niveles y matrículas, y registra auditoría. `expectedUpdatedAt` permite detectar una edición concurrente. Los administradores conservan el endpoint existente `PUT /api/admin/schools/:id/rectification`.
+
+`GET /api/schools/me/rectification/catalogs` devuelve los catálogos de jornadas y niveles desde backend, incluidos los valores inactivos necesarios para representar el historial. La migración crea la infraestructura sin precargar valores: los códigos y etiquetas productivos siguen pendientes del catálogo oficial del programa. El endpoint informa explícitamente cuando un catálogo está vacío.
+
+Al iniciar una presentación se vincula la última rectificación del año vigente y se copia su snapshot en `survey_submissions`. Mientras la presentación es borrador puede adoptar una rectificación posterior, recalcular la aplicabilidad y conservar las respuestas que queden excluidas. Al enviarse, el vínculo, el snapshot y las decisiones quedan inmutables para preservar el historial.
 
 ## Cuestionarios versionados
 
@@ -88,7 +92,7 @@ Tipos de pregunta disponibles:
 single_choice, multiple_choice, boolean, short_text, long_text, number, date
 ```
 
-Las reglas básicas de presentación (`min`, `max`, longitudes, máximo de selecciones y placeholder) se almacenan en cada pregunta. Las opciones admiten un puntaje entero entre 0 y 100. La columna es nullable únicamente para conservar sin inventar valores en datos anteriores a la migración; toda opción debe tener puntaje antes de publicar una versión nueva. Estrellas, condiciones y exclusiones todavía no se calculan porque sus modelos funcionales se implementan por separado.
+Las reglas básicas de presentación (`min`, `max`, longitudes, máximo de selecciones y placeholder) se almacenan en cada pregunta. Las opciones admiten un puntaje entero entre 0 y 100. La columna es nullable únicamente para conservar sin inventar valores en datos anteriores a la migración; toda opción debe tener puntaje antes de publicar una versión nueva. Las condiciones y exclusiones se resuelven al abrir una presentación; la clasificación por estrellas continúa separada de este flujo.
 
 Endpoints de lectura protegidos para roles `admin` y `school`:
 
@@ -137,12 +141,20 @@ La migración `AddCampaignManagement1720375211000` crea la tabla, enumeraciones,
 
 `GET /api/school/campaigns` lista para el usuario Escuela todas las campañas activas cuyo período está abierto. No existe una asignación cerrada de escuelas por campaña: cualquier establecimiento activo incorporado durante el período puede verla inmediatamente. La respuesta informa si la ficha está rectificada para el año vigente y el motivo que impide iniciar, cuando corresponda.
 
+El seguimiento administrativo se expone mediante
+`GET /api/admin/campaigns/:id/tracking/summary` y
+`GET /api/admin/campaigns/:id/tracking`. Conserva únicamente los estados
+`not_started`, `draft` y `submitted`, ejecuta búsqueda, filtros, ordenamiento y
+paginación en PostgreSQL, y mantiene visibles escuelas y usuarios inactivos.
+El universo abierto y las fórmulas se documentan en
+[`docs/campaign-tracking.md`](docs/campaign-tracking.md).
+
 El flujo escolar utiliza:
 
 - `POST /api/school/campaigns/:campaignId/submission`: crea o recupera la presentación única de la escuela.
-- `GET /api/school/campaigns/:campaignId/submission`: recupera estructura, respuestas y progreso.
-- `PUT /api/school/campaigns/:campaignId/submission/draft`: reemplaza atómicamente el borrador completo con respuestas validadas.
-- `POST /api/school/campaigns/:campaignId/submission/submit`: valida las preguntas obligatorias y realiza el envío definitivo.
+- `GET /api/school/campaigns/:campaignId/submission`: evalúa en lote la aplicabilidad contra el snapshot rectificado vinculado y recupera únicamente la estructura aplicable, sus respuestas, progreso, exclusiones y datos escolares faltantes.
+- `PUT /api/school/campaigns/:campaignId/submission/draft`: reemplaza atómicamente sólo las respuestas aplicables del borrador. Las respuestas anteriores de preguntas excluidas se conservan sin participar en la validación.
+- `POST /api/school/campaigns/:campaignId/submission/submit`: reevalúa aplicabilidad, bloquea datos escolares faltantes, valida únicamente preguntas aplicables y realiza el envío definitivo.
 
 La escuela se obtiene siempre de la asociación del usuario autenticado. El primer borrador exige establecimiento activo y rectificación anual; posteriores usuarios asociados a la misma escuela recuperan ese borrador porque la unicidad se define por `school_id + campaign_id`. También se conserva un snapshot del usuario que inició la carga.
 
@@ -155,6 +167,8 @@ Las rutas bajo `/api/admin/dashboard/participation` requieren rol `admin`. `GET 
 `GET /api/admin/dashboard/participation?campaignId=:uuid` calcula en PostgreSQL, desde una única consulta agregada, el total de escuelas activas, las no iniciadas, los borradores, los envíos y el porcentaje de envíos sobre el total. Admite los filtros `department`, `locality`, `schoolId`, `educationLevel`, `managementType`, `scope` y `shift`. Una escuela sin presentación se considera no iniciada; los estados persistidos `draft` y `submitted` determinan los otros dos grupos. Si el total es cero, el porcentaje devuelto es cero.
 
 Las campañas en borrador quedan fuera del seguimiento. Como actualmente las campañas son globales y no conservan un snapshot del padrón alcanzado, los totales históricos utilizan el estado actual de las escuelas.
+
+La migración `AddSubmissionApplicabilityDecisions1720375214000` conserva por pregunta el estado resuelto, la regla aplicada, el código y descripción del motivo, la fecha y los hechos escolares relevantes. Los borradores adoptan la rectificación vigente cuando cambia y recalculan contra ese snapshot; los envíos consultan las decisiones congeladas y nunca la ficha escolar actual. Las preguntas excluidas quedan fuera de la completitud y del contrato entregado al cálculo, por lo que no suman cero ni modifican denominadores.
 
 ## Verificación
 

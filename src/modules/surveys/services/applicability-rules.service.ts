@@ -7,7 +7,12 @@ import {
 import { DataSource, EntityManager, Not } from 'typeorm';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
-import { School } from '../../schools/entities/school.entity';
+import {
+  SchoolRectification,
+  SchoolRectificationSnapshot,
+} from '../../schools/entities/school-rectification.entity';
+import { EducationLevelCatalog } from '../../schools/entities/education-level-catalog.entity';
+import { SchoolShiftCatalog } from '../../schools/entities/school-shift-catalog.entity';
 import {
   ReorderApplicabilityRulesDto,
   WriteApplicabilityRuleDto,
@@ -26,6 +31,7 @@ import {
   APPLICABILITY_OPERATORS,
   getFeatureDefinition,
 } from './applicability-metadata';
+import { schoolApplicabilityFactsFromSnapshot } from './school-applicability-facts';
 
 @Injectable()
 export class ApplicabilityRulesService {
@@ -34,9 +40,33 @@ export class ApplicabilityRulesService {
     private readonly engine: ApplicabilityEngine,
   ) {}
 
-  metadata() {
+  async metadata() {
+    const [shifts, levels] = await Promise.all([
+      this.dataSource.getRepository(SchoolShiftCatalog).find({
+        order: { order: 'ASC', label: 'ASC' },
+      }),
+      this.dataSource.getRepository(EducationLevelCatalog).find({
+        order: { order: 'ASC', label: 'ASC' },
+      }),
+    ]);
     return {
-      features: APPLICABILITY_FEATURES,
+      features: APPLICABILITY_FEATURES.map((feature) => {
+        const catalog =
+          feature.key === 'shift'
+            ? shifts
+            : feature.key === 'education_levels'
+              ? levels
+              : null;
+        return catalog
+          ? {
+              ...feature,
+              allowedValues: catalog.map((entry) => ({
+                value: entry.code,
+                label: `${entry.label}${entry.isActive ? '' : ' (inactivo)'}`,
+              })),
+            }
+          : feature;
+      }),
       operators: APPLICABILITY_OPERATORS,
       resolution:
         'Las reglas se evalúan por orden ascendente y gana la primera coincidencia. Si ninguna coincide se aplica defaultAction. Los datos desconocidos producen estado incomplete.',
@@ -232,12 +262,22 @@ export class ApplicabilityRulesService {
     questionId: string,
     schoolId: string,
   ) {
-    const [rules, school] = await Promise.all([
+    const periodYear = this.currentPeriodYear();
+    const [rules, rectification] = await Promise.all([
       this.list(surveyId, versionId, questionId),
-      this.dataSource.getRepository(School).findOneBy({ id: schoolId }),
+      this.dataSource.getRepository(SchoolRectification).findOne({
+        where: { schoolId, periodYear },
+        order: { rectifiedAt: 'DESC' },
+      }),
     ]);
-    if (!school) throw new NotFoundException('Escuela no encontrada.');
-    return this.engine.evaluate(rules, this.schoolFacts(school));
+    if (!rectification)
+      throw new ConflictException(
+        `La escuela no tiene una rectificación confirmada para ${periodYear}.`,
+      );
+    return this.engine.evaluate(
+      rules,
+      this.factsFromSnapshot(rectification.snapshot),
+    );
   }
 
   validateRules(rules: SurveyApplicabilityRule[]) {
@@ -321,6 +361,7 @@ export class ApplicabilityRulesService {
       const value = condition.expectedValue;
       if (
         (feature.type === 'boolean' && typeof value !== 'boolean') ||
+        (feature.type === 'number' && typeof value !== 'number') ||
         (feature.type === 'string' &&
           typeof value !== 'string' &&
           !Array.isArray(value)) ||
@@ -415,26 +456,21 @@ export class ApplicabilityRulesService {
     return rule;
   }
 
-  private schoolFacts(school: School) {
-    const characteristics = school.characteristics ?? {};
-    const levels = characteristics.educationLevels;
-    return {
-      has_kiosk: characteristics.hasKiosk ?? characteristics.kiosk,
-      has_food_service:
-        characteristics.hasFoodService ??
-        characteristics.diningRoom ??
-        characteristics.comedor,
-      is_boarding:
-        characteristics.isBoarding ??
-        characteristics.boarding ??
-        characteristics.albergue,
-      shift: school.shift || null,
-      education_levels: Array.isArray(levels)
-        ? levels
-        : school.educationLevel
-          ? school.educationLevel.split(',').map((value) => value.trim())
-          : null,
-    };
+  /**
+   * Registro seguro de hechos escolares. Sólo usa claves conocidas y valores
+   * copiados en el snapshot; nunca recorre rutas enviadas por el cliente.
+   */
+  factsFromSnapshot(snapshot: SchoolRectificationSnapshot) {
+    return schoolApplicabilityFactsFromSnapshot(snapshot);
+  }
+
+  private currentPeriodYear() {
+    return Number(
+      new Intl.DateTimeFormat('en', {
+        timeZone: 'America/Argentina/Mendoza',
+        year: 'numeric',
+      }).format(new Date()),
+    );
   }
 
   private audit(

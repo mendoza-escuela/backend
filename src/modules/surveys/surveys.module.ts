@@ -21,7 +21,10 @@ import { SurveyApplicabilityCondition } from './entities/survey-applicability-co
 import { ApplicabilityEngine } from './services/applicability-engine.service';
 import { ApplicabilityRulesService } from './services/applicability-rules.service';
 import { SurveyEvaluationService } from './services/survey-evaluation.service';
-import { School } from '../schools/entities/school.entity';
+import { SchoolRectification } from '../schools/entities/school-rectification.entity';
+import { EducationLevelCatalog } from '../schools/entities/education-level-catalog.entity';
+import { SchoolShiftCatalog } from '../schools/entities/school-shift-catalog.entity';
+import { SurveyApplicabilityService } from './services/survey-applicability.service';
 
 @Module({
   imports: [
@@ -34,7 +37,9 @@ import { School } from '../schools/entities/school.entity';
       SurveyQuestion,
       SurveyOption,
       AuditLog,
-      School,
+      SchoolRectification,
+      SchoolShiftCatalog,
+      EducationLevelCatalog,
       SurveyApplicabilityRule,
       SurveyApplicabilityCondition,
     ]),
@@ -49,8 +54,13 @@ import { School } from '../schools/entities/school.entity';
     SurveyImportFileService,
     ApplicabilityEngine,
     ApplicabilityRulesService,
+    SurveyApplicabilityService,
     SurveyEvaluationService,
   ],
-  exports: [SurveysService, SurveyEvaluationService],
+  exports: [
+    SurveysService,
+    SurveyApplicabilityService,
+    SurveyEvaluationService,
+  ],
 })
 export class SurveysModule {}

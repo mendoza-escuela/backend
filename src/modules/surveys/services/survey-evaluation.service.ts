@@ -54,6 +54,25 @@ export type SurveyEvaluationResult = {
 export class SurveyEvaluationService {
   constructor(private readonly applicability: ApplicabilityEngine) {}
 
+  /**
+   * Calcula únicamente preguntas cuya aplicabilidad ya fue resuelta por el
+   * flujo de presentación. Al quitar las reglas de la entrada se evita que el
+   * cálculo vuelva a decidir con un contexto distinto.
+   */
+  evaluateApplicable(
+    questions: EvaluationQuestion[],
+    answers: EvaluationAnswer[],
+  ): SurveyEvaluationResult {
+    return this.evaluate(
+      questions.map((question) => ({
+        ...question,
+        applicabilityRules: [],
+      })),
+      {},
+      answers,
+    );
+  }
+
   evaluate(
     questions: EvaluationQuestion[],
     schoolFacts: SchoolApplicabilityFacts,

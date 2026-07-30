@@ -20,6 +20,11 @@ export class SchoolPortalController {
     return this.schoolsService.findForUser(request.user.id);
   }
 
+  @Get('me/rectification/catalogs')
+  rectificationCatalogs(@Req() request: Request & { user: AuthenticatedUser }) {
+    return this.schoolsService.rectificationCatalogsForUser(request.user.id);
+  }
+
   @Put('me/rectification')
   rectifyOwnSchool(
     @Req() request: Request & { user: AuthenticatedUser },

@@ -1,13 +1,24 @@
 import {
+  Check,
   Column,
   CreateDateColumn,
   Entity,
   Index,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { SchoolEducationLevel } from './school-education-level.entity';
+import { SchoolShiftCatalog } from './school-shift-catalog.entity';
 
 @Entity({ name: 'schools' })
+@Index('IDX_schools_created_at_id', ['createdAt', 'id'])
+@Check(
+  'CHK_schools_enrollment',
+  '"enrollment" IS NULL OR ("enrollment" >= 0 AND "enrollment" <= 1000000)',
+)
 export class School {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -59,6 +70,16 @@ export class School {
   @Column({ type: 'varchar', length: 120 })
   shift: string;
 
+  @Column({ name: 'shift_catalog_id', type: 'uuid', nullable: true })
+  shiftCatalogId: string | null;
+
+  @ManyToOne(() => SchoolShiftCatalog, { nullable: true, onDelete: 'RESTRICT' })
+  @JoinColumn({
+    name: 'shift_catalog_id',
+    foreignKeyConstraintName: 'FK_schools_shift_catalog',
+  })
+  shiftCatalog: SchoolShiftCatalog | null;
+
   @Column({ type: 'varchar', length: 40, nullable: true })
   phone: string | null;
 
@@ -87,8 +108,20 @@ export class School {
   })
   referentPhone: string | null;
 
-  @Column({ type: 'integer', default: 0 })
-  enrollment: number;
+  @Column({ type: 'integer', nullable: true })
+  enrollment: number | null;
+
+  @Column({ name: 'has_kiosk', type: 'boolean', nullable: true })
+  hasKiosk: boolean | null;
+
+  @Column({ name: 'has_food_service', type: 'boolean', nullable: true })
+  hasFoodService: boolean | null;
+
+  @Column({ name: 'is_boarding', type: 'boolean', nullable: true })
+  isBoarding: boolean | null;
+
+  @OneToMany(() => SchoolEducationLevel, (level) => level.school)
+  structuredEducationLevels: SchoolEducationLevel[];
 
   @Column({ type: 'jsonb', default: () => "'{}'::jsonb" })
   characteristics: Record<string, string | number | boolean | null>;

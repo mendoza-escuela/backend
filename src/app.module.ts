@@ -12,6 +12,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { CampaignsModule } from './modules/campaigns/campaigns.module';
 import { SubmissionsModule } from './modules/submissions/submissions.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { EvaluationModule } from './modules/evaluation/evaluation.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
     CampaignsModule,
     SubmissionsModule,
     DashboardModule,
+    EvaluationModule,
     AuthModule,
   ],
 })

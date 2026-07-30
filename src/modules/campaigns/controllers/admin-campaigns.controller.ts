@@ -20,16 +20,21 @@ import { AuthenticatedUser } from '../../../common/types/authenticated-user.type
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { CreateCampaignDto } from '../dto/create-campaign.dto';
+import { ListCampaignTrackingQueryDto } from '../dto/list-campaign-tracking-query.dto';
 import { ListCampaignsQueryDto } from '../dto/list-campaigns-query.dto';
 import { SetCampaignStatusDto } from '../dto/set-campaign-status.dto';
 import { UpdateCampaignDto } from '../dto/update-campaign.dto';
 import { CampaignsService } from '../services/campaigns.service';
+import { CampaignTrackingService } from '../services/campaign-tracking.service';
 
 @Controller('admin/campaigns')
 @UseGuards(JwtAuthGuard, PasswordChangeRequiredGuard, RolesGuard)
 @Roles(UserRole.Admin)
 export class AdminCampaignsController {
-  constructor(private readonly campaignsService: CampaignsService) {}
+  constructor(
+    private readonly campaignsService: CampaignsService,
+    private readonly campaignTrackingService: CampaignTrackingService,
+  ) {}
 
   @Get()
   list(@Query() query: ListCampaignsQueryDto) {
@@ -39,6 +44,24 @@ export class AdminCampaignsController {
   @Get('survey-versions')
   publishedVersionOptions() {
     return this.campaignsService.publishedVersionOptions();
+  }
+
+  @Get('tracking/options')
+  trackingOptions() {
+    return this.campaignsService.trackingOptions();
+  }
+
+  @Get(':id/tracking/summary')
+  trackingSummary(@Param('id', ParseUUIDPipe) id: string) {
+    return this.campaignTrackingService.summary(id);
+  }
+
+  @Get(':id/tracking')
+  tracking(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: ListCampaignTrackingQueryDto,
+  ) {
+    return this.campaignTrackingService.list(id, query);
   }
 
   @Get(':id')
