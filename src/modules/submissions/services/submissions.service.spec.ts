@@ -49,6 +49,7 @@ describe('SubmissionsService', () => {
     findOne: jest.fn(),
     save: jest.fn(),
     delete: jest.fn(),
+    update: jest.fn(),
   };
   const dataSource = {
     manager: manager as unknown as EntityManager,
@@ -189,6 +190,11 @@ describe('SubmissionsService', () => {
           optionId: '1a7ec566-e626-42bf-a128-6423c571a4db',
         }),
       ]),
+    );
+    expect(manager.update).toHaveBeenCalledTimes(1);
+    expect(manager.save).not.toHaveBeenCalledWith(
+      SurveySubmission,
+      expect.anything(),
     );
   });
 });

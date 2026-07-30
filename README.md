@@ -148,6 +148,14 @@ La escuela se obtiene siempre de la asociación del usuario autenticado. El prim
 
 Cada presentación referencia la versión publicada fijada por la campaña. Las respuestas enviadas son inmutables en el servicio y mediante triggers PostgreSQL. La migración `AddSurveySubmissions1720375212000` crea presentaciones, respuestas, índices, relaciones y protecciones de integridad.
 
+## Dashboard administrativo de participación
+
+Las rutas bajo `/api/admin/dashboard/participation` requieren rol `admin`. `GET /api/admin/dashboard/participation/filters` devuelve campañas activas, cerradas o archivadas y las opciones del padrón activo. Departamento y localidad limitan las localidades y escuelas disponibles.
+
+`GET /api/admin/dashboard/participation?campaignId=:uuid` calcula en PostgreSQL, desde una única consulta agregada, el total de escuelas activas, las no iniciadas, los borradores, los envíos y el porcentaje de envíos sobre el total. Admite los filtros `department`, `locality`, `schoolId`, `educationLevel`, `managementType`, `scope` y `shift`. Una escuela sin presentación se considera no iniciada; los estados persistidos `draft` y `submitted` determinan los otros dos grupos. Si el total es cero, el porcentaje devuelto es cero.
+
+Las campañas en borrador quedan fuera del seguimiento. Como actualmente las campañas son globales y no conservan un snapshot del padrón alcanzado, los totales históricos utilizan el estado actual de las escuelas.
+
 ## Verificación
 
 ```bash

@@ -222,7 +222,9 @@ export class SubmissionsService {
           ),
         );
       submission.lastSavedAt = new Date();
-      await manager.save(SurveySubmission, submission);
+      await manager.update(SurveySubmission, submission.id, {
+        lastSavedAt: submission.lastSavedAt,
+      });
     });
     return this.workspace(campaignId, actor);
   }
@@ -263,7 +265,11 @@ export class SubmissionsService {
       submission.status = SubmissionStatus.Submitted;
       submission.submittedAt = new Date();
       submission.lastSavedAt ??= submission.submittedAt;
-      await manager.save(SurveySubmission, submission);
+      await manager.update(SurveySubmission, submission.id, {
+        status: submission.status,
+        submittedAt: submission.submittedAt,
+        lastSavedAt: submission.lastSavedAt,
+      });
       await this.audit(
         manager,
         actor.id,
