@@ -13,6 +13,7 @@ import { CampaignsModule } from './modules/campaigns/campaigns.module';
 import { SubmissionsModule } from './modules/submissions/submissions.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { EvaluationModule } from './modules/evaluation/evaluation.module';
+import { EvaluationConfigModule } from './modules/evaluation-config/evaluation-config.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { EvaluationModule } from './modules/evaluation/evaluation.module';
     SubmissionsModule,
     DashboardModule,
     EvaluationModule,
+    EvaluationConfigModule,
     AuthModule,
   ],
 })

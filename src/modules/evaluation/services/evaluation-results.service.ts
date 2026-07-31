@@ -9,6 +9,8 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import type { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
+import { EvaluationConfiguration } from '../../evaluation-config/entities/evaluation-configuration.entity';
+import { EvaluationConfigurationsService } from '../../evaluation-config/services/evaluation-configurations.service';
 import { SchoolsService } from '../../schools/services/schools.service';
 import { SurveyAnswer } from '../../submissions/entities/survey-answer.entity';
 import { SubmissionStatus } from '../../submissions/entities/submission-status.enum';
@@ -35,8 +37,6 @@ import {
 import {
   EVALUATION_ALGORITHM_VERSION,
   EVALUATION_SNAPSHOT_SCHEMA_VERSION,
-  MENTAL_HEALTH_CRITICAL_RULE_VERSION,
-  MENTAL_HEALTH_CRITICAL_THRESHOLD,
   type EvaluationCalculationSource,
 } from '../evaluation.constants';
 import type {
@@ -84,6 +84,16 @@ type PreparedCalculation = {
   }>;
 };
 
+type StarDecision = {
+  baseStars: number;
+  finalStars: number;
+  blockingReasons: string[];
+  alerts: Array<Record<string, unknown>>;
+  configurationSnapshot: ReturnType<
+    EvaluationConfigurationsService['snapshot']
+  >;
+};
+
 @Injectable()
 export class EvaluationResultsService {
   constructor(
@@ -91,6 +101,7 @@ export class EvaluationResultsService {
     private readonly evaluationService: SurveyEvaluationService,
     private readonly applicabilityService: SurveyApplicabilityService,
     private readonly schoolsService: SchoolsService,
+    private readonly configurations: EvaluationConfigurationsService,
   ) {}
 
   /**
@@ -116,11 +127,14 @@ export class EvaluationResultsService {
       throw new NotFoundException('La presentación indicada no existe.');
     }
 
+    const configuration = await this.configurations.active(manager);
     const calculation = this.prepareCalculation(
       submission,
       surveyVersion,
       applicability,
+      configuration,
     );
+    const starDecision = this.starDecision(configuration, calculation);
     const calculatedAt = new Date();
     const existingResult = await manager.findOne(EvaluationResult, {
       where: { submissionId: submission.id },
@@ -145,13 +159,19 @@ export class EvaluationResultsService {
         calculation.evaluation,
         calculation.answerByQuestionId,
         calculatedAt,
+        starDecision,
       ),
       calculatedAt,
       calculatedByUserId: actorUserId,
       calculationSource: source,
-      stars: null,
-      starRuleVersion: null,
-      starBlockingReasons: [],
+      stars: starDecision.finalStars,
+      baseStars: starDecision.baseStars,
+      starRuleVersion: configuration.versionCode,
+      starBlockingReasons: starDecision.blockingReasons,
+      evaluationConfigurationId: configuration.id,
+      evaluationConfigurationVersion: configuration.versionCode,
+      evaluationRuleSnapshot: starDecision.configurationSnapshot,
+      evaluationAlerts: starDecision.alerts,
     });
 
     try {
@@ -192,6 +212,9 @@ export class EvaluationResultsService {
             generalScore: savedResult.generalScore,
             mentalHealthCritical: mentalHealth?.isCritical ?? false,
             mentalHealthValue: mentalHealth?.criticalValue ?? null,
+            baseStars: starDecision.baseStars,
+            finalStars: starDecision.finalStars,
+            evaluationConfigurationVersion: configuration.versionCode,
             calculatedAt: calculatedAt.toISOString(),
           },
         }),
@@ -376,6 +399,7 @@ export class EvaluationResultsService {
     submission: SurveySubmission,
     surveyVersion: SurveyVersion,
     applicability: SurveyApplicabilityResult,
+    configuration: EvaluationConfiguration,
   ): PreparedCalculation {
     this.assertSubmissionAndVersion(submission, surveyVersion);
     const orderedQuestions = this.orderedQuestions(surveyVersion);
@@ -454,13 +478,21 @@ export class EvaluationResultsService {
         numerator: String(calculated?.numerator ?? 0),
         denominator: calculated?.denominator ?? 0,
         score,
-        ...this.criticalityForDimension(dimension.code, score),
+        ...this.criticalityForDimension(dimension.code, score, configuration),
       };
     });
 
     if (dimensionRows.length !== 6) {
       throw new BadRequestException(
         'El resultado debe contener exactamente las seis dimensiones oficiales.',
+      );
+    }
+    const mentalHealth = dimensionRows.find(
+      ({ dimensionCode }) => dimensionCode === MENTAL_HEALTH_DIMENSION_CODE,
+    );
+    if (!mentalHealth || mentalHealth.score === null) {
+      throw new BadRequestException(
+        'No fue posible calcular la dimensión Salud Mental mediante su código oficial.',
       );
     }
     return { evaluation, answerByQuestionId, dimensionRows };
@@ -750,6 +782,7 @@ export class EvaluationResultsService {
     evaluation: SurveyEvaluationResult,
     answerByQuestionId: Map<string, SurveyAnswer>,
     calculatedAt: Date,
+    starDecision: StarDecision,
   ): EvaluationSnapshot {
     if (!submission.schoolProfileSnapshot) {
       throw new BadRequestException(
@@ -785,6 +818,7 @@ export class EvaluationResultsService {
             criticality: this.snapshotCriticality(
               dimension.code,
               result?.average ?? null,
+              starDecision,
             ),
           },
           sections: dimension.sections.map((section) => ({
@@ -815,9 +849,12 @@ export class EvaluationResultsService {
         numerator: String(evaluation.general.numerator),
         denominator: evaluation.general.denominator,
         stars: {
-          value: null,
-          ruleVersion: null,
-          blockingReasons: [],
+          value: starDecision.finalStars,
+          baseValue: starDecision.baseStars,
+          ruleVersion: starDecision.configurationSnapshot.versionCode,
+          blockingReasons: starDecision.blockingReasons,
+          configuration: starDecision.configurationSnapshot,
+          alerts: starDecision.alerts,
         },
       },
       submission: {
@@ -929,6 +966,7 @@ export class EvaluationResultsService {
   }
 
   private assertSnapshotComplete(snapshot: EvaluationSnapshot): void {
+    const starConfiguration = snapshot.result.stars.configuration;
     if (
       !snapshot.algorithm.version ||
       !snapshot.algorithm.calculatedAt ||
@@ -936,16 +974,18 @@ export class EvaluationResultsService {
       !snapshot.survey.version.id ||
       !snapshot.survey.version.publishedAt ||
       snapshot.survey.dimensions.length !== 6 ||
-      snapshot.result.stars.value !== null ||
-      snapshot.result.stars.ruleVersion !== null ||
-      snapshot.result.stars.blockingReasons.length !== 0 ||
+      snapshot.result.stars.value === null ||
+      snapshot.result.stars.value < 1 ||
+      snapshot.result.stars.value > 5 ||
+      !snapshot.result.stars.ruleVersion ||
+      !starConfiguration ||
       snapshot.survey.dimensions.some((dimension) =>
         dimension.code === MENTAL_HEALTH_DIMENSION_CODE
           ? !dimension.result.criticality ||
             dimension.result.criticality.threshold !==
-              MENTAL_HEALTH_CRITICAL_THRESHOLD ||
+              starConfiguration?.mentalHealthCriticalThreshold ||
             dimension.result.criticality.ruleVersion !==
-              MENTAL_HEALTH_CRITICAL_RULE_VERSION
+              starConfiguration?.versionCode
           : dimension.result.criticality !== null,
       ) ||
       snapshot.survey.dimensions.some((dimension) =>
@@ -1172,6 +1212,48 @@ export class EvaluationResultsService {
           snapshot.result.generalScore,
           'puntaje general',
         ),
+        stars: {
+          available: snapshot.result.stars.value !== null,
+          base: snapshot.result.stars.baseValue ?? snapshot.result.stars.value,
+          final: snapshot.result.stars.value,
+          wasLimited:
+            snapshot.result.stars.baseValue !== undefined &&
+            snapshot.result.stars.baseValue !== snapshot.result.stars.value,
+          maxWhenMentalHealthCritical:
+            snapshot.result.stars.configuration?.mentalHealthMaxStars ?? null,
+          configurationVersion:
+            snapshot.result.stars.configuration?.versionCode ??
+            snapshot.result.stars.ruleVersion,
+          blockingReasons: snapshot.result.stars.blockingReasons,
+        },
+        alerts: (snapshot.result.stars.alerts ?? []).flatMap((alert) => {
+          const threshold = Number(alert.threshold);
+          const observedValue = Number(alert.observedValue);
+          const starsBefore = Number(alert.starsBefore);
+          const starsAfter = Number(alert.starsAfter);
+          return typeof alert.code === 'string' &&
+            typeof alert.severity === 'string' &&
+            typeof alert.dimensionCode === 'string' &&
+            Number.isFinite(threshold) &&
+            Number.isFinite(observedValue) &&
+            Number.isInteger(starsBefore) &&
+            Number.isInteger(starsAfter)
+            ? [
+                {
+                  code: alert.code,
+                  severity: alert.severity,
+                  dimensionCode: alert.dimensionCode,
+                  threshold,
+                  observedValue,
+                  message:
+                    typeof alert.message === 'string' ? alert.message : '',
+                  causedBlocking: Boolean(alert.causedBlocking),
+                  starsBefore,
+                  starsAfter,
+                },
+              ]
+            : [];
+        }),
         dimensions,
         mentalHealthCritical: {
           isCritical: mentalHealth?.isCritical ?? false,
@@ -1223,6 +1305,7 @@ export class EvaluationResultsService {
         snapshot.result.generalScore,
         'puntaje general',
       ),
+      stars: snapshot.result.stars.value,
       calculatedAt: snapshot.algorithm.calculatedAt,
     };
   }
@@ -1329,6 +1412,7 @@ export class EvaluationResultsService {
   private criticalityForDimension(
     dimensionCode: string,
     score: string | null,
+    configuration: EvaluationConfiguration,
   ): Pick<
     PreparedCalculation['dimensionRows'][number],
     'isCritical' | 'criticalValue' | 'criticalThreshold' | 'criticalRuleVersion'
@@ -1344,25 +1428,84 @@ export class EvaluationResultsService {
     return {
       isCritical:
         score !== null &&
-        Number(score) < Number(MENTAL_HEALTH_CRITICAL_THRESHOLD),
+        Number(score) < Number(configuration.mentalHealthCriticalThreshold),
       criticalValue: score,
-      criticalThreshold: MENTAL_HEALTH_CRITICAL_THRESHOLD,
-      criticalRuleVersion: MENTAL_HEALTH_CRITICAL_RULE_VERSION,
+      criticalThreshold: configuration.mentalHealthCriticalThreshold,
+      criticalRuleVersion: configuration.versionCode,
     };
   }
 
   private snapshotCriticality(
     dimensionCode: string,
     score: string | null,
+    starDecision: StarDecision,
   ): EvaluationDimensionSnapshot['result']['criticality'] {
     if (dimensionCode !== MENTAL_HEALTH_DIMENSION_CODE) return null;
-    const criticality = this.criticalityForDimension(dimensionCode, score);
+    const configuration = {
+      mentalHealthCriticalThreshold:
+        starDecision.configurationSnapshot.mentalHealthCriticalThreshold,
+      versionCode: starDecision.configurationSnapshot.versionCode,
+    } as EvaluationConfiguration;
+    const criticality = this.criticalityForDimension(
+      dimensionCode,
+      score,
+      configuration,
+    );
     return {
       isCritical: criticality.isCritical,
       value: criticality.criticalValue,
-      threshold: MENTAL_HEALTH_CRITICAL_THRESHOLD,
+      threshold:
+        starDecision.configurationSnapshot.mentalHealthCriticalThreshold,
       operator: 'less_than',
-      ruleVersion: MENTAL_HEALTH_CRITICAL_RULE_VERSION,
+      ruleVersion: starDecision.configurationSnapshot.versionCode,
+    };
+  }
+
+  private starDecision(
+    configuration: EvaluationConfiguration,
+    calculation: PreparedCalculation,
+  ): StarDecision {
+    const generalScore = Number(calculation.evaluation.general.average);
+    const mentalHealth = calculation.dimensionRows.find(
+      ({ dimensionCode }) => dimensionCode === MENTAL_HEALTH_DIMENSION_CODE,
+    );
+    if (!mentalHealth || mentalHealth.score === null)
+      throw new BadRequestException(
+        'No se encontró el resultado de Salud Mental.',
+      );
+    const decision = this.configurations.evaluate(
+      configuration,
+      generalScore,
+      Number(mentalHealth.score),
+    );
+    const { baseStars, finalStars } = decision;
+    const blocked = decision.causedBlocking;
+    const isCritical = decision.isMentalHealthCritical;
+    const blockingReasons = blocked ? ['CRITICAL_MENTAL_HEALTH'] : [];
+    const alerts = isCritical
+      ? [
+          {
+            code: 'CRITICAL_MENTAL_HEALTH',
+            type: 'critical_dimension',
+            severity: 'critical',
+            dimensionCode: MENTAL_HEALTH_DIMENSION_CODE,
+            threshold: configuration.mentalHealthCriticalThreshold,
+            observedValue: mentalHealth.score,
+            message:
+              'La dimensión Salud Mental se encuentra por debajo del umbral crítico configurado.',
+            configurationVersion: configuration.versionCode,
+            causedBlocking: blocked,
+            starsBefore: baseStars,
+            starsAfter: finalStars,
+          },
+        ]
+      : [];
+    return {
+      baseStars,
+      finalStars,
+      blockingReasons,
+      alerts,
+      configurationSnapshot: this.configurations.snapshot(configuration),
     };
   }
 }

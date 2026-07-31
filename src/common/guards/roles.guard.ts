@@ -1,4 +1,9 @@
-import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { AuthenticatedUser } from '../types/authenticated-user.type';
@@ -23,6 +28,11 @@ export class RolesGuard implements CanActivate {
       .switchToHttp()
       .getRequest<{ user?: AuthenticatedUser }>();
 
-    return request.user ? requiredRoles.includes(request.user.role) : false;
+    if (!request.user || !requiredRoles.includes(request.user.role)) {
+      throw new ForbiddenException(
+        'No tenés permisos para realizar esta operación.',
+      );
+    }
+    return true;
   }
 }

@@ -102,8 +102,24 @@ export type EvaluationSnapshot = {
     denominator: number;
     stars: {
       value: number | null;
+      baseValue?: number | null;
       ruleVersion: string | null;
       blockingReasons: string[];
+      configuration?: {
+        id: string;
+        versionCode: string;
+        mentalHealthCriticalThreshold: string;
+        mentalHealthMaxStars: number;
+        starRanges: Array<{
+          stars: number;
+          lowerBound: string;
+          upperBound: string;
+          lowerInclusive: boolean;
+          upperInclusive: boolean;
+          order: number;
+        }>;
+      };
+      alerts?: Array<Record<string, unknown>>;
     };
   };
   submission: {

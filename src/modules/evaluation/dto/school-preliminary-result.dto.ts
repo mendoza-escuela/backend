@@ -77,6 +77,26 @@ export type SchoolPreliminaryResultDto = {
   };
   result: {
     generalScore: number;
+    stars: {
+      available: boolean;
+      base: number | null;
+      final: number | null;
+      wasLimited: boolean;
+      maxWhenMentalHealthCritical: number | null;
+      configurationVersion: string | null;
+      blockingReasons: string[];
+    };
+    alerts: Array<{
+      code: string;
+      severity: string;
+      dimensionCode: string;
+      threshold: number;
+      observedValue: number;
+      message: string;
+      causedBlocking: boolean;
+      starsBefore: number;
+      starsAfter: number;
+    }>;
     dimensions: PreliminaryResultDimensionDto[];
     mentalHealthCritical: {
       isCritical: boolean;
@@ -109,6 +129,7 @@ export type SchoolPreliminaryResultSummaryDto = {
   schoolName: string;
   submittedAt: string;
   generalScore: number;
+  stars: number | null;
   calculatedAt: string;
 };
 

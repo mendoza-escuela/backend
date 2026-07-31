@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module';
 import { SchoolsModule } from '../schools/schools.module';
+import { EvaluationConfigModule } from '../evaluation-config/evaluation-config.module';
 import { SurveyAnswer } from '../submissions/entities/survey-answer.entity';
 import { SurveySubmission } from '../submissions/entities/survey-submission.entity';
 import { SubmissionQuestionApplicability } from '../submissions/entities/submission-question-applicability.entity';
@@ -26,6 +27,7 @@ import { EvaluationResultsService } from './services/evaluation-results.service'
     AuthModule,
     SchoolsModule,
     SurveysModule,
+    EvaluationConfigModule,
   ],
   controllers: [
     SchoolEvaluationResultsController,
