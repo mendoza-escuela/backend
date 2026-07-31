@@ -20,6 +20,74 @@ import { EvaluationResult } from '../entities/evaluation-result.entity';
 import { EvaluationResultsService } from './evaluation-results.service';
 
 describe('EvaluationResultsService', () => {
+  const evaluationConfiguration = {
+    id: 'configuration-id',
+    versionCode: 'v1.0.0',
+    mentalHealthCriticalThreshold: '33',
+    mentalHealthMaxStars: 4,
+    starRanges: [
+      {
+        stars: 1,
+        lowerBound: '0',
+        upperBound: '20',
+        lowerInclusive: true,
+        upperInclusive: true,
+        order: 1,
+      },
+      {
+        stars: 2,
+        lowerBound: '20',
+        upperBound: '40',
+        lowerInclusive: false,
+        upperInclusive: true,
+        order: 2,
+      },
+      {
+        stars: 3,
+        lowerBound: '40',
+        upperBound: '60',
+        lowerInclusive: false,
+        upperInclusive: true,
+        order: 3,
+      },
+      {
+        stars: 4,
+        lowerBound: '60',
+        upperBound: '80',
+        lowerInclusive: false,
+        upperInclusive: true,
+        order: 4,
+      },
+      {
+        stars: 5,
+        lowerBound: '80',
+        upperBound: '100',
+        lowerInclusive: false,
+        upperInclusive: true,
+        order: 5,
+      },
+    ],
+  };
+  const configurations = {
+    active: jest.fn().mockResolvedValue(evaluationConfiguration),
+    resolveStars: jest.fn((_configuration, score: number) =>
+      Math.min(5, Math.floor(Math.max(score - 0.000001, 0) / 20) + 1),
+    ),
+    evaluate: jest.fn((_configuration, score: number, mentalHealth: number) => {
+      const baseStars = Math.min(
+        5,
+        Math.floor(Math.max(score - 0.000001, 0) / 20) + 1,
+      );
+      const causedBlocking = baseStars === 5 && mentalHealth < 33;
+      return {
+        baseStars,
+        finalStars: causedBlocking ? 4 : baseStars,
+        isMentalHealthCritical: mentalHealth < 33,
+        causedBlocking,
+      };
+    }),
+    snapshot: jest.fn(() => evaluationConfiguration),
+  };
   const schoolsService = {
     evaluationContextForUser: jest.fn(),
   };
@@ -51,6 +119,7 @@ describe('EvaluationResultsService', () => {
       new SurveyEvaluationService(applicabilityEngine),
       new SurveyApplicabilityService(applicabilityEngine),
       schoolsService as never,
+      configurations as never,
     );
   });
 
@@ -106,8 +175,9 @@ describe('EvaluationResultsService', () => {
     expect(result.snapshot.algorithm.version).toBe(
       'question-average-dynamic-denominator-v1',
     );
-    expect(result.stars).toBeNull();
-    expect(result.starRuleVersion).toBeNull();
+    expect(result.stars).toBe(3);
+    expect(result.baseStars).toBe(3);
+    expect(result.starRuleVersion).toBe('v1.0.0');
     expect(result.starBlockingReasons).toEqual([]);
     const mentalHealth = result.dimensionResults.find(
       ({ dimensionCode }) => dimensionCode === 'salud_mental',
@@ -117,7 +187,7 @@ describe('EvaluationResultsService', () => {
       isCritical: false,
       criticalValue: '100',
       criticalThreshold: '33',
-      criticalRuleVersion: 'mental-health-critical-lt-33-v1',
+      criticalRuleVersion: 'v1.0.0',
     });
     expect(
       result.snapshot.survey.dimensions.find(
@@ -128,11 +198,12 @@ describe('EvaluationResultsService', () => {
       value: '100',
       threshold: '33',
       operator: 'less_than',
-      ruleVersion: 'mental-health-critical-lt-33-v1',
+      ruleVersion: 'v1.0.0',
     });
-    expect(result.snapshot.result.stars).toEqual({
-      value: null,
-      ruleVersion: null,
+    expect(result.snapshot.result.stars).toMatchObject({
+      value: 3,
+      baseValue: 3,
+      ruleVersion: 'v1.0.0',
       blockingReasons: [],
     });
     expect(managerHarness.audits[0]).toMatchObject({
@@ -283,17 +354,17 @@ describe('EvaluationResultsService', () => {
         isCritical: expectedCritical,
         criticalValue: score,
         criticalThreshold: '33',
-        criticalRuleVersion: 'mental-health-critical-lt-33-v1',
+        criticalRuleVersion: 'v1.0.0',
       });
       expect(snapshotMentalHealth?.result.criticality).toEqual({
         isCritical: expectedCritical,
         value: score,
         threshold: '33',
         operator: 'less_than',
-        ruleVersion: 'mental-health-critical-lt-33-v1',
+        ruleVersion: 'v1.0.0',
       });
-      expect(result.stars).toBeNull();
-      expect(result.snapshot.result.stars.value).toBeNull();
+      expect(result.stars).toBe(2);
+      expect(result.snapshot.result.stars.value).toBe(2);
     },
   );
 
@@ -455,6 +526,7 @@ describe('EvaluationResultsService', () => {
       new SurveyEvaluationService(applicabilityEngine),
       new SurveyApplicabilityService(applicabilityEngine),
       schoolsService as never,
+      configurations as never,
     );
 
     await expect(

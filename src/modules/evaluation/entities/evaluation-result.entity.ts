@@ -16,6 +16,7 @@ import { School } from '../../schools/entities/school.entity';
 import { SurveySubmission } from '../../submissions/entities/survey-submission.entity';
 import { SurveyVersion } from '../../surveys/entities/survey-version.entity';
 import { User } from '../../users/entities/user.entity';
+import { EvaluationConfiguration } from '../../evaluation-config/entities/evaluation-configuration.entity';
 import type { EvaluationCalculationSource } from '../evaluation.constants';
 import type { EvaluationSnapshot } from '../evaluation-snapshot.type';
 import { EvaluationDimensionResult } from './evaluation-dimension-result.entity';
@@ -144,6 +145,36 @@ export class EvaluationResult {
 
   @Column({ type: 'smallint', nullable: true })
   stars: number | null;
+
+  @Column({ name: 'base_stars', type: 'smallint', nullable: true })
+  baseStars: number | null;
+
+  @Column({ name: 'evaluation_configuration_id', type: 'uuid', nullable: true })
+  evaluationConfigurationId: string | null;
+
+  @ManyToOne(() => EvaluationConfiguration, {
+    nullable: true,
+    onDelete: 'RESTRICT',
+  })
+  @JoinColumn({
+    name: 'evaluation_configuration_id',
+    foreignKeyConstraintName: 'FK_evaluation_results_configuration',
+  })
+  evaluationConfiguration: EvaluationConfiguration | null;
+
+  @Column({
+    name: 'evaluation_configuration_version',
+    type: 'varchar',
+    length: 50,
+    nullable: true,
+  })
+  evaluationConfigurationVersion: string | null;
+
+  @Column({ name: 'evaluation_rule_snapshot', type: 'jsonb', nullable: true })
+  evaluationRuleSnapshot: Record<string, unknown> | null;
+
+  @Column({ name: 'evaluation_alerts', type: 'jsonb', default: [] })
+  evaluationAlerts: Array<Record<string, unknown>>;
 
   @Column({
     name: 'star_rule_version',

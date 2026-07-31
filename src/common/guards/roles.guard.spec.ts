@@ -1,4 +1,4 @@
-import { ExecutionContext } from '@nestjs/common';
+import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { UserRole } from '../../modules/users/entities/user-role.enum';
 import { RolesGuard } from './roles.guard';
@@ -27,15 +27,17 @@ describe('RolesGuard', () => {
     } as unknown as Reflector;
     const guard = new RolesGuard(reflector);
     expect(guard.canActivate(contextWithRole(UserRole.Admin))).toBe(true);
-    expect(guard.canActivate(contextWithRole(UserRole.School))).toBe(false);
+    expect(() => guard.canActivate(contextWithRole(UserRole.School))).toThrow(
+      ForbiddenException,
+    );
   });
 
   it('denies unauthenticated requests to protected routes', () => {
     const reflector = {
       getAllAndOverride: jest.fn().mockReturnValue([UserRole.Admin]),
     } as unknown as Reflector;
-    expect(new RolesGuard(reflector).canActivate(contextWithRole())).toBe(
-      false,
-    );
+    expect(() =>
+      new RolesGuard(reflector).canActivate(contextWithRole()),
+    ).toThrow('No tenés permisos para realizar esta operación.');
   });
 });
