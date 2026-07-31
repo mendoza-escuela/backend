@@ -17,8 +17,8 @@ import {
 
 export class EvaluationStarRangeInputDto {
   @IsInt() @Min(1) @Max(5) stars: number;
-  @IsNumber({ maxDecimalPlaces: 8 }) @Min(0) @Max(100) lowerBound: number;
-  @IsNumber({ maxDecimalPlaces: 8 }) @Min(0) @Max(100) upperBound: number;
+  @IsInt() @Min(0) @Max(100) lowerBound: number;
+  @IsInt() @Min(0) @Max(100) upperBound: number;
   @IsBoolean() lowerInclusive: boolean;
   @IsBoolean() upperInclusive: boolean;
   @IsInt() @Min(1) @Max(5) order: number;
