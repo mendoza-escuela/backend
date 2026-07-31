@@ -14,6 +14,8 @@ import {
 import { EvaluationDimensionResult } from './entities/evaluation-dimension-result.entity';
 import { EvaluationResult } from './entities/evaluation-result.entity';
 import { EvaluationResultsService } from './services/evaluation-results.service';
+import { AdminSchoolResultDetailController } from './controllers/admin-school-result-detail.controller';
+import { AdminSchoolResultDetailService } from './services/admin-school-result-detail.service';
 
 @Module({
   imports: [
@@ -30,10 +32,11 @@ import { EvaluationResultsService } from './services/evaluation-results.service'
     EvaluationConfigModule,
   ],
   controllers: [
+    AdminSchoolResultDetailController,
     SchoolEvaluationResultsController,
     SchoolPreliminaryResultsController,
   ],
-  providers: [EvaluationResultsService],
+  providers: [EvaluationResultsService, AdminSchoolResultDetailService],
   exports: [EvaluationResultsService],
 })
 export class EvaluationModule {}
