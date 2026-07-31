@@ -141,6 +141,22 @@ describe('EvaluationResultsService', () => {
     });
   });
 
+  it('preserves result calculation for a campaign linked to an archived version', async () => {
+    const fixture = evaluationFixture();
+    fixture.version.status = 'archived' as SurveyVersion['status'];
+
+    await expect(
+      service.calculateAndPersist(
+        managerHarness.manager,
+        fixture.submission,
+        fixture.version,
+        fixture.applicability,
+        'actor-id',
+        'submission_finalization',
+      ),
+    ).resolves.toMatchObject({ surveyVersionId: fixture.version.id });
+  });
+
   it('overwrites the same result and completely replaces its snapshot', async () => {
     const fixture = evaluationFixture();
     const originalAnswers = structuredClone(fixture.submission.answers);

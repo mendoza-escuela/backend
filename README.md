@@ -125,6 +125,10 @@ La importación institucional admite exclusivamente preguntas de selección simp
 
 Publicar es una operación irreversible: el servicio impide editar o eliminar la versión y la migración `ProtectPublishedSurveyVersions1720375206000` agrega triggers PostgreSQL que también protegen la versión y todos sus descendientes ante escrituras por fuera de la API. Para cambiar contenido publicado debe clonarse como una versión borrador nueva.
 
+Cada cuestionario admite una sola versión vigente. Al publicar un borrador, el backend bloquea el cuestionario, archiva automáticamente la versión publicada anterior y publica la nueva dentro de la misma transacción. Ambas transiciones se auditan con un `publicationOperationId` común. La migración `EnforceSinglePublishedSurveyVersion1720375218000` detecta inconsistencias existentes y agrega un índice único parcial para impedir más de una fila `published` por cuestionario incluso ante escrituras concurrentes.
+
+El archivado manual se conserva para retirar una versión sin reemplazarla. Las campañas mantienen su `survey_version_id`: una versión archivada continúa disponible de forma inmutable para campañas, presentaciones y resultados históricos, pero no puede seleccionarse al crear una campaña nueva.
+
 Las altas, cambios, clonaciones, publicaciones y bajas se registran en `audit_logs` con usuario, fecha, entidad y resumen del cambio. No se guardan secretos ni contenido de respuestas.
 
 ## Administración de campañas

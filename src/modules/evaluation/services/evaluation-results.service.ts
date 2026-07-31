@@ -16,8 +16,8 @@ import { SurveySubmission } from '../../submissions/entities/survey-submission.e
 import { SurveyDimension } from '../../surveys/entities/survey-dimension.entity';
 import { SurveyOption } from '../../surveys/entities/survey-option.entity';
 import { SurveyQuestion } from '../../surveys/entities/survey-question.entity';
-import { SurveyVersionStatus } from '../../surveys/entities/survey-version-status.enum';
 import { SurveyVersion } from '../../surveys/entities/survey-version.entity';
+import { isHistoricallyAvailableSurveyVersion } from '../../surveys/policies/survey-version-availability.policy';
 import {
   SurveyApplicabilityService,
   type QuestionApplicabilityResolution,
@@ -477,9 +477,11 @@ export class EvaluationResultsService {
       submission.status !== SubmissionStatus.Submitted ||
       !surveyVersion?.id ||
       submission.surveyVersionId !== surveyVersion.id ||
-      surveyVersion.status !== SurveyVersionStatus.Published ||
-      !surveyVersion.survey ||
-      !surveyVersion.publishedAt
+      !isHistoricallyAvailableSurveyVersion(
+        surveyVersion.status,
+        surveyVersion.publishedAt,
+      ) ||
+      !surveyVersion.survey
     ) {
       throw new BadRequestException(
         'La versión del cuestionario asociada a la presentación no es válida.',

@@ -1,4 +1,8 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { UserRole } from '../../users/entities/user-role.enum';
@@ -13,6 +17,7 @@ import { AdminSurveysService } from './admin-surveys.service';
 import { SurveyStructureValidator } from './survey-structure-validator.service';
 import { SurveyVersionComparator } from './survey-version-comparator.service';
 import { ApplicabilityRulesService } from './applicability-rules.service';
+import { AuditLog } from '../../audit/entities/audit-log.entity';
 
 describe('AdminSurveysService', () => {
   const manager = {
@@ -20,6 +25,7 @@ describe('AdminSurveysService', () => {
       (_entity: unknown, attributes: Record<string, unknown>) => attributes,
     ),
     findOne: jest.fn(),
+    find: jest.fn(),
     save: jest.fn(),
     delete: jest.fn(),
   };
@@ -120,6 +126,7 @@ describe('AdminSurveysService', () => {
   it('rechaza publicar un borrador incompleto sin persistir cambios', async () => {
     const draft = version();
     manager.findOne
+      .mockResolvedValueOnce({ id: 'survey-id' })
       .mockResolvedValueOnce(draft)
       .mockResolvedValueOnce({ ...draft, dimensions: [] });
 
@@ -128,6 +135,174 @@ describe('AdminSurveysService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
 
     expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('publica el primer borrador y audita la transición sin archivar', async () => {
+    const draft = publishableVersion();
+    manager.findOne
+      .mockResolvedValueOnce({ id: draft.surveyId })
+      .mockResolvedValueOnce(draft)
+      .mockResolvedValueOnce(draft);
+    manager.find.mockResolvedValue([]);
+    manager.save.mockImplementation(
+      (_entity: unknown, value: Record<string, unknown>) => value,
+    );
+    jest
+      .spyOn(service, 'findVersion')
+      .mockResolvedValue({ id: draft.id } as never);
+
+    await service.publishVersion(draft.surveyId, draft.id, actor);
+
+    expect(draft.status).toBe(SurveyVersionStatus.Published);
+    expect(draft.publishedAt).toBeInstanceOf(Date);
+    expect(manager.findOne).toHaveBeenNthCalledWith(
+      1,
+      Survey,
+      expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
+    );
+    expect(manager.find).toHaveBeenCalledWith(
+      SurveyVersion,
+      expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
+    );
+    const audits = manager.save.mock.calls.filter(
+      ([entity]) => entity === AuditLog,
+    );
+    expect(audits).toHaveLength(1);
+    expect(JSON.stringify(audits)).toContain('SURVEY_VERSION_PUBLISHED');
+    expect(JSON.stringify(audits)).toContain(
+      '"previousPublishedVersionId":null',
+    );
+  });
+
+  it('archiva la vigente y publica la nueva dentro de la misma transacción', async () => {
+    const draft = publishableVersion({
+      id: 'new-version-id',
+      versionNumber: 2,
+    });
+    const previous = version({
+      id: 'previous-version-id',
+      status: SurveyVersionStatus.Published,
+      publishedAt: new Date('2026-01-01'),
+    });
+    manager.findOne
+      .mockResolvedValueOnce({ id: draft.surveyId })
+      .mockResolvedValueOnce(draft)
+      .mockResolvedValueOnce(draft);
+    manager.find.mockResolvedValue([previous]);
+    manager.save.mockImplementation(
+      (_entity: unknown, value: Record<string, unknown>) => value,
+    );
+    jest
+      .spyOn(service, 'findVersion')
+      .mockResolvedValue({ id: draft.id } as never);
+
+    await service.publishVersion(draft.surveyId, draft.id, actor);
+
+    expect(previous.status).toBe(SurveyVersionStatus.Archived);
+    expect(draft.status).toBe(SurveyVersionStatus.Published);
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    const serializedAudits = manager.save.mock.calls
+      .filter(([entity]) => entity === AuditLog)
+      .map(([, entry]) => JSON.stringify(entry));
+    expect(serializedAudits).toHaveLength(2);
+    expect(serializedAudits[0]).toContain('SURVEY_VERSION_AUTO_ARCHIVED');
+    expect(serializedAudits[1]).toContain('SURVEY_VERSION_PUBLISHED');
+    const operationIds = serializedAudits.map(
+      (entry) => entry.match(/"publicationOperationId":"([^"]+)"/)?.[1],
+    );
+    expect(operationIds[0]).toBe(operationIds[1]);
+    expect(serializedAudits.join()).toContain('previous-version-id');
+    expect(JSON.stringify(manager.save.mock.calls)).not.toContain('Campaign');
+  });
+
+  it('aborta si ya existen varias versiones publicadas', async () => {
+    const draft = publishableVersion();
+    manager.findOne
+      .mockResolvedValueOnce({ id: draft.surveyId })
+      .mockResolvedValueOnce(draft)
+      .mockResolvedValueOnce(draft);
+    manager.find.mockResolvedValue([
+      version({ id: 'published-1', status: SurveyVersionStatus.Published }),
+      version({ id: 'published-2', status: SurveyVersionStatus.Published }),
+    ]);
+
+    await expect(
+      service.publishVersion(draft.surveyId, draft.id, actor),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it.each([SurveyVersionStatus.Published, SurveyVersionStatus.Archived])(
+    'rechaza publicar una versión %s',
+    async (status) => {
+      manager.findOne
+        .mockResolvedValueOnce({ id: 'survey-id' })
+        .mockResolvedValueOnce(version({ status }));
+      await expect(
+        service.publishVersion('survey-id', 'version-id', actor),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(manager.find).not.toHaveBeenCalled();
+    },
+  );
+
+  it('distingue cuestionario y versión inexistentes o ajenos', async () => {
+    manager.findOne.mockResolvedValueOnce(null);
+    await expect(
+      service.publishVersion('missing-survey', 'version-id', actor),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    jest.clearAllMocks();
+    manager.findOne
+      .mockResolvedValueOnce({ id: 'survey-id' })
+      .mockResolvedValueOnce(null);
+    await expect(
+      service.publishVersion('survey-id', 'foreign-version', actor),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('convierte la colisión del índice parcial en un conflicto controlado', async () => {
+    const draft = publishableVersion();
+    manager.findOne
+      .mockResolvedValueOnce({ id: draft.surveyId })
+      .mockResolvedValueOnce(draft)
+      .mockResolvedValueOnce(draft);
+    manager.find.mockResolvedValue([]);
+    manager.save.mockRejectedValue({
+      code: '23505',
+      constraint: 'UQ_survey_versions_single_published',
+    });
+
+    await expect(
+      service.publishVersion(draft.surveyId, draft.id, actor),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('propaga un fallo de auditoría para que la transacción haga rollback', async () => {
+    const draft = publishableVersion();
+    const previous = version({
+      id: 'previous-version-id',
+      status: SurveyVersionStatus.Published,
+    });
+    manager.findOne
+      .mockResolvedValueOnce({ id: draft.surveyId })
+      .mockResolvedValueOnce(draft)
+      .mockResolvedValueOnce(draft);
+    manager.find.mockResolvedValue([previous]);
+    manager.save.mockImplementation(
+      (entity: unknown, value: Record<string, unknown>) => {
+        if (entity === AuditLog) throw new Error('audit unavailable');
+        return value;
+      },
+    );
+
+    await expect(
+      service.publishVersion(draft.surveyId, draft.id, actor),
+    ).rejects.toThrow('audit unavailable');
+    expect(draft.status).toBe(SurveyVersionStatus.Draft);
+    expect(manager.save).not.toHaveBeenCalledWith(
+      SurveyVersion,
+      expect.objectContaining({ id: draft.id }),
+    );
   });
 
   it('expone todos los errores en la validación previa', async () => {
@@ -392,4 +567,53 @@ function version(overrides: Partial<SurveyVersion> = {}): SurveyVersion {
     updatedAt: new Date('2026-01-01'),
     ...overrides,
   };
+}
+
+function publishableVersion(
+  overrides: Partial<SurveyVersion> = {},
+): SurveyVersion {
+  return version({
+    dimensions: [
+      {
+        id: 'dimension-id',
+        code: 'dimension_prueba',
+        title: 'Dimensión de prueba',
+        description: null,
+        order: 0,
+        sections: [
+          {
+            id: 'section-id',
+            code: 'seccion_prueba',
+            title: 'Sección de prueba',
+            description: null,
+            order: 0,
+            questions: [
+              {
+                id: 'question-id',
+                code: 'pregunta_prueba',
+                type: SurveyQuestionType.SingleChoice,
+                prompt: '¿Pregunta de prueba?',
+                helpText: null,
+                required: true,
+                order: 0,
+                validation: {},
+                applicabilityRules: [],
+                options: [
+                  {
+                    id: 'option-id',
+                    value: 'si',
+                    label: 'Sí',
+                    helpText: null,
+                    score: 100,
+                    order: 0,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ] as SurveyVersion['dimensions'],
+    ...overrides,
+  });
 }

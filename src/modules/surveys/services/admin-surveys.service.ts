@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
+import { randomUUID } from 'node:crypto';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { CompareSurveyVersionsQueryDto } from '../dto/compare-survey-versions-query.dto';
@@ -444,45 +445,99 @@ export class AdminSurveysService {
     versionId: string,
     actor: AuthenticatedUser,
   ) {
-    await this.dataSource.transaction(async (manager) => {
-      const version = await this.getLockedVersion(manager, surveyId, versionId);
-      this.assertDraft(version);
-      const withContent = await this.getVersionWithContent(
-        surveyId,
-        versionId,
-        manager,
-      );
-      this.structureValidator.validate(this.versionToInput(withContent), true);
-      const applicabilityErrors = this.applicabilityRules.validateRules(
-        withContent.dimensions.flatMap((dimension) =>
-          dimension.sections.flatMap((section) =>
-            section.questions.flatMap(
-              (question) => question.applicabilityRules ?? [],
+    try {
+      await this.dataSource.transaction(async (manager) => {
+        await this.getLockedSurvey(manager, surveyId);
+        const version = await this.getLockedVersion(
+          manager,
+          surveyId,
+          versionId,
+        );
+        this.assertDraft(version);
+        const withContent = await this.getVersionWithContent(
+          surveyId,
+          versionId,
+          manager,
+        );
+        this.structureValidator.validate(
+          this.versionToInput(withContent),
+          true,
+        );
+        const applicabilityErrors = this.applicabilityRules.validateRules(
+          withContent.dimensions.flatMap((dimension) =>
+            dimension.sections.flatMap((section) =>
+              section.questions.flatMap(
+                (question) => question.applicabilityRules ?? [],
+              ),
             ),
           ),
-        ),
-      );
-      if (applicabilityErrors.length)
-        throw new BadRequestException({
-          message: 'Las reglas de aplicabilidad contienen errores.',
-          errors: applicabilityErrors,
+        );
+        if (applicabilityErrors.length)
+          throw new BadRequestException({
+            message: 'Las reglas de aplicabilidad contienen errores.',
+            errors: applicabilityErrors,
+          });
+
+        const publishedVersions = await manager.find(SurveyVersion, {
+          where: { surveyId, status: SurveyVersionStatus.Published },
+          order: { versionNumber: 'DESC' },
+          lock: { mode: 'pessimistic_write' },
         });
-      version.status = SurveyVersionStatus.Published;
-      version.publishedAt = new Date();
-      await manager.save(SurveyVersion, version);
-      await this.audit(
-        manager,
-        actor.id,
-        'SURVEY_VERSION_PUBLISHED',
-        'SurveyVersion',
-        versionId,
-        {
-          surveyId,
-          versionNumber: version.versionNumber,
-          counts: this.structureCounts(withContent),
-        },
-      );
-    });
+        if (publishedVersions.length > 1)
+          throw new ConflictException(
+            'El cuestionario posee más de una versión publicada. Corregí la inconsistencia antes de publicar otra versión.',
+          );
+
+        const operationId = randomUUID();
+        const previousVersion = publishedVersions[0];
+        if (previousVersion) {
+          const previousStatus = previousVersion.status;
+          previousVersion.status = SurveyVersionStatus.Archived;
+          await manager.save(SurveyVersion, previousVersion);
+          await this.audit(
+            manager,
+            actor.id,
+            'SURVEY_VERSION_AUTO_ARCHIVED',
+            'SurveyVersion',
+            previousVersion.id,
+            {
+              surveyId,
+              versionNumber: previousVersion.versionNumber,
+              previousStatus,
+              newStatus: SurveyVersionStatus.Archived,
+              replacementVersionId: version.id,
+              publicationOperationId: operationId,
+            },
+          );
+        }
+
+        version.status = SurveyVersionStatus.Published;
+        version.publishedAt = new Date();
+        await manager.save(SurveyVersion, version);
+        await this.audit(
+          manager,
+          actor.id,
+          'SURVEY_VERSION_PUBLISHED',
+          'SurveyVersion',
+          versionId,
+          {
+            surveyId,
+            versionNumber: version.versionNumber,
+            previousStatus: SurveyVersionStatus.Draft,
+            newStatus: SurveyVersionStatus.Published,
+            previousPublishedVersionId: previousVersion?.id ?? null,
+            publicationOperationId: operationId,
+            counts: this.structureCounts(withContent),
+          },
+        );
+      });
+    } catch (error) {
+      if (this.isSinglePublishedVersionViolation(error))
+        throw new ConflictException(
+          'Otra versión del cuestionario fue publicada simultáneamente. Actualizá la pantalla y volvé a intentarlo.',
+        );
+      throw error;
+    }
     return this.findVersion(surveyId, versionId);
   }
 
@@ -613,6 +668,15 @@ export class AdminSurveysService {
     });
     if (!version) throw new NotFoundException('Versión no encontrada.');
     return version;
+  }
+
+  private async getLockedSurvey(manager: EntityManager, surveyId: string) {
+    const survey = await manager.findOne(Survey, {
+      where: { id: surveyId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!survey) throw new NotFoundException('Cuestionario no encontrado.');
+    return survey;
   }
 
   private assertDraft(version: SurveyVersion) {
@@ -1007,5 +1071,16 @@ export class AdminSurveysService {
         'Ya existe un cuestionario o elemento con ese código.',
       );
     throw error;
+  }
+
+  private isSinglePublishedVersionViolation(error: unknown) {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === '23505' &&
+      'constraint' in error &&
+      error.constraint === 'UQ_survey_versions_single_published'
+    );
   }
 }

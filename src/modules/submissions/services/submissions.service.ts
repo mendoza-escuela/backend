@@ -17,8 +17,8 @@ import {
   SurveyQuestion,
   SurveyQuestionValidation,
 } from '../../surveys/entities/survey-question.entity';
-import { SurveyVersionStatus } from '../../surveys/entities/survey-version-status.enum';
 import { SurveyVersion } from '../../surveys/entities/survey-version.entity';
+import { isHistoricallyAvailableSurveyVersion } from '../../surveys/policies/survey-version-availability.policy';
 import {
   QuestionApplicabilityResolution,
   SurveyApplicabilityResult,
@@ -457,7 +457,10 @@ export class SubmissionsService {
         },
       },
     });
-    if (!version || version.status !== SurveyVersionStatus.Published)
+    if (
+      !version ||
+      !isHistoricallyAvailableSurveyVersion(version.status, version.publishedAt)
+    )
       throw new ConflictException(
         'La versión asociada a la presentación no está disponible.',
       );
@@ -788,7 +791,7 @@ export class SubmissionsService {
     if (
       !version ||
       version.id !== submission.surveyVersionId ||
-      version.status !== SurveyVersionStatus.Published
+      !isHistoricallyAvailableSurveyVersion(version.status, version.publishedAt)
     )
       throw new ConflictException(
         'La versión asociada a la presentación no está disponible.',
