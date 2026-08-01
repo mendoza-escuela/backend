@@ -54,8 +54,6 @@ export class EvaluationConfigurationsService {
   async active(manager: EntityManager) {
     const configuration = await manager.findOne(EvaluationConfiguration, {
       where: { status: EvaluationConfigurationStatus.Active },
-      relations: { starRanges: true },
-      order: { starRanges: { order: 'ASC' } },
       lock: { mode: 'pessimistic_read' },
     });
     if (!configuration)
@@ -64,6 +62,13 @@ export class EvaluationConfigurationsService {
         message:
           'No existe una configuración de evaluación activa. El envío no fue realizado.',
       });
+    // PostgreSQL no permite aplicar FOR SHARE al lado nullable del LEFT JOIN
+    // que TypeORM genera al incluir starRanges. La configuración se bloquea
+    // primero y sus rangos inmutables se cargan luego en una consulta separada.
+    configuration.starRanges = await manager.find(EvaluationStarRange, {
+      where: { configurationId: configuration.id },
+      order: { order: 'ASC' },
+    });
     this.validator.validate(this.rangeInputs(configuration));
     return configuration;
   }

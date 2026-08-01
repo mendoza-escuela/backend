@@ -18,6 +18,7 @@ import { SurveyVersion } from '../../surveys/entities/survey-version.entity';
 import { SurveyApplicabilityService } from '../../surveys/services/survey-applicability.service';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { SurveyAnswer } from '../entities/survey-answer.entity';
+import { SubmissionQuestionApplicability } from '../entities/submission-question-applicability.entity';
 import { SurveySubmission } from '../entities/survey-submission.entity';
 import { SubmissionsService } from './submissions.service';
 
@@ -53,6 +54,7 @@ describe('SubmissionsService', () => {
       (_entity: unknown, attributes: Record<string, unknown>) => attributes,
     ),
     findOne: jest.fn(),
+    find: jest.fn(),
     save: jest.fn(),
     delete: jest.fn(),
     update: jest.fn(),
@@ -83,6 +85,8 @@ describe('SubmissionsService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    manager.findOne.mockReset();
+    manager.find.mockReset();
     service = new SubmissionsService(
       dataSource as unknown as DataSource,
       campaignsService as unknown as CampaignsService,
@@ -382,6 +386,33 @@ describe('SubmissionsService', () => {
     );
   });
 
+  it('loads workspace collections with separate queries to avoid cartesian growth', async () => {
+    const submission = workspaceSubmission(
+      workspaceVersion(),
+      schoolSnapshot(),
+      'submitted',
+      [],
+    );
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school,
+      rectification: { isRectified: true },
+    });
+    manager.findOne.mockResolvedValue(submission);
+    manager.find.mockResolvedValue([]);
+    surveyApplicability.evaluate.mockReturnValue(applicabilityFor([]));
+
+    await service.workspace(campaign.id, actor);
+
+    expect(manager.find).toHaveBeenCalledWith(
+      SurveyAnswer,
+      expect.objectContaining({ where: { submissionId: submission.id } }),
+    );
+    expect(manager.find).toHaveBeenCalledWith(
+      SubmissionQuestionApplicability,
+      expect.objectContaining({ where: { submissionId: submission.id } }),
+    );
+  });
+
   it('recalculates a reopened draft after adopting a newer rectification', async () => {
     const version = workspaceVersion();
     const linkedSnapshot = schoolSnapshot();
@@ -424,6 +455,44 @@ describe('SubmissionsService', () => {
     );
     expect(submission.schoolRectificationId).toBe('new-rectification-id');
     expect(submission.schoolProfileSnapshot).toEqual(updatedSnapshot);
+    expect(manager.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not rewrite unchanged applicability decisions while opening a draft', async () => {
+    const version = workspaceVersion();
+    const applicability = applicabilityFor([
+      version.dimensions[0].sections[0].questions[0].id,
+    ]);
+    const submission = workspaceSubmission(
+      version,
+      schoolSnapshot(),
+      'draft',
+      applicability.decisions,
+    );
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school,
+      rectification: {
+        id: submission.schoolRectificationId,
+        isRectified: true,
+        snapshot: submission.schoolProfileSnapshot,
+      },
+    });
+    manager.findOne.mockResolvedValue(submission);
+    surveyApplicability.evaluate.mockReturnValue({
+      ...applicability,
+      evaluatedAt: new Date(applicability.evaluatedAt.getTime() + 1_000),
+      decisions: applicability.decisions.map((decision) => ({
+        ...decision,
+        evaluatedAt: new Date(decision.evaluatedAt.getTime() + 1_000),
+      })),
+    });
+
+    await service.workspace(campaign.id, actor);
+
+    expect(manager.delete).not.toHaveBeenCalledWith(
+      SubmissionQuestionApplicability,
+      expect.anything(),
+    );
   });
 
   it('uses persisted applicability for a historical submission', async () => {

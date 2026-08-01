@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
+import { isDeepStrictEqual } from 'node:util';
 import { DataSource, EntityManager, In } from 'typeorm';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
@@ -240,10 +241,9 @@ export class SubmissionsService {
         rectification,
         actor.id,
       );
-      const version = await this.getVersion(
-        manager,
-        submission.surveyVersionId,
-      );
+      const version =
+        submission.surveyVersion ??
+        (await this.getVersion(manager, submission.surveyVersionId));
       const applicability = await this.resolveApplicability(
         manager,
         submission,
@@ -293,10 +293,9 @@ export class SubmissionsService {
         rectification,
         actor.id,
       );
-      const version = await this.getVersion(
-        manager,
-        submission.surveyVersionId,
-      );
+      const version =
+        submission.surveyVersion ??
+        (await this.getVersion(manager, submission.surveyVersionId));
       const applicability = await this.resolveApplicability(
         manager,
         submission,
@@ -386,8 +385,6 @@ export class SubmissionsService {
       where: { campaignId, schoolId },
       relations: {
         campaign: { surveyVersion: { survey: true } },
-        answers: { option: true },
-        applicabilityDecisions: true,
         surveyVersion: {
           survey: true,
           dimensions: {
@@ -423,6 +420,21 @@ export class SubmissionsService {
       throw new NotFoundException(
         'Todavía no existe una presentación para esta campaña.',
       );
+    // Estas colecciones no comparten una rama relacional. Incluirlas en la
+    // consulta anterior multiplica respuestas x decisiones x preguntas y
+    // vuelve muy lenta la apertura del cuestionario.
+    const [answers, applicabilityDecisions] = await Promise.all([
+      manager.find(SurveyAnswer, {
+        where: { submissionId: submission.id },
+        relations: { option: true },
+      }),
+      manager.find(SubmissionQuestionApplicability, {
+        where: { submissionId: submission.id },
+      }),
+    ]);
+    submission.answers = answers ?? submission.answers ?? [];
+    submission.applicabilityDecisions =
+      applicabilityDecisions ?? submission.applicabilityDecisions ?? [];
     return submission;
   }
 
@@ -804,7 +816,10 @@ export class SubmissionsService {
       version,
       submission.schoolProfileSnapshot,
     );
-    if (submission.status === SubmissionStatus.Draft)
+    if (
+      submission.status === SubmissionStatus.Draft &&
+      !this.sameApplicabilityDecisions(stored, evaluated.decisions)
+    )
       await this.persistApplicability(manager, submission, evaluated);
     return {
       ...evaluated,
@@ -813,6 +828,32 @@ export class SubmissionsService {
           ? ('reconstructed' as const)
           : evaluated.source,
     };
+  }
+
+  /** Evita reescribir decisiones idénticas en cada apertura o autoguardado. */
+  private sameApplicabilityDecisions(
+    stored: SubmissionQuestionApplicability[],
+    evaluated: QuestionApplicabilityResolution[],
+  ) {
+    if (stored.length !== evaluated.length) return false;
+    const storedByQuestion = new Map(
+      stored.map((decision) => [decision.questionId, decision]),
+    );
+    return evaluated.every((decision) => {
+      const previous = storedByQuestion.get(decision.questionId);
+      return (
+        previous?.surveyVersionId === decision.surveyVersionId &&
+        previous.status === decision.status &&
+        previous.appliedRuleId === decision.appliedRuleId &&
+        previous.reasonCode === decision.reasonCode &&
+        previous.reasonDescription === decision.reasonDescription &&
+        isDeepStrictEqual(previous.missingFeatures, decision.missingFeatures) &&
+        isDeepStrictEqual(
+          previous.relevantSchoolFacts,
+          decision.relevantSchoolFacts,
+        )
+      );
+    });
   }
 
   private applicabilityFromStored(
