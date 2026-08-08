@@ -5,8 +5,9 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
+import { randomUUID } from 'crypto';
 import ExcelJS from 'exceljs';
-import { DataSource, EntityManager, SelectQueryBuilder } from 'typeorm';
+import { DataSource, EntityManager, In, SelectQueryBuilder } from 'typeorm';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { AuthSession } from '../../auth/entities/auth-session.entity';
@@ -15,10 +16,25 @@ import { UserSchool } from '../../users/entities/user-school.entity';
 import { User } from '../../users/entities/user.entity';
 import { AssignSchoolUserDto } from '../dto/assign-school-user.dto';
 import { CreateSchoolDto } from '../dto/create-school.dto';
+import { ListAssignableUsersQueryDto } from '../dto/list-assignable-users-query.dto';
 import { ListSchoolsQueryDto } from '../dto/list-schools-query.dto';
 import { UpdateSchoolDto } from '../dto/update-school.dto';
+import { RectifySchoolDto } from '../dto/rectify-school.dto';
 import { SchoolUserAssignmentHistory } from '../entities/school-user-assignment-history.entity';
+import {
+  SchoolRectification,
+  SchoolRectificationSnapshot,
+} from '../entities/school-rectification.entity';
+import { EducationLevelCatalog } from '../entities/education-level-catalog.entity';
+import { SchoolEducationLevel } from '../entities/school-education-level.entity';
+import { SchoolRectificationEducationLevel } from '../entities/school-rectification-education-level.entity';
+import { SchoolShiftCatalog } from '../entities/school-shift-catalog.entity';
 import { School } from '../entities/school.entity';
+
+type SelectedEducationLevel = {
+  level: EducationLevelCatalog;
+  enrollment: number | null;
+};
 
 @Injectable()
 export class SchoolsService {
@@ -26,11 +42,87 @@ export class SchoolsService {
 
   async list(query: ListSchoolsQueryDto) {
     const builder = this.filteredBuilder(query)
+      .select([
+        'school.id',
+        'school.cue',
+        'school.name',
+        'school.directorName',
+        'school.schoolNumber',
+        'school.department',
+        'school.locality',
+        'school.educationLevel',
+        'school.managementType',
+        'school.enrollment',
+        'school.isActive',
+      ])
       .skip((query.page - 1) * query.limit)
       .take(query.limit);
     const [items, total] = await builder.getManyAndCount();
     return {
       items,
+      pagination: {
+        page: query.page,
+        limit: query.limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / query.limit)),
+      },
+    };
+  }
+
+  /**
+   * Lista usuarios Colegio que pueden asociarse al establecimiento.
+   *
+   * La disponibilidad se resuelve y pagina en PostgreSQL para evitar descargar
+   * usuarios ocupados y filtrar grandes colecciones en el navegador.
+   */
+  async listAssignableUsers(
+    schoolId: string,
+    query: ListAssignableUsersQueryDto,
+  ) {
+    if (
+      !(await this.dataSource.getRepository(School).existsBy({ id: schoolId }))
+    )
+      throw new NotFoundException('Colegio no encontrado.');
+
+    const builder = this.dataSource
+      .getRepository(User)
+      .createQueryBuilder('user')
+      .leftJoin('user.userSchools', 'assignment')
+      .select([
+        'user.id',
+        'user.firstName',
+        'user.lastName',
+        'user.email',
+        'user.isActive',
+      ])
+      .where('user.role = :role', { role: UserRole.School })
+      .andWhere('user.isActive = true')
+      .andWhere(
+        '(assignment.userId IS NULL OR assignment.schoolId = :schoolId)',
+        { schoolId },
+      )
+      .orderBy('user.lastName', 'ASC')
+      .addOrderBy('user.firstName', 'ASC')
+      .addOrderBy('user.id', 'ASC')
+      .skip((query.page - 1) * query.limit)
+      .take(query.limit);
+
+    if (query.search) {
+      builder.andWhere(
+        `(LOWER(user.firstName) LIKE :search OR LOWER(user.lastName) LIKE :search OR LOWER(user.email) LIKE :search)`,
+        { search: `%${query.search.toLowerCase()}%` },
+      );
+    }
+
+    const [users, total] = await builder.getManyAndCount();
+    return {
+      items: users.map((user) => ({
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        isActive: user.isActive,
+      })),
       pagination: {
         page: query.page,
         limit: query.limit,
@@ -67,9 +159,14 @@ export class SchoolsService {
   }
 
   async findOne(id: string) {
-    const school = await this.dataSource
-      .getRepository(School)
-      .findOneBy({ id });
+    const school = await this.dataSource.getRepository(School).findOne({
+      where: { id },
+      relations: {
+        shiftCatalog: true,
+        structuredEducationLevels: { level: true },
+      },
+      order: { structuredEducationLevels: { order: 'ASC' } },
+    });
     if (!school) throw new NotFoundException('Colegio no encontrado.');
     const users = await this.dataSource
       .getRepository(User)
@@ -124,8 +221,17 @@ export class SchoolsService {
       order: { createdAt: 'DESC' },
       take: 50,
     });
+    const rectifications = await this.rectificationHistory(id);
     return {
-      ...school,
+      ...this.serializeSchool(school),
+      rectification: this.rectificationStatus(rectifications),
+      rectifications: rectifications.map((rectification) => ({
+        id: rectification.id,
+        periodYear: rectification.periodYear,
+        rectifiedAt: rectification.rectifiedAt,
+        actorUser: this.userSummary(rectification.actorUser),
+        snapshot: rectification.snapshot,
+      })),
       users: users.map((user) => ({
         id: user.id,
         firstName: user.firstName,
@@ -148,7 +254,8 @@ export class SchoolsService {
       campaigns: {
         available: false,
         items: [],
-        message: 'El módulo de campañas aún no está implementado.',
+        message:
+          'El seguimiento administrativo de campañas por colegio se incorporará en el módulo de presentaciones.',
       },
       evaluations: {
         available: false,
@@ -170,13 +277,248 @@ export class SchoolsService {
       .getRepository(UserSchool)
       .findOne({
         where: { userId },
-        relations: { school: true },
       });
     if (!association)
       throw new NotFoundException(
         'Tu cuenta todavía no tiene un establecimiento asociado.',
       );
-    return association.school;
+    const school = await this.loadStructuredSchool(
+      this.dataSource.manager,
+      association.schoolId,
+    );
+    const rectifications = await this.rectificationHistory(
+      association.schoolId,
+    );
+    return {
+      ...this.serializeSchool(school),
+      rectification: this.rectificationStatus(rectifications),
+      rectifications: rectifications.map((rectification) => ({
+        id: rectification.id,
+        periodYear: rectification.periodYear,
+        rectifiedAt: rectification.rectifiedAt,
+        actorUser: this.userSummary(rectification.actorUser),
+        snapshot: rectification.snapshot,
+      })),
+    };
+  }
+
+  /** Catálogos compartidos por backend para la rectificación escolar. */
+  async rectificationCatalogsForUser(userId: string) {
+    const association = await this.dataSource
+      .getRepository(UserSchool)
+      .findOneBy({ userId });
+    if (!association)
+      throw new NotFoundException(
+        'Tu cuenta todavía no tiene un establecimiento asociado.',
+      );
+    return this.rectificationCatalogs();
+  }
+
+  async rectificationCatalogs() {
+    const [shifts, educationLevels] = await Promise.all([
+      this.dataSource.getRepository(SchoolShiftCatalog).find({
+        order: { order: 'ASC', label: 'ASC' },
+      }),
+      this.dataSource.getRepository(EducationLevelCatalog).find({
+        order: { order: 'ASC', label: 'ASC' },
+      }),
+    ]);
+    return {
+      shifts: {
+        available: shifts.length > 0,
+        message: shifts.length
+          ? null
+          : 'El catálogo oficial de jornadas todavía no fue configurado.',
+        items: shifts.map((shift) => this.catalogSummary(shift)),
+      },
+      educationLevels: {
+        available: educationLevels.length > 0,
+        message: educationLevels.length
+          ? null
+          : 'El catálogo oficial de niveles educativos todavía no fue configurado.',
+        items: educationLevels.map((level) => this.catalogSummary(level)),
+      },
+    };
+  }
+
+  /**
+   * Resuelve el establecimiento desde la sesión y verifica la rectificación
+   * anual sin aceptar identificadores enviados por el navegador.
+   */
+  async evaluationContextForUser(
+    userId: string,
+    manager: EntityManager = this.dataSource.manager,
+  ) {
+    const association = await manager.findOne(UserSchool, {
+      where: { userId },
+      relations: { school: true },
+    });
+    if (!association)
+      throw new NotFoundException(
+        'Tu cuenta todavía no tiene un establecimiento asociado.',
+      );
+    const periodYear = this.currentPeriodYear();
+    const rectification = await manager.findOne(SchoolRectification, {
+      where: {
+        schoolId: association.schoolId,
+        periodYear,
+      },
+      order: { rectifiedAt: 'DESC' },
+    });
+    return {
+      school: association.school,
+      rectification: {
+        id: rectification?.id ?? null,
+        periodYear,
+        isRectified: Boolean(rectification),
+        rectifiedAt: rectification?.rectifiedAt ?? null,
+        snapshot: rectification?.snapshot ?? null,
+      },
+    };
+  }
+
+  /** Rectifica la ficha del colegio asociado sin aceptar IDs del navegador. */
+  async rectifyForUser(actor: AuthenticatedUser, dto: RectifySchoolDto) {
+    const association = await this.dataSource
+      .getRepository(UserSchool)
+      .findOneBy({ userId: actor.id });
+    if (!association)
+      throw new NotFoundException(
+        'Tu cuenta todavía no tiene un establecimiento asociado.',
+      );
+    await this.rectify(association.schoolId, dto, actor);
+    return this.findForUser(actor.id);
+  }
+
+  /**
+   * Confirma los datos obligatorios para el año calendario y conserva un
+   * snapshot independiente de futuras modificaciones de la ficha actual.
+   */
+  async rectify(
+    schoolId: string,
+    dto: RectifySchoolDto,
+    actor: AuthenticatedUser,
+  ) {
+    const periodYear = this.currentPeriodYear();
+    try {
+      await this.dataSource.transaction(async (manager) => {
+        const school = await manager.getRepository(School).findOne({
+          where: { id: schoolId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!school) throw new NotFoundException('Colegio no encontrado.');
+        this.assertExpectedUpdate(school, dto.expectedUpdatedAt);
+        const currentStructured = await this.structuredState(manager, school);
+        const normalized = {
+          name: dto.name,
+          cue: dto.cue.toUpperCase(),
+          directorName: dto.directorName,
+          address: dto.address,
+          locality: dto.locality,
+          scope: dto.scope,
+          ...(dto.educationLevel !== undefined
+            ? { educationLevel: dto.educationLevel }
+            : {}),
+          ...(dto.shift !== undefined ? { shift: dto.shift } : {}),
+        };
+        if (normalized.cue !== school.cue)
+          await this.assertCueUnique(manager, normalized.cue, schoolId);
+        const selectedShift = await this.resolveShift(
+          manager,
+          school,
+          dto.shiftCatalogId,
+          currentStructured.shiftCatalog,
+        );
+        const selectedLevels = await this.resolveEducationLevels(
+          manager,
+          schoolId,
+          dto.educationLevels,
+          currentStructured.educationLevels,
+        );
+        const before = this.rectificationSnapshot(
+          school,
+          currentStructured.shiftCatalog,
+          currentStructured.educationLevels,
+        );
+        Object.assign(school, normalized);
+        if (dto.hasKiosk !== undefined) school.hasKiosk = dto.hasKiosk;
+        if (dto.hasFoodService !== undefined)
+          school.hasFoodService = dto.hasFoodService;
+        if (dto.isBoarding !== undefined) school.isBoarding = dto.isBoarding;
+        if (dto.shiftCatalogId !== undefined)
+          school.shiftCatalogId = selectedShift?.id ?? null;
+        if (dto.enrollment !== undefined) school.enrollment = dto.enrollment;
+        await manager.save(School, school);
+
+        if (dto.educationLevels !== undefined) {
+          await manager.delete(SchoolEducationLevel, { schoolId });
+          if (selectedLevels.length)
+            await manager.save(
+              SchoolEducationLevel,
+              selectedLevels.map((selected, order) =>
+                manager.create(SchoolEducationLevel, {
+                  schoolId,
+                  levelId: selected.level.id,
+                  enrollment: selected.enrollment,
+                  order,
+                }),
+              ),
+            );
+        }
+
+        const rectificationId = randomUUID();
+        const capturedAt = new Date();
+        const finalShift =
+          dto.shiftCatalogId === undefined
+            ? currentStructured.shiftCatalog
+            : selectedShift;
+        const finalLevels =
+          dto.educationLevels === undefined
+            ? currentStructured.educationLevels
+            : selectedLevels;
+        const snapshot = this.rectificationSnapshot(
+          school,
+          finalShift,
+          finalLevels,
+          rectificationId,
+          capturedAt,
+        );
+        const rectification = await manager.save(SchoolRectification, {
+          id: rectificationId,
+          schoolId,
+          periodYear,
+          actorUserId: actor.id,
+          snapshot,
+          rectifiedAt: capturedAt,
+        });
+        if (finalLevels.length)
+          await manager.save(
+            SchoolRectificationEducationLevel,
+            finalLevels.map((selected, order) =>
+              manager.create(SchoolRectificationEducationLevel, {
+                rectificationId,
+                levelId: selected.level.id,
+                levelCode: selected.level.code,
+                levelLabel: selected.level.label,
+                enrollment: selected.enrollment,
+                order,
+              }),
+            ),
+          );
+        await this.audit(manager, actor.id, 'SCHOOL_RECTIFIED', schoolId, {
+          periodYear,
+          rectificationId: rectification.id,
+          changes: this.diff(
+            before,
+            this.rectificationSnapshot(school, finalShift, finalLevels),
+          ),
+          snapshot,
+        });
+      });
+      return this.findOne(schoolId);
+    } catch (error) {
+      this.rethrowUnique(error);
+    }
   }
 
   async create(dto: CreateSchoolDto, actor: AuthenticatedUser) {
@@ -324,7 +666,46 @@ export class SchoolsService {
     format: 'csv' | 'xlsx',
     actor: AuthenticatedUser,
   ) {
-    const schools = await this.filteredBuilder(query).getMany();
+    const schools = await this.filteredBuilder(query)
+      .select([
+        'school.id',
+        'school.cue',
+        'school.name',
+        'school.directorName',
+        'school.schoolNumber',
+        'school.department',
+        'school.locality',
+        'school.address',
+        'school.postalCode',
+        'school.educationLevel',
+        'school.managementType',
+        'school.scope',
+        'school.shift',
+        'school.email',
+        'school.phone',
+        'school.referentFirstName',
+        'school.referentLastName',
+        'school.enrollment',
+        'school.isActive',
+      ])
+      .getMany();
+    const currentYear = this.currentPeriodYear();
+    const rectifiedRows = schools.length
+      ? await this.dataSource
+          .getRepository(SchoolRectification)
+          .createQueryBuilder('rectification')
+          .select('rectification.schoolId', 'schoolId')
+          .addSelect('MAX(rectification.rectifiedAt)', 'rectifiedAt')
+          .where('rectification.schoolId IN (:...schoolIds)', {
+            schoolIds: schools.map((school) => school.id),
+          })
+          .andWhere('rectification.periodYear = :currentYear', { currentYear })
+          .groupBy('rectification.schoolId')
+          .getRawMany<{ schoolId: string; rectifiedAt: Date }>()
+      : [];
+    const rectifiedBySchool = new Map(
+      rectifiedRows.map((row) => [row.schoolId, row.rectifiedAt]),
+    );
     await this.dataSource.getRepository(AuditLog).save({
       actorUserId: actor.id,
       action: 'SCHOOLS_EXPORTED',
@@ -335,10 +716,12 @@ export class SchoolsService {
     const headers = [
       'CUE',
       'Nombre',
+      'Director/a',
       'Número',
       'Departamento',
       'Localidad',
       'Dirección',
+      'Código postal',
       'Nivel',
       'Gestión',
       'Ámbito',
@@ -348,14 +731,19 @@ export class SchoolsService {
       'Referente',
       'Matrícula',
       'Estado',
+      'Período de rectificación',
+      'Rectificada',
+      'Fecha de rectificación',
     ];
     const rows = schools.map((school) => [
       school.cue,
       school.name,
+      school.directorName,
       school.schoolNumber ?? '',
       school.department,
       school.locality,
       school.address,
+      school.postalCode ?? '',
       school.educationLevel,
       school.managementType,
       school.scope ?? '',
@@ -365,6 +753,9 @@ export class SchoolsService {
       `${school.referentLastName}, ${school.referentFirstName}`,
       school.enrollment,
       school.isActive ? 'Activo' : 'Inactivo',
+      currentYear,
+      rectifiedBySchool.has(school.id) ? 'Sí' : 'No',
+      rectifiedBySchool.get(school.id)?.toISOString() ?? '',
     ]);
     if (format === 'csv')
       return {
@@ -506,6 +897,7 @@ export class SchoolsService {
     return {
       cue: school.cue,
       name: school.name,
+      directorName: school.directorName,
       schoolNumber: school.schoolNumber,
       department: school.department,
       locality: school.locality,
@@ -515,6 +907,7 @@ export class SchoolsService {
       managementType: school.managementType,
       scope: school.scope,
       shift: school.shift,
+      shiftCatalogId: school.shiftCatalogId,
       phone: school.phone,
       email: school.email,
       referentFirstName: school.referentFirstName,
@@ -522,9 +915,228 @@ export class SchoolsService {
       referentEmail: school.referentEmail,
       referentPhone: school.referentPhone,
       enrollment: school.enrollment,
+      hasKiosk: school.hasKiosk,
+      hasFoodService: school.hasFoodService,
+      isBoarding: school.isBoarding,
       characteristics: school.characteristics,
       isActive: school.isActive,
     };
+  }
+
+  /**
+   * Construye una copia autocontenida. Los nombres visibles se copian para que
+   * un cambio posterior de catálogo no reescriba la historia.
+   */
+  private rectificationSnapshot(
+    school: School,
+    shiftCatalog: SchoolShiftCatalog | null,
+    educationLevels: SelectedEducationLevel[],
+    sourceRectificationId?: string,
+    capturedAt?: Date,
+  ): SchoolRectificationSnapshot {
+    return {
+      ...(sourceRectificationId
+        ? {
+            schemaVersion: 2,
+            sourceRectificationId,
+            capturedAt: (capturedAt ?? new Date()).toISOString(),
+          }
+        : {}),
+      name: school.name,
+      cue: school.cue,
+      directorName: school.directorName,
+      address: school.address,
+      locality: school.locality,
+      scope: school.scope,
+      educationLevel: school.educationLevel,
+      shift: school.shift,
+      hasKiosk: school.hasKiosk ?? null,
+      hasFoodService: school.hasFoodService ?? null,
+      isBoarding: school.isBoarding ?? null,
+      shiftCatalog: shiftCatalog
+        ? {
+            id: shiftCatalog.id,
+            code: shiftCatalog.code,
+            label: shiftCatalog.label,
+          }
+        : null,
+      educationLevels: educationLevels.map(({ level, enrollment }) => ({
+        id: level.id,
+        code: level.code,
+        label: level.label,
+        enrollment,
+      })),
+      enrollmentTotal: school.enrollment ?? null,
+    };
+  }
+
+  private async loadStructuredSchool(manager: EntityManager, schoolId: string) {
+    const school = await manager.findOne(School, {
+      where: { id: schoolId },
+      relations: {
+        shiftCatalog: true,
+        structuredEducationLevels: { level: true },
+      },
+      order: { structuredEducationLevels: { order: 'ASC' } },
+    });
+    if (!school) throw new NotFoundException('Colegio no encontrado.');
+    return school;
+  }
+
+  private serializeSchool(school: School) {
+    const { structuredEducationLevels, ...fields } = school;
+    return {
+      ...fields,
+      shiftCatalog: school.shiftCatalog
+        ? this.catalogSummary(school.shiftCatalog)
+        : null,
+      educationLevels: (structuredEducationLevels ?? [])
+        .sort((left, right) => left.order - right.order)
+        .map((selection) => ({
+          levelId: selection.levelId,
+          code: selection.level.code,
+          label: selection.level.label,
+          isActive: selection.level.isActive,
+          enrollment: selection.enrollment,
+          order: selection.order,
+        })),
+    };
+  }
+
+  private async structuredState(
+    manager: EntityManager,
+    school: School,
+  ): Promise<{
+    shiftCatalog: SchoolShiftCatalog | null;
+    educationLevels: SelectedEducationLevel[];
+  }> {
+    const [shiftCatalog, selections] = await Promise.all([
+      school.shiftCatalogId
+        ? manager.findOneBy(SchoolShiftCatalog, {
+            id: school.shiftCatalogId,
+          })
+        : Promise.resolve(null),
+      manager.find(SchoolEducationLevel, {
+        where: { schoolId: school.id },
+        relations: { level: true },
+        order: { order: 'ASC' },
+      }),
+    ]);
+    return {
+      shiftCatalog,
+      educationLevels: selections.map((selection) => ({
+        level: selection.level,
+        enrollment: selection.enrollment,
+      })),
+    };
+  }
+
+  private async resolveShift(
+    manager: EntityManager,
+    school: School,
+    requestedId: string | null | undefined,
+    current: SchoolShiftCatalog | null,
+  ) {
+    if (requestedId === undefined) return current;
+    if (requestedId === null) return null;
+    const shift = await manager.findOneBy(SchoolShiftCatalog, {
+      id: requestedId,
+    });
+    if (!shift)
+      throw new BadRequestException(
+        'La jornada seleccionada no existe en el catálogo.',
+      );
+    if (!shift.isActive && school.shiftCatalogId !== shift.id)
+      throw new BadRequestException(
+        'La jornada seleccionada está inactiva y no puede asignarse.',
+      );
+    return shift;
+  }
+
+  private async resolveEducationLevels(
+    manager: EntityManager,
+    schoolId: string,
+    requested:
+      Array<{ levelId: string; enrollment?: number | null }> | undefined,
+    current: SelectedEducationLevel[],
+  ): Promise<SelectedEducationLevel[]> {
+    if (requested === undefined) return current;
+    const ids = requested.map(({ levelId }) => levelId);
+    if (new Set(ids).size !== ids.length)
+      throw new BadRequestException(
+        'No se puede seleccionar dos veces el mismo nivel educativo.',
+      );
+    if (!ids.length) return [];
+    const levels = await manager.findBy(EducationLevelCatalog, { id: In(ids) });
+    if (levels.length !== ids.length)
+      throw new BadRequestException(
+        'Uno de los niveles educativos no existe en el catálogo.',
+      );
+    const currentIds = new Set(current.map(({ level }) => level.id));
+    const byId = new Map(levels.map((level) => [level.id, level]));
+    return requested.map(({ levelId, enrollment }) => {
+      const level = byId.get(levelId);
+      if (!level)
+        throw new BadRequestException(
+          'Uno de los niveles educativos no existe en el catálogo.',
+        );
+      if (!level.isActive && !currentIds.has(levelId))
+        throw new BadRequestException(
+          `El nivel educativo “${level.label}” está inactivo y no puede asignarse.`,
+        );
+      return { level, enrollment: enrollment ?? null };
+    });
+  }
+
+  private assertExpectedUpdate(school: School, expected?: string) {
+    if (!expected) return;
+    const expectedTime = new Date(expected).getTime();
+    const currentTime = school.updatedAt?.getTime();
+    if (currentTime !== expectedTime)
+      throw new ConflictException(
+        'La ficha fue modificada por otro usuario. Recargá la página antes de confirmar.',
+      );
+  }
+
+  private catalogSummary(catalog: SchoolShiftCatalog | EducationLevelCatalog) {
+    return {
+      id: catalog.id,
+      code: catalog.code,
+      label: catalog.label,
+      isActive: catalog.isActive,
+      order: catalog.order,
+    };
+  }
+
+  private rectificationHistory(schoolId: string) {
+    return this.dataSource.getRepository(SchoolRectification).find({
+      where: { schoolId },
+      relations: { actorUser: true },
+      order: { rectifiedAt: 'DESC' },
+      take: 50,
+    });
+  }
+
+  private rectificationStatus(rectifications: SchoolRectification[]) {
+    const periodYear = this.currentPeriodYear();
+    const latest = rectifications.find(
+      (rectification) => rectification.periodYear === periodYear,
+    );
+    return {
+      periodYear,
+      isRectified: Boolean(latest),
+      rectifiedAt: latest?.rectifiedAt ?? null,
+      rectifiedBy: this.userSummary(latest?.actorUser ?? null),
+    };
+  }
+
+  private currentPeriodYear() {
+    return Number(
+      new Intl.DateTimeFormat('en', {
+        timeZone: 'America/Argentina/Mendoza',
+        year: 'numeric',
+      }).format(new Date()),
+    );
   }
   private diff(
     before: Record<string, unknown>,

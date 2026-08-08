@@ -135,6 +135,7 @@ export class SurveyVersionComparator {
               fields: {
                 label: option.label,
                 helpText: option.helpText,
+                score: option.score,
                 order: option.order,
               },
             });

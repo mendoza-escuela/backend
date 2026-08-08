@@ -71,6 +71,12 @@ export class SurveyOptionInputDto {
   @IsString()
   @MaxLength(2000)
   helpText?: string | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  score?: number | null;
 }
 
 export class SurveyQuestionInputDto {

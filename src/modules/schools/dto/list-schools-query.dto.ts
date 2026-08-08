@@ -6,17 +6,49 @@ import {
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
+const optionalText = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.trim() || undefined : value;
+
 export class ListSchoolsQueryDto {
-  @IsOptional() @IsString() search?: string;
-  @IsOptional() @IsString() department?: string;
-  @IsOptional() @IsString() locality?: string;
-  @IsOptional() @IsString() educationLevel?: string;
-  @IsOptional() @IsString() managementType?: string;
-  @IsOptional() @IsString() scope?: string;
-  @IsOptional() @IsString() shift?: string;
+  @IsOptional()
+  @Transform(optionalText)
+  @IsString()
+  @MaxLength(120)
+  search?: string;
+  @IsOptional()
+  @Transform(optionalText)
+  @IsString()
+  @MaxLength(120)
+  department?: string;
+  @IsOptional()
+  @Transform(optionalText)
+  @IsString()
+  @MaxLength(120)
+  locality?: string;
+  @IsOptional()
+  @Transform(optionalText)
+  @IsString()
+  @MaxLength(120)
+  educationLevel?: string;
+  @IsOptional()
+  @Transform(optionalText)
+  @IsString()
+  @MaxLength(120)
+  managementType?: string;
+  @IsOptional()
+  @Transform(optionalText)
+  @IsString()
+  @MaxLength(120)
+  scope?: string;
+  @IsOptional()
+  @Transform(optionalText)
+  @IsString()
+  @MaxLength(120)
+  shift?: string;
   @IsOptional() @IsIn(['csv', 'xlsx']) format?: 'csv' | 'xlsx';
 
   @IsOptional()

@@ -14,6 +14,17 @@ import { SurveysService } from './services/surveys.service';
 import { AdminSurveysService } from './services/admin-surveys.service';
 import { SurveyStructureValidator } from './services/survey-structure-validator.service';
 import { SurveyVersionComparator } from './services/survey-version-comparator.service';
+import { BulkSurveyImportService } from './services/bulk-survey-import.service';
+import { SurveyImportFileService } from './services/survey-import-file.service';
+import { SurveyApplicabilityRule } from './entities/survey-applicability-rule.entity';
+import { SurveyApplicabilityCondition } from './entities/survey-applicability-condition.entity';
+import { ApplicabilityEngine } from './services/applicability-engine.service';
+import { ApplicabilityRulesService } from './services/applicability-rules.service';
+import { SurveyEvaluationService } from './services/survey-evaluation.service';
+import { SchoolRectification } from '../schools/entities/school-rectification.entity';
+import { EducationLevelCatalog } from '../schools/entities/education-level-catalog.entity';
+import { SchoolShiftCatalog } from '../schools/entities/school-shift-catalog.entity';
+import { SurveyApplicabilityService } from './services/survey-applicability.service';
 
 @Module({
   imports: [
@@ -26,6 +37,11 @@ import { SurveyVersionComparator } from './services/survey-version-comparator.se
       SurveyQuestion,
       SurveyOption,
       AuditLog,
+      SchoolRectification,
+      SchoolShiftCatalog,
+      EducationLevelCatalog,
+      SurveyApplicabilityRule,
+      SurveyApplicabilityCondition,
     ]),
   ],
   controllers: [SurveysController, AdminSurveysController],
@@ -34,7 +50,17 @@ import { SurveyVersionComparator } from './services/survey-version-comparator.se
     AdminSurveysService,
     SurveyStructureValidator,
     SurveyVersionComparator,
+    BulkSurveyImportService,
+    SurveyImportFileService,
+    ApplicabilityEngine,
+    ApplicabilityRulesService,
+    SurveyApplicabilityService,
+    SurveyEvaluationService,
   ],
-  exports: [SurveysService],
+  exports: [
+    SurveysService,
+    SurveyApplicabilityService,
+    SurveyEvaluationService,
+  ],
 })
 export class SurveysModule {}

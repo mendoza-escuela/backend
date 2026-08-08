@@ -1,11 +1,115 @@
 import { DataSource } from 'typeorm';
 import { BadRequestException } from '@nestjs/common';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
+import { School } from '../../schools/entities/school.entity';
 import { UserRole } from '../entities/user-role.enum';
 import { User } from '../entities/user.entity';
 import { AdminUsersService } from './admin-users.service';
 
 describe('AdminUsersService', () => {
+  it('pagina usuarios en base de datos y selecciona sólo campos del listado', async () => {
+    const users = [
+      {
+        id: 'user-id',
+        firstName: 'Ana',
+        lastName: 'Pérez',
+        email: 'ana@example.com',
+        role: UserRole.Admin,
+        isActive: true,
+        mustChangePassword: false,
+        lastLoginAt: null,
+        createdAt: new Date('2026-01-01'),
+        updatedAt: new Date('2026-01-01'),
+        userSchools: [],
+      },
+    ] as User[];
+    const builder = {
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([users, 61]),
+    };
+    const dataSource = {
+      getRepository: jest.fn(() => ({
+        createQueryBuilder: jest.fn(() => builder),
+      })),
+    } as unknown as DataSource;
+
+    const response = await new AdminUsersService(dataSource).list({
+      search: 'ana',
+      page: 3,
+      limit: 20,
+    });
+
+    expect(builder.select).toHaveBeenCalledWith(
+      expect.arrayContaining(['user.id', 'school.cue']),
+    );
+    expect(builder.orderBy).toHaveBeenCalledWith('user.lastName', 'ASC');
+    expect(builder.addOrderBy).toHaveBeenCalledWith('user.firstName', 'ASC');
+    expect(builder.skip).toHaveBeenCalledWith(40);
+    expect(builder.take).toHaveBeenCalledWith(20);
+    expect(response.pagination).toEqual({
+      page: 3,
+      limit: 20,
+      total: 61,
+      totalPages: 4,
+    });
+  });
+
+  it('busca colegios de forma paginada sin cargar el padrón completo', async () => {
+    const schools = [
+      {
+        id: 'school-id',
+        cue: '2332',
+        name: 'Escuela Norte',
+        isActive: true,
+      },
+    ] as School[];
+    const builder = {
+      select: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([schools, 41]),
+    };
+    const dataSource = {
+      getRepository: jest.fn(() => ({
+        createQueryBuilder: jest.fn(() => builder),
+      })),
+    } as unknown as DataSource;
+
+    const response = await new AdminUsersService(dataSource).listSchools({
+      search: 'norte',
+      page: 2,
+      limit: 20,
+    });
+
+    expect(builder.skip).toHaveBeenCalledWith(20);
+    expect(builder.take).toHaveBeenCalledWith(20);
+    expect(builder.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('LOWER(school.name) LIKE :search'),
+      { search: '%norte%' },
+    );
+    expect(response).toEqual({
+      items: [
+        {
+          id: 'school-id',
+          cue: '2332',
+          code: '2332',
+          name: 'Escuela Norte',
+          isActive: true,
+        },
+      ],
+      pagination: { page: 2, limit: 20, total: 41, totalPages: 3 },
+    });
+  });
+
   it('creates a user with a hashed temporary password and a safe audit record', async () => {
     const queryBuilder = {
       where: jest.fn().mockReturnThis(),

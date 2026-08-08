@@ -1,15 +1,19 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
+import { randomUUID } from 'node:crypto';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { CompareSurveyVersionsQueryDto } from '../dto/compare-survey-versions-query.dto';
 import { CreateSurveyVersionDto } from '../dto/create-survey-version.dto';
 import { CreateSurveyDto } from '../dto/create-survey.dto';
+import { ListSurveysQueryDto } from '../dto/list-surveys-query.dto';
+import { ImportSurveyVersionDto } from '../dto/import-survey-version.dto';
 import {
   SurveyDimensionInputDto,
   UpdateSurveyVersionDto,
@@ -20,10 +24,21 @@ import { SurveyOption } from '../entities/survey-option.entity';
 import { SurveyQuestion } from '../entities/survey-question.entity';
 import { SurveySection } from '../entities/survey-section.entity';
 import { SurveyVersionStatus } from '../entities/survey-version-status.enum';
+import { SurveyVersionTemplate } from '../entities/survey-version-template.enum';
 import { SurveyVersion } from '../entities/survey-version.entity';
 import { Survey } from '../entities/survey.entity';
+import {
+  createOfficialSurveyDimensionInputs,
+  isOfficialSurveyStructure,
+  OFFICIAL_SOCIOEMOTIONAL_QUESTION_NUMBERS,
+  OFFICIAL_SURVEY_DIMENSIONS,
+  OfficialSurveyDimensionCode,
+} from '../templates/official-survey-dimensions.template';
 import { SurveyStructureValidator } from './survey-structure-validator.service';
 import { SurveyVersionComparator } from './survey-version-comparator.service';
+import { SurveyApplicabilityRule } from '../entities/survey-applicability-rule.entity';
+import { SurveyApplicabilityCondition } from '../entities/survey-applicability-condition.entity';
+import { ApplicabilityRulesService } from './applicability-rules.service';
 
 @Injectable()
 export class AdminSurveysService {
@@ -31,34 +46,54 @@ export class AdminSurveysService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly structureValidator: SurveyStructureValidator,
     private readonly comparator: SurveyVersionComparator,
+    private readonly applicabilityRules: ApplicabilityRulesService,
   ) {}
 
-  async list() {
-    const surveys = await this.dataSource.getRepository(Survey).find({
-      relations: { versions: true },
-      order: { name: 'ASC' },
-    });
-    return surveys.map((survey) => ({
-      id: survey.id,
-      code: survey.code,
-      name: survey.name,
-      description: survey.description,
-      isActive: survey.isActive,
-      createdAt: survey.createdAt,
-      updatedAt: survey.updatedAt,
-      versions: survey.versions
-        .sort((a, b) => b.versionNumber - a.versionNumber)
-        .map((version) => this.versionSummary(version)),
-    }));
+  async list(query: ListSurveysQueryDto) {
+    const builder = this.dataSource
+      .getRepository(Survey)
+      .createQueryBuilder('survey')
+      .leftJoinAndSelect('survey.versions', 'version')
+      .orderBy('survey.name', 'ASC')
+      .addOrderBy('survey.id', 'ASC')
+      .addOrderBy('version.versionNumber', 'DESC')
+      .skip((query.page - 1) * query.limit)
+      .take(query.limit);
+
+    if (query.search) {
+      builder.andWhere(
+        '(LOWER(survey.code) LIKE :search OR LOWER(survey.name) LIKE :search)',
+        { search: `%${query.search.toLowerCase()}%` },
+      );
+    }
+
+    const [surveys, total] = await builder.getManyAndCount();
+    return {
+      items: surveys.map((survey) => ({
+        id: survey.id,
+        code: survey.code,
+        name: survey.name,
+        description: survey.description,
+        isActive: survey.isActive,
+        createdAt: survey.createdAt,
+        updatedAt: survey.updatedAt,
+        versions: survey.versions.map((version) =>
+          this.versionSummary(version),
+        ),
+      })),
+      pagination: {
+        page: query.page,
+        limit: query.limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / query.limit)),
+      },
+    };
   }
 
   async findOne(surveyId: string) {
     const survey = await this.getSurvey(surveyId);
     const versions = await this.dataSource.getRepository(SurveyVersion).find({
       where: { surveyId },
-      relations: {
-        dimensions: { sections: { questions: { options: true } } },
-      },
       order: { versionNumber: 'DESC' },
     });
     const versionIds = versions.map((version) => version.id);
@@ -75,10 +110,10 @@ export class AdminSurveysService {
         '(audit.entityType = :versionType AND audit.entityId IN (:...versionIds))',
         { versionType: 'SurveyVersion', versionIds },
       );
-    const audits = await auditBuilder
-      .orderBy('audit.createdAt', 'DESC')
-      .take(50)
-      .getMany();
+    const [audits, countsByVersion] = await Promise.all([
+      auditBuilder.orderBy('audit.createdAt', 'DESC').take(50).getMany(),
+      this.structureCountsForVersions(versionIds),
+    ]);
 
     return {
       id: survey.id,
@@ -90,7 +125,7 @@ export class AdminSurveysService {
       updatedAt: survey.updatedAt,
       versions: versions.map((version) => ({
         ...this.versionSummary(version),
-        counts: this.structureCounts(version),
+        counts: countsByVersion.get(version.id),
       })),
       audits: audits.map((audit) => ({
         id: audit.id,
@@ -115,6 +150,19 @@ export class AdminSurveysService {
     await this.getSurvey(surveyId);
     const version = await this.getVersionWithContent(surveyId, versionId);
     return this.serializeVersion(version);
+  }
+
+  getOfficialDimensionsTemplate() {
+    return {
+      code: SurveyVersionTemplate.OfficialDimensions,
+      dimensions: OFFICIAL_SURVEY_DIMENSIONS,
+      questionAssignments: [
+        {
+          questionNumbers: OFFICIAL_SOCIOEMOTIONAL_QUESTION_NUMBERS,
+          dimensionCode: OfficialSurveyDimensionCode.MentalHealth,
+        },
+      ],
+    };
   }
 
   async createSurvey(dto: CreateSurveyDto, actor: AuthenticatedUser) {
@@ -234,6 +282,11 @@ export class AdminSurveysService {
     dto: CreateSurveyVersionDto,
     actor: AuthenticatedUser,
   ) {
+    if (dto.sourceVersionId && dto.template)
+      throw new BadRequestException(
+        'Elegí una versión de origen o una plantilla, no ambas opciones.',
+      );
+
     const versionId = await this.dataSource.transaction(async (manager) => {
       const survey = await manager.findOne(Survey, {
         where: { id: surveyId },
@@ -271,6 +324,19 @@ export class AdminSurveysService {
           version.id,
           this.versionToInput(source),
         );
+      if (source)
+        await this.cloneApplicabilityRules(manager, source, version.id);
+      const selectedTemplate =
+        dto.template ?? SurveyVersionTemplate.OfficialDimensions;
+      if (
+        !source &&
+        selectedTemplate === SurveyVersionTemplate.OfficialDimensions
+      )
+        await this.persistStructure(
+          manager,
+          version.id,
+          createOfficialSurveyDimensionInputs(),
+        );
       await this.audit(
         manager,
         actor.id,
@@ -281,6 +347,53 @@ export class AdminSurveysService {
           surveyId,
           versionNumber: version.versionNumber,
           sourceVersionId: source?.id ?? null,
+          template: source ? null : selectedTemplate,
+        },
+      );
+      return version.id;
+    });
+    return this.findVersion(surveyId, versionId);
+  }
+
+  async createImportedVersion(
+    surveyId: string,
+    dto: ImportSurveyVersionDto,
+    dimensions: SurveyDimensionInputDto[],
+    actor: AuthenticatedUser,
+  ) {
+    this.structureValidator.validate(dimensions, false);
+    const versionId = await this.dataSource.transaction(async (manager) => {
+      const survey = await manager.findOne(Survey, {
+        where: { id: surveyId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!survey) throw new NotFoundException('Cuestionario no encontrado.');
+      const latest = await manager.findOne(SurveyVersion, {
+        where: { surveyId },
+        order: { versionNumber: 'DESC' },
+      });
+      const version = await manager.save(
+        SurveyVersion,
+        manager.create(SurveyVersion, {
+          surveyId,
+          versionNumber: (latest?.versionNumber ?? 0) + 1,
+          title: dto.title.trim(),
+          instructions: this.nullable(dto.instructions),
+          status: SurveyVersionStatus.Draft,
+          publishedAt: null,
+        }),
+      );
+      await this.persistStructure(manager, version.id, dimensions);
+      await this.audit(
+        manager,
+        actor.id,
+        'SURVEY_VERSION_IMPORTED',
+        'SurveyVersion',
+        version.id,
+        {
+          surveyId,
+          versionNumber: version.versionNumber,
+          counts: this.inputCounts(dimensions),
         },
       );
       return version.id;
@@ -298,12 +411,18 @@ export class AdminSurveysService {
     await this.dataSource.transaction(async (manager) => {
       const version = await this.getLockedVersion(manager, surveyId, versionId);
       this.assertDraft(version);
-      const beforeCounts = await this.loadCounts(manager, surveyId, versionId);
+      const beforeVersion = await this.getVersionWithContent(
+        surveyId,
+        versionId,
+        manager,
+      );
+      const beforeCounts = this.structureCounts(beforeVersion);
       version.title = dto.title.trim();
       version.instructions = this.nullable(dto.instructions);
       await manager.save(SurveyVersion, version);
       await manager.delete(SurveyDimension, { versionId });
       await this.persistStructure(manager, versionId, dto.dimensions);
+      await this.cloneApplicabilityRules(manager, beforeVersion, versionId);
       await this.audit(
         manager,
         actor.id,
@@ -326,28 +445,127 @@ export class AdminSurveysService {
     versionId: string,
     actor: AuthenticatedUser,
   ) {
+    try {
+      await this.dataSource.transaction(async (manager) => {
+        await this.getLockedSurvey(manager, surveyId);
+        const version = await this.getLockedVersion(
+          manager,
+          surveyId,
+          versionId,
+        );
+        this.assertDraft(version);
+        const withContent = await this.getVersionWithContent(
+          surveyId,
+          versionId,
+          manager,
+        );
+        this.structureValidator.validate(
+          this.versionToInput(withContent),
+          true,
+        );
+        const applicabilityErrors = this.applicabilityRules.validateRules(
+          withContent.dimensions.flatMap((dimension) =>
+            dimension.sections.flatMap((section) =>
+              section.questions.flatMap(
+                (question) => question.applicabilityRules ?? [],
+              ),
+            ),
+          ),
+        );
+        if (applicabilityErrors.length)
+          throw new BadRequestException({
+            message: 'Las reglas de aplicabilidad contienen errores.',
+            errors: applicabilityErrors,
+          });
+
+        const publishedVersions = await manager.find(SurveyVersion, {
+          where: { surveyId, status: SurveyVersionStatus.Published },
+          order: { versionNumber: 'DESC' },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (publishedVersions.length > 1)
+          throw new ConflictException(
+            'El cuestionario posee más de una versión publicada. Corregí la inconsistencia antes de publicar otra versión.',
+          );
+
+        const operationId = randomUUID();
+        const previousVersion = publishedVersions[0];
+        if (previousVersion) {
+          const previousStatus = previousVersion.status;
+          previousVersion.status = SurveyVersionStatus.Archived;
+          await manager.save(SurveyVersion, previousVersion);
+          await this.audit(
+            manager,
+            actor.id,
+            'SURVEY_VERSION_AUTO_ARCHIVED',
+            'SurveyVersion',
+            previousVersion.id,
+            {
+              surveyId,
+              versionNumber: previousVersion.versionNumber,
+              previousStatus,
+              newStatus: SurveyVersionStatus.Archived,
+              replacementVersionId: version.id,
+              publicationOperationId: operationId,
+            },
+          );
+        }
+
+        version.status = SurveyVersionStatus.Published;
+        version.publishedAt = new Date();
+        await manager.save(SurveyVersion, version);
+        await this.audit(
+          manager,
+          actor.id,
+          'SURVEY_VERSION_PUBLISHED',
+          'SurveyVersion',
+          versionId,
+          {
+            surveyId,
+            versionNumber: version.versionNumber,
+            previousStatus: SurveyVersionStatus.Draft,
+            newStatus: SurveyVersionStatus.Published,
+            previousPublishedVersionId: previousVersion?.id ?? null,
+            publicationOperationId: operationId,
+            counts: this.structureCounts(withContent),
+          },
+        );
+      });
+    } catch (error) {
+      if (this.isSinglePublishedVersionViolation(error))
+        throw new ConflictException(
+          'Otra versión del cuestionario fue publicada simultáneamente. Actualizá la pantalla y volvé a intentarlo.',
+        );
+      throw error;
+    }
+    return this.findVersion(surveyId, versionId);
+  }
+
+  async archiveVersion(
+    surveyId: string,
+    versionId: string,
+    actor: AuthenticatedUser,
+  ) {
     await this.dataSource.transaction(async (manager) => {
       const version = await this.getLockedVersion(manager, surveyId, versionId);
-      this.assertDraft(version);
-      const withContent = await this.getVersionWithContent(
-        surveyId,
-        versionId,
-        manager,
-      );
-      this.structureValidator.validate(this.versionToInput(withContent), true);
-      version.status = SurveyVersionStatus.Published;
-      version.publishedAt = new Date();
+      if (version.status !== SurveyVersionStatus.Published)
+        throw new ConflictException(
+          'Sólo una versión publicada puede archivarse.',
+        );
+      const previousStatus = version.status;
+      version.status = SurveyVersionStatus.Archived;
       await manager.save(SurveyVersion, version);
       await this.audit(
         manager,
         actor.id,
-        'SURVEY_VERSION_PUBLISHED',
+        'SURVEY_VERSION_ARCHIVED',
         'SurveyVersion',
         versionId,
         {
           surveyId,
           versionNumber: version.versionNumber,
-          counts: this.structureCounts(withContent),
+          previousStatus,
+          newStatus: SurveyVersionStatus.Archived,
         },
       );
     });
@@ -416,7 +634,14 @@ export class AdminSurveysService {
     const version = await manager.findOne(SurveyVersion, {
       where: { id: versionId, surveyId },
       relations: {
-        dimensions: { sections: { questions: { options: true } } },
+        dimensions: {
+          sections: {
+            questions: {
+              options: true,
+              applicabilityRules: { conditions: true },
+            },
+          },
+        },
       },
       order: {
         dimensions: {
@@ -443,6 +668,15 @@ export class AdminSurveysService {
     });
     if (!version) throw new NotFoundException('Versión no encontrada.');
     return version;
+  }
+
+  private async getLockedSurvey(manager: EntityManager, surveyId: string) {
+    const survey = await manager.findOne(Survey, {
+      where: { id: surveyId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!survey) throw new NotFoundException('Cuestionario no encontrado.');
+    return survey;
   }
 
   private assertDraft(version: SurveyVersion) {
@@ -510,12 +744,74 @@ export class AdminSurveysService {
                 value: this.normalizeCode(optionInput.value),
                 label: optionInput.label.trim(),
                 helpText: this.nullable(optionInput.helpText),
+                score: optionInput.score ?? null,
                 order: optionOrder,
               }),
             );
         }
       }
     }
+  }
+
+  private async cloneApplicabilityRules(
+    manager: EntityManager,
+    source: SurveyVersion,
+    targetVersionId: string,
+  ) {
+    const hasRules = source.dimensions.some((dimension) =>
+      dimension.sections.some((section) =>
+        section.questions.some(
+          (question) => (question.applicabilityRules?.length ?? 0) > 0,
+        ),
+      ),
+    );
+    if (!hasRules) return;
+    const target = await this.getVersionWithContent(
+      source.surveyId,
+      targetVersionId,
+      manager,
+    );
+    const targetQuestions = new Map<string, SurveyQuestion>();
+    for (const dimension of target.dimensions)
+      for (const section of dimension.sections)
+        for (const question of section.questions)
+          targetQuestions.set(
+            `${dimension.code}/${section.code}/${question.code}`,
+            question,
+          );
+
+    for (const sourceDimension of source.dimensions)
+      for (const sourceSection of sourceDimension.sections)
+        for (const sourceQuestion of sourceSection.questions) {
+          const targetQuestion = targetQuestions.get(
+            `${sourceDimension.code}/${sourceSection.code}/${sourceQuestion.code}`,
+          );
+          if (!targetQuestion) continue;
+          for (const sourceRule of sourceQuestion.applicabilityRules ?? []) {
+            const targetRule = await manager.save(
+              SurveyApplicabilityRule,
+              manager.create(SurveyApplicabilityRule, {
+                questionId: targetQuestion.id,
+                groupOperator: sourceRule.groupOperator,
+                action: sourceRule.action,
+                defaultAction: sourceRule.defaultAction,
+                order: sourceRule.order,
+              }),
+            );
+            await manager.save(
+              SurveyApplicabilityCondition,
+              sourceRule.conditions.map((condition) =>
+                manager.create(SurveyApplicabilityCondition, {
+                  ruleId: targetRule.id,
+                  feature: condition.feature,
+                  operator: condition.operator,
+                  expectedValue: condition.expectedValue,
+                  order: condition.order,
+                }),
+              ),
+            );
+          }
+        }
   }
 
   private versionToInput(version: SurveyVersion): SurveyDimensionInputDto[] {
@@ -538,6 +834,7 @@ export class AdminSurveysService {
             value: option.value,
             label: option.label,
             helpText: option.helpText,
+            score: option.score,
           })),
         })),
       })),
@@ -555,6 +852,9 @@ export class AdminSurveysService {
       publishedAt: version.publishedAt,
       createdAt: version.createdAt,
       updatedAt: version.updatedAt,
+      profile: isOfficialSurveyStructure(version.dimensions)
+        ? 'institutional'
+        : 'generic',
       dimensions: version.dimensions.map((dimension) => ({
         id: dimension.id,
         code: dimension.code,
@@ -581,8 +881,19 @@ export class AdminSurveysService {
               value: option.value,
               label: option.label,
               helpText: option.helpText,
+              score: option.score,
               order: option.order,
             })),
+            applicabilityRules: (question.applicabilityRules ?? []).map(
+              (rule) => ({
+                id: rule.id,
+                groupOperator: rule.groupOperator,
+                action: rule.action,
+                defaultAction: rule.defaultAction,
+                order: rule.order,
+                conditions: rule.conditions,
+              }),
+            ),
           })),
         })),
       })),
@@ -591,6 +902,88 @@ export class AdminSurveysService {
 
   private structureCounts(version: SurveyVersion) {
     return this.inputCounts(this.versionToInput(version));
+  }
+
+  /**
+   * Cuenta la estructura de varias versiones mediante agregaciones SQL.
+   *
+   * Evita hidratar dimensiones, secciones, preguntas y opciones completas
+   * cuando el detalle administrativo sólo necesita mostrar cantidades.
+   */
+  private async structureCountsForVersions(versionIds: string[]) {
+    const counts = new Map<
+      string,
+      {
+        dimensions: number;
+        sections: number;
+        questions: number;
+        options: number;
+      }
+    >();
+    versionIds.forEach((versionId) =>
+      counts.set(versionId, {
+        dimensions: 0,
+        sections: 0,
+        questions: 0,
+        options: 0,
+      }),
+    );
+    if (!versionIds.length) return counts;
+
+    type CountRow = { versionId: string; count: string };
+    const [dimensions, sections, questions, options] = await Promise.all([
+      this.dataSource
+        .getRepository(SurveyDimension)
+        .createQueryBuilder('dimension')
+        .select('dimension.versionId', 'versionId')
+        .addSelect('COUNT(*)', 'count')
+        .where('dimension.versionId IN (:...versionIds)', { versionIds })
+        .groupBy('dimension.versionId')
+        .getRawMany<CountRow>(),
+      this.dataSource
+        .getRepository(SurveySection)
+        .createQueryBuilder('section')
+        .innerJoin('section.dimension', 'dimension')
+        .select('dimension.versionId', 'versionId')
+        .addSelect('COUNT(*)', 'count')
+        .where('dimension.versionId IN (:...versionIds)', { versionIds })
+        .groupBy('dimension.versionId')
+        .getRawMany<CountRow>(),
+      this.dataSource
+        .getRepository(SurveyQuestion)
+        .createQueryBuilder('question')
+        .innerJoin('question.section', 'section')
+        .innerJoin('section.dimension', 'dimension')
+        .select('dimension.versionId', 'versionId')
+        .addSelect('COUNT(*)', 'count')
+        .where('dimension.versionId IN (:...versionIds)', { versionIds })
+        .groupBy('dimension.versionId')
+        .getRawMany<CountRow>(),
+      this.dataSource
+        .getRepository(SurveyOption)
+        .createQueryBuilder('option')
+        .innerJoin('option.question', 'question')
+        .innerJoin('question.section', 'section')
+        .innerJoin('section.dimension', 'dimension')
+        .select('dimension.versionId', 'versionId')
+        .addSelect('COUNT(*)', 'count')
+        .where('dimension.versionId IN (:...versionIds)', { versionIds })
+        .groupBy('dimension.versionId')
+        .getRawMany<CountRow>(),
+    ]);
+
+    for (const [key, rows] of [
+      ['dimensions', dimensions],
+      ['sections', sections],
+      ['questions', questions],
+      ['options', options],
+    ] as const) {
+      rows.forEach((row) => {
+        const versionCounts = counts.get(row.versionId);
+        if (versionCounts) versionCounts[key] = Number(row.count);
+      });
+    }
+    return counts;
   }
 
   private inputCounts(dimensions: SurveyDimensionInputDto[]) {
@@ -678,5 +1071,16 @@ export class AdminSurveysService {
         'Ya existe un cuestionario o elemento con ese código.',
       );
     throw error;
+  }
+
+  private isSinglePublishedVersionViolation(error: unknown) {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === '23505' &&
+      'constraint' in error &&
+      error.constraint === 'UQ_survey_versions_single_published'
+    );
   }
 }

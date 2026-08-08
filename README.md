@@ -42,6 +42,10 @@ Las rutas bajo `/admin/users` requieren sesión válida, contraseña inicial ya 
 
 Las operaciones sensibles generan registros en `audit_logs`. Nunca se guardan contraseñas ni hashes dentro del detalle de auditoría. Bloquear una cuenta o restablecer su contraseña revoca sus sesiones activas.
 
+El selector de colegio consulta `GET /api/admin/users/schools?search=texto&page=1&limit=20`. La búsqueda por CUE, número o nombre se procesa en PostgreSQL, devuelve una respuesta paginada y utiliza índices trigram creados por la migración `AddSchoolSearchIndexes1720375207000`; el frontend no descarga el padrón completo.
+
+`GET /api/admin/users` pagina en base de datos mediante `page` y `limit` (20 por defecto, máximo 100), aplica búsqueda y filtros antes de `skip/take` y devuelve únicamente los campos necesarios para la grilla. La migración `AddUserSearchIndexes1720375208000` agrega índices para nombre, apellido y correo. La importación consulta solamente los CUE incluidos en el archivo, nunca el padrón completo.
+
 La importación masiva acepta archivos `.csv` o `.xlsx` de hasta 2 MB y 500 filas. La plantilla se descarga desde `GET /admin/users/import/template` y utiliza estas columnas:
 
 ```text
@@ -56,12 +60,14 @@ Las rutas protegidas bajo `/admin/schools` permiten alta, listado paginado, bús
 
 Cada colegio admite un único usuario con rol `school`, y cada usuario sólo puede pertenecer a un colegio. Los reemplazos y desvinculaciones conservan un historial independiente. Un colegio inactivo conserva sus datos e historial; `SchoolsService.assertActiveForEvaluation` es la validación obligatoria que deberá usar el módulo de evaluaciones antes de crear una nueva.
 
+`GET /api/admin/schools` pagina en PostgreSQL mediante `page` y `limit` y selecciona únicamente las columnas del listado. `GET /api/admin/schools/:id/assignable-users` busca y pagina usuarios disponibles para asociación en backend, evitando descargar cuentas ocupadas y filtrarlas en el navegador.
+
 La importación acepta CSV/XLSX de hasta 2 MB y 500 filas, ofrece vista previa y realiza importación parcial. La plantilla se obtiene en `GET /admin/schools/import/template`. El padrón filtrado puede exportarse mediante `GET /admin/schools/export?format=csv` o `format=xlsx`; cada exportación queda auditada.
 
 Columnas de la plantilla de colegios:
 
 ```text
-cue,nombre,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_correo,referente_telefono,matricula,caracteristicas,estado
+cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_correo,referente_telefono,matricula,caracteristicas,estado
 ```
 
 `caracteristicas` debe ser un objeto JSON con hasta 30 valores simples, por ejemplo `{"comedor":true}`.
@@ -69,6 +75,12 @@ cue,nombre,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,a
 ## Portal del establecimiento
 
 `GET /api/schools/me` requiere rol `school` y devuelve únicamente el establecimiento asociado al usuario autenticado. La consulta no acepta un identificador enviado por el navegador, por lo que un usuario Escuela no puede seleccionar ni consultar otro establecimiento.
+
+`PUT /api/schools/me/rectification` permite revisar y rectificar la ficha obligatoria del establecimiento asociado para el año calendario vigente. La operación conserva un snapshot autocontenido con período, fecha, usuario, características ternarias, jornada catalogada, niveles y matrículas, y registra auditoría. `expectedUpdatedAt` permite detectar una edición concurrente. Los administradores conservan el endpoint existente `PUT /api/admin/schools/:id/rectification`.
+
+`GET /api/schools/me/rectification/catalogs` devuelve los catálogos de jornadas y niveles desde backend, incluidos los valores inactivos necesarios para representar el historial. La migración crea la infraestructura sin precargar valores: los códigos y etiquetas productivos siguen pendientes del catálogo oficial del programa. El endpoint informa explícitamente cuando un catálogo está vacío.
+
+Al iniciar una presentación se vincula la última rectificación del año vigente y se copia su snapshot en `survey_submissions`. Mientras la presentación es borrador puede adoptar una rectificación posterior, recalcular la aplicabilidad y conservar las respuestas que queden excluidas. Al enviarse, el vínculo, el snapshot y las decisiones quedan inmutables para preservar el historial.
 
 ## Cuestionarios versionados
 
@@ -80,32 +92,87 @@ Tipos de pregunta disponibles:
 single_choice, multiple_choice, boolean, short_text, long_text, number, date
 ```
 
-Las reglas básicas de presentación y validación (`min`, `max`, longitudes, máximo de selecciones y placeholder) se almacenan separadas de cualquier regla de puntaje. El modelo no incorpora puntajes, estrellas ni condiciones porque esas definiciones funcionales siguen pendientes.
+Las reglas básicas de presentación (`min`, `max`, longitudes, máximo de selecciones y placeholder) se almacenan en cada pregunta. Las opciones admiten un puntaje entero entre 0 y 100. La columna es nullable únicamente para conservar sin inventar valores en datos anteriores a la migración; toda opción debe tener puntaje antes de publicar una versión nueva. Las condiciones y exclusiones se resuelven al abrir una presentación; la clasificación por estrellas continúa separada de este flujo.
 
 Endpoints de lectura protegidos para roles `admin` y `school`:
 
 - `GET /api/surveys/available`: lista cuestionarios activos con una versión publicada.
 - `GET /api/surveys/available/:code`: devuelve la última versión publicada con toda su estructura ordenada.
 
-Las versiones borrador no se exponen a las escuelas. Campañas, borradores de respuestas y envíos finales siguen fuera de este módulo y no se simulan.
+Las versiones borrador no se exponen a las escuelas. Las campañas y respuestas pertenecen a los módulos `campaigns` y `submissions`; `surveys` conserva exclusivamente la definición versionada e inmutable.
 
 ### Administración de cuestionarios
 
 Las rutas bajo `/api/admin/surveys` requieren sesión válida, contraseña inicial ya cambiada y rol `admin`:
 
-- `GET /api/admin/surveys` y `GET /api/admin/surveys/:surveyId`: listado, detalle, versiones y auditoría reciente.
+- `GET /api/admin/surveys?page=1&limit=20&search=texto` y `GET /api/admin/surveys/:surveyId`: listado paginado, detalle, versiones y auditoría reciente.
 - `POST /api/admin/surveys`, `PATCH /api/admin/surveys/:surveyId` y `DELETE /api/admin/surveys/:surveyId`: ABM de la definición general.
-- `POST /api/admin/surveys/:surveyId/versions`: alta de una versión vacía o clonada con `sourceVersionId`.
+- `GET /api/admin/surveys/templates/official-dimensions`: catálogo central de las seis dimensiones oficiales y la reasignación de las preguntas 41 a 43 a Salud Mental.
+- `GET /api/admin/surveys/import/template?format=xlsx|csv`: descarga la plantilla de carga con instrucciones y códigos oficiales.
+- `POST /api/admin/surveys/:surveyId/import/preview`: valida un archivo CSV/XLSX y devuelve errores por fila sin guardar datos.
+- `POST /api/admin/surveys/:surveyId/import`: vuelve a validar el archivo y crea atómicamente una versión borrador; nunca modifica una versión existente.
+- `POST /api/admin/surveys/:surveyId/versions`: alta de una versión con la plantilla `official_dimensions` (predeterminada), vacía con `blank` o clonada con `sourceVersionId`.
 - `GET`, `PUT` y `DELETE /api/admin/surveys/:surveyId/versions/:versionId`: consulta y ABM de una versión borrador.
 - `POST /api/admin/surveys/:surveyId/versions/:versionId/publish`: publicación definitiva.
 - `GET /api/admin/surveys/:surveyId/versions/:versionId/validation`: validación previa con todos los errores estructurales detectados.
 - `GET /api/admin/surveys/:surveyId/versions/compare`: comparación estructural mediante `fromVersionId` y `toVersionId`.
 
-Los borradores pueden guardarse incompletos para permitir construcción progresiva. Antes de publicar se exige, como mínimo, una dimensión, una sección por dimensión, una pregunta por sección y opciones para las preguntas de selección. En todos los guardados se controlan códigos repetidos, tipos incompatibles con opciones y rangos de validación inconsistentes.
+Los borradores pueden guardarse incompletos para permitir construcción progresiva. Antes de publicar se exige, como mínimo, una dimensión, una sección por dimensión, una pregunta por sección, opciones para las preguntas de selección y puntaje en cada opción. En todos los guardados se controlan códigos repetidos, tipos incompatibles con opciones, puntajes fuera de 0–100 y rangos de validación inconsistentes.
+
+La plantilla `official_dimensions` crea únicamente el esqueleto aprobado: nombres, descripciones, códigos internos y orden de las seis dimensiones. No precarga secciones ni preguntas. “Entorno Socioemocional” no se registra como una séptima dimensión; las preguntas 41, 42 y 43 quedan identificadas para su futura carga dentro de `salud_mental`.
+
+La importación institucional admite exclusivamente preguntas de selección simple, no genera ni permite “Otro” o “No aplica” y valida las escalas `100/50/0` para las dimensiones generales y `100/66/33/0` para Salud Mental. La columna `condicion` se incluye como reserva, pero debe permanecer vacía hasta contar con el modelo formal de reglas; no se persiste texto opaco que el motor de evaluación no pueda ejecutar.
 
 Publicar es una operación irreversible: el servicio impide editar o eliminar la versión y la migración `ProtectPublishedSurveyVersions1720375206000` agrega triggers PostgreSQL que también protegen la versión y todos sus descendientes ante escrituras por fuera de la API. Para cambiar contenido publicado debe clonarse como una versión borrador nueva.
 
+Cada cuestionario admite una sola versión vigente. Al publicar un borrador, el backend bloquea el cuestionario, archiva automáticamente la versión publicada anterior y publica la nueva dentro de la misma transacción. Ambas transiciones se auditan con un `publicationOperationId` común. La migración `EnforceSinglePublishedSurveyVersion1720375218000` detecta inconsistencias existentes y agrega un índice único parcial para impedir más de una fila `published` por cuestionario incluso ante escrituras concurrentes.
+
+El archivado manual se conserva para retirar una versión sin reemplazarla. Las campañas mantienen su `survey_version_id`: una versión archivada continúa disponible de forma inmutable para campañas, presentaciones y resultados históricos, pero no puede seleccionarse al crear una campaña nueva.
+
 Las altas, cambios, clonaciones, publicaciones y bajas se registran en `audit_logs` con usuario, fecha, entidad y resumen del cambio. No se guardan secretos ni contenido de respuestas.
+
+## Administración de campañas
+
+Las rutas bajo `/api/admin/campaigns` requieren rol `admin`. Permiten listar, crear, consultar, editar y eliminar campañas borrador, además de ejecutar el ciclo irreversible `draft → active → closed → archived`.
+
+Cada campaña es anual o semestral y referencia obligatoriamente una versión publicada de un cuestionario activo. Al activarse, su configuración queda protegida; sólo los borradores pueden editarse o eliminarse. `GET /api/admin/campaigns/survey-versions` devuelve las versiones habilitadas para el selector administrativo.
+
+Las fechas ingresan como fechas civiles `AAAA-MM-DD`. El inicio se almacena a las `00:00:00` y el cierre a las `23:59:59.999` de Mendoza (`America/Argentina/Mendoza`, UTC-3). Un proceso periódico cierra las campañas activas vencidas y registra el evento en `audit_logs`; el valor de `closed_at` conserva el instante exacto configurado, aunque la detección ocurra unos segundos después.
+
+La migración `AddCampaignManagement1720375211000` crea la tabla, enumeraciones, índice de estado/fechas y la relación protegida con `survey_versions`.
+
+## Presentaciones y borradores escolares
+
+`GET /api/school/campaigns` lista para el usuario Escuela todas las campañas activas cuyo período está abierto. No existe una asignación cerrada de escuelas por campaña: cualquier establecimiento activo incorporado durante el período puede verla inmediatamente. La respuesta informa si la ficha está rectificada para el año vigente y el motivo que impide iniciar, cuando corresponda.
+
+El seguimiento administrativo se expone mediante
+`GET /api/admin/campaigns/:id/tracking/summary` y
+`GET /api/admin/campaigns/:id/tracking`. Conserva únicamente los estados
+`not_started`, `draft` y `submitted`, ejecuta búsqueda, filtros, ordenamiento y
+paginación en PostgreSQL, y mantiene visibles escuelas y usuarios inactivos.
+El universo abierto y las fórmulas se documentan en
+[`docs/campaign-tracking.md`](docs/campaign-tracking.md).
+
+El flujo escolar utiliza:
+
+- `POST /api/school/campaigns/:campaignId/submission`: crea o recupera la presentación única de la escuela.
+- `GET /api/school/campaigns/:campaignId/submission`: evalúa en lote la aplicabilidad contra el snapshot rectificado vinculado y recupera únicamente la estructura aplicable, sus respuestas, progreso, exclusiones y datos escolares faltantes.
+- `PUT /api/school/campaigns/:campaignId/submission/draft`: reemplaza atómicamente sólo las respuestas aplicables del borrador. Las respuestas anteriores de preguntas excluidas se conservan sin participar en la validación.
+- `POST /api/school/campaigns/:campaignId/submission/submit`: reevalúa aplicabilidad, bloquea datos escolares faltantes, valida únicamente preguntas aplicables y realiza el envío definitivo.
+
+La escuela se obtiene siempre de la asociación del usuario autenticado. El primer borrador exige establecimiento activo y rectificación anual; posteriores usuarios asociados a la misma escuela recuperan ese borrador porque la unicidad se define por `school_id + campaign_id`. También se conserva un snapshot del usuario que inició la carga.
+
+Cada presentación referencia la versión publicada fijada por la campaña. Las respuestas enviadas son inmutables en el servicio y mediante triggers PostgreSQL. La migración `AddSurveySubmissions1720375212000` crea presentaciones, respuestas, índices, relaciones y protecciones de integridad.
+
+## Dashboard administrativo de participación
+
+Las rutas bajo `/api/admin/dashboard/participation` requieren rol `admin`. `GET /api/admin/dashboard/participation/filters` devuelve campañas activas, cerradas o archivadas y las opciones del padrón activo. Departamento y localidad limitan las localidades y escuelas disponibles.
+
+`GET /api/admin/dashboard/participation?campaignId=:uuid` calcula en PostgreSQL, desde una única consulta agregada, el total de escuelas activas, las no iniciadas, los borradores, los envíos y el porcentaje de envíos sobre el total. Admite los filtros `department`, `locality`, `schoolId`, `educationLevel`, `managementType`, `scope` y `shift`. Una escuela sin presentación se considera no iniciada; los estados persistidos `draft` y `submitted` determinan los otros dos grupos. Si el total es cero, el porcentaje devuelto es cero.
+
+Las campañas en borrador quedan fuera del seguimiento. Como actualmente las campañas son globales y no conservan un snapshot del padrón alcanzado, los totales históricos utilizan el estado actual de las escuelas.
+
+La migración `AddSubmissionApplicabilityDecisions1720375214000` conserva por pregunta el estado resuelto, la regla aplicada, el código y descripción del motivo, la fecha y los hechos escolares relevantes. Los borradores adoptan la rectificación vigente cuando cambia y recalculan contra ese snapshot; los envíos consultan las decisiones congeladas y nunca la ficha escolar actual. Las preguntas excluidas quedan fuera de la completitud y del contrato entregado al cálculo, por lo que no suman cero ni modifican denominadores.
 
 ## Verificación
 

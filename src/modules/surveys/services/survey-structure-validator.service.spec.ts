@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { SurveyDimensionInputDto } from '../dto/update-survey-version.dto';
 import { SurveyQuestionType } from '../entities/survey-question-type.enum';
+import { OfficialSurveyDimensionCode } from '../templates/official-survey-dimensions.template';
 import { SurveyStructureValidator } from './survey-structure-validator.service';
 
 describe('SurveyStructureValidator', () => {
@@ -78,6 +79,199 @@ describe('SurveyStructureValidator', () => {
 
     expectValidationError(dimensions, false, 'mínimo no puede superar');
     expectValidationError(dimensions, false, 'máximo de selecciones supera');
+  });
+
+  it('exige puntaje en cada opción antes de publicar', () => {
+    const dimensions = [
+      dimension({
+        sections: [
+          section({
+            questions: [
+              question({
+                type: SurveyQuestionType.SingleChoice,
+                options: [{ value: 'si', label: 'Sí' }],
+              }),
+            ],
+          }),
+        ],
+      }),
+    ];
+
+    expectValidationError(dimensions, true, 'debe tener un puntaje');
+  });
+
+  it('acepta puntajes enteros entre 0 y 100', () => {
+    const dimensions = [
+      dimension({
+        sections: [
+          section({
+            questions: [
+              question({
+                type: SurveyQuestionType.SingleChoice,
+                options: [{ value: 'si', label: 'Sí', score: 100 }],
+              }),
+            ],
+          }),
+        ],
+      }),
+    ];
+
+    expect(() => validator.validate(dimensions, true)).not.toThrow();
+  });
+
+  it('permite guardar un borrador con etiquetas de opción duplicadas', () => {
+    const dimensions = [
+      dimension({
+        sections: [
+          section({
+            questions: [
+              question({
+                type: SurveyQuestionType.SingleChoice,
+                options: [
+                  { value: 'ocasional_1', label: 'Respuesta ocasional' },
+                  { value: 'ocasional_2', label: 'Respuesta ocasional' },
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+    ];
+
+    expect(() => validator.validate(dimensions, false)).not.toThrow();
+  });
+
+  it('rechaza publicar etiquetas de opción duplicadas aunque sus códigos sean distintos', () => {
+    const dimensions = [
+      dimension({
+        sections: [
+          section({
+            questions: [
+              question({
+                type: SurveyQuestionType.SingleChoice,
+                options: [
+                  {
+                    value: 'ocasional_1',
+                    label:
+                      'Se abordan ocasionalmente o sin enfoque sistemático',
+                    score: 50,
+                  },
+                  {
+                    value: 'ocasional_2',
+                    label:
+                      '  SE ABORDAN OCASIONALMENTE O SIN ENFOQUE SISTEMÁTICO  ',
+                    score: 0,
+                  },
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+    ];
+
+    expectValidationError(dimensions, true, 'etiqueta de opción');
+    expectValidationError(dimensions, true, 'está duplicada');
+  });
+
+  it('restringe el cuestionario institucional a selección simple', () => {
+    const dimensions = [
+      dimension({
+        code: OfficialSurveyDimensionCode.InstitutionalCommitment,
+        sections: [
+          section({
+            questions: [question({ type: SurveyQuestionType.Boolean })],
+          }),
+        ],
+      }),
+    ];
+
+    expectValidationError(dimensions, false, 'sólo admite selección simple');
+  });
+
+  it('rechaza Otro y No aplica en el cuestionario institucional', () => {
+    const dimensions = [
+      dimension({
+        code: OfficialSurveyDimensionCode.InstitutionalCommitment,
+        sections: [
+          section({
+            questions: [
+              question({
+                type: SurveyQuestionType.SingleChoice,
+                options: [{ value: 'no_aplica', label: 'No aplica', score: 0 }],
+              }),
+            ],
+          }),
+        ],
+      }),
+    ];
+
+    expectValidationError(dimensions, false, 'no admite “Otro”');
+  });
+
+  it('permite otro dentro de una frase que no representa una opción autónoma', () => {
+    const dimensions = [
+      dimension({
+        code: OfficialSurveyDimensionCode.InstitutionalCommitment,
+        sections: [
+          section({
+            questions: [
+              question({
+                type: SurveyQuestionType.SingleChoice,
+                options: [
+                  {
+                    value: 'enfoque_integral',
+                    label:
+                      'Implementa Escuelas Promotoras u otro enfoque de promoción de la salud',
+                    score: 100,
+                  },
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+    ];
+
+    expect(() => validator.validate(dimensions, false)).not.toThrow();
+  });
+
+  it('aplica las escalas aprobadas según la dimensión', () => {
+    const generalDimensions = [
+      dimension({
+        code: OfficialSurveyDimensionCode.InstitutionalCommitment,
+        sections: [
+          section({
+            questions: [
+              question({
+                type: SurveyQuestionType.SingleChoice,
+                options: [{ value: 'medio', label: 'Medio', score: 66 }],
+              }),
+            ],
+          }),
+        ],
+      }),
+    ];
+    const mentalHealthDimensions = [
+      dimension({
+        code: OfficialSurveyDimensionCode.MentalHealth,
+        sections: [
+          section({
+            questions: [
+              question({
+                type: SurveyQuestionType.SingleChoice,
+                options: [{ value: 'medio', label: 'Medio', score: 66 }],
+              }),
+            ],
+          }),
+        ],
+      }),
+    ];
+
+    expectValidationError(generalDimensions, false, '0, 50, 100');
+    expect(() =>
+      validator.validate(mentalHealthDimensions, false),
+    ).not.toThrow();
   });
 });
 

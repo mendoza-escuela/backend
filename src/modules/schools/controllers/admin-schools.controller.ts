@@ -7,6 +7,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   Res,
@@ -24,8 +25,10 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { AssignSchoolUserDto } from '../dto/assign-school-user.dto';
 import { CreateSchoolDto } from '../dto/create-school.dto';
+import { ListAssignableUsersQueryDto } from '../dto/list-assignable-users-query.dto';
 import { ListSchoolsQueryDto } from '../dto/list-schools-query.dto';
 import { SetSchoolStatusDto } from '../dto/set-school-status.dto';
+import { RectifySchoolDto } from '../dto/rectify-school.dto';
 import { UpdateSchoolDto } from '../dto/update-school.dto';
 import { BulkSchoolImportService } from '../services/bulk-school-import.service';
 import { SchoolsService } from '../services/schools.service';
@@ -43,6 +46,9 @@ export class AdminSchoolsController {
   }
   @Get('filters') filters() {
     return this.schoolsService.filterOptions();
+  }
+  @Get('rectification/catalogs') rectificationCatalogs() {
+    return this.schoolsService.rectificationCatalogs();
   }
   @Get('import/template')
   @Header('Content-Type', 'text/csv; charset=utf-8')
@@ -93,6 +99,12 @@ export class AdminSchoolsController {
     );
     response.send(exported.buffer);
   }
+  @Get(':id/assignable-users') assignableUsers(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: ListAssignableUsersQueryDto,
+  ) {
+    return this.schoolsService.listAssignableUsers(id, query);
+  }
   @Get(':id') findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.schoolsService.findOne(id);
   }
@@ -122,5 +134,14 @@ export class AdminSchoolsController {
     @Req() request: Request & { user: AuthenticatedUser },
   ) {
     return this.schoolsService.assignUser(id, dto, request.user);
+  }
+
+  @Put(':id/rectification')
+  rectify(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RectifySchoolDto,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    return this.schoolsService.rectify(id, dto, request.user);
   }
 }

@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { SurveyVersionStatus } from '../entities/survey-version-status.enum';
 import { SurveyVersion } from '../entities/survey-version.entity';
 import { Survey } from '../entities/survey.entity';
@@ -16,41 +16,34 @@ export class SurveysService {
 
   /** Lista cuestionarios activos que cuentan con una versión publicada. */
   async listAvailable() {
-    const surveys = await this.surveysRepository.find({
-      where: { isActive: true },
-      order: { name: 'ASC' },
-    });
-
-    if (surveys.length === 0) return [];
-
-    const versions = await this.versionsRepository.find({
-      where: {
-        surveyId: In(surveys.map((survey) => survey.id)),
+    const available = await this.versionsRepository
+      .createQueryBuilder('version')
+      .innerJoin('version.survey', 'survey')
+      .select('survey.code', 'code')
+      .addSelect('survey.name', 'name')
+      .addSelect('survey.description', 'description')
+      .addSelect('version.versionNumber', 'versionNumber')
+      .addSelect('version.title', 'versionTitle')
+      .addSelect('version.publishedAt', 'publishedAt')
+      .distinctOn(['version.surveyId'])
+      .where('survey.isActive = true')
+      .andWhere('version.status = :status', {
         status: SurveyVersionStatus.Published,
-      },
-      order: { versionNumber: 'DESC' },
-    });
-    const latestVersions = new Map<string, SurveyVersion>();
-    for (const version of versions) {
-      if (!latestVersions.has(version.surveyId))
-        latestVersions.set(version.surveyId, version);
-    }
+      })
+      .orderBy('version.surveyId', 'ASC')
+      .addOrderBy('version.versionNumber', 'DESC')
+      .getRawMany<{
+        code: string;
+        name: string;
+        description: string | null;
+        versionNumber: number;
+        versionTitle: string;
+        publishedAt: Date;
+      }>();
 
-    const available = surveys.map((survey) => {
-      const version = latestVersions.get(survey.id);
-      return version
-        ? {
-            code: survey.code,
-            name: survey.name,
-            description: survey.description,
-            versionNumber: version.versionNumber,
-            versionTitle: version.title,
-            publishedAt: version.publishedAt,
-          }
-        : null;
-    });
-
-    return available.filter((survey) => survey !== null);
+    return available.sort((first, second) =>
+      first.name.localeCompare(second.name, 'es'),
+    );
   }
 
   /**
@@ -106,6 +99,7 @@ export class SurveysService {
                 value: option.value,
                 label: option.label,
                 helpText: option.helpText,
+                score: option.score,
                 order: option.order,
               })),
             })),

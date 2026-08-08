@@ -18,6 +18,10 @@ import { SurveyVersionStatus } from './survey-version-status.enum';
 @Index('UQ_survey_versions_survey_number', ['surveyId', 'versionNumber'], {
   unique: true,
 })
+@Index('UQ_survey_versions_single_published', ['surveyId'], {
+  unique: true,
+  where: `"status" = 'published'`,
+})
 @Check('CHK_survey_versions_positive_number', '"version_number" > 0')
 @Check(
   'CHK_survey_versions_published_at',

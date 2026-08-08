@@ -25,6 +25,7 @@ import { UserRole } from '../entities/user-role.enum';
 import { AdminResetPasswordDto } from '../dto/admin-reset-password.dto';
 import { CreateUserDto } from '../dto/create-user.dto';
 import { ListUsersQueryDto } from '../dto/list-users-query.dto';
+import { SearchSchoolOptionsQueryDto } from '../dto/search-school-options-query.dto';
 import { SetUserStatusDto } from '../dto/set-user-status.dto';
 import { UpdateUserDto } from '../dto/update-user.dto';
 import { AdminUsersService } from '../services/admin-users.service';
@@ -45,8 +46,8 @@ export class AdminUsersController {
   }
 
   @Get('schools')
-  schools() {
-    return this.adminUsersService.listSchools();
+  schools(@Query() query: SearchSchoolOptionsQueryDto) {
+    return this.adminUsersService.listSchools(query);
   }
 
   @Get('import/template')

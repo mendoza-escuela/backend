@@ -9,11 +9,21 @@ import { SurveysService } from './surveys.service';
 
 describe('SurveysService', () => {
   const surveysRepository = {
-    find: jest.fn(),
     findOneBy: jest.fn(),
   };
+  const listBuilder = {
+    innerJoin: jest.fn().mockReturnThis(),
+    select: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
+    distinctOn: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    orderBy: jest.fn().mockReturnThis(),
+    addOrderBy: jest.fn().mockReturnThis(),
+    getRawMany: jest.fn(),
+  };
   const versionsRepository = {
-    find: jest.fn(),
+    createQueryBuilder: jest.fn(() => listBuilder),
     findOne: jest.fn(),
   };
   let service: SurveysService;
@@ -27,21 +37,15 @@ describe('SurveysService', () => {
   });
 
   it('lista sólo cuestionarios con una versión publicada', async () => {
-    surveysRepository.find.mockResolvedValue([
-      survey({ id: 'survey-1', code: 'diagnostico', name: 'Diagnóstico' }),
-      survey({ id: 'survey-2', code: 'sin-version', name: 'Sin versión' }),
-    ]);
-    versionsRepository.find.mockResolvedValue([
-      version({
-        id: 'version-2',
-        surveyId: 'survey-1',
+    listBuilder.getRawMany.mockResolvedValue([
+      {
+        code: 'diagnostico',
+        name: 'Diagnóstico',
+        description: null,
         versionNumber: 2,
-      }),
-      version({
-        id: 'version-1',
-        surveyId: 'survey-1',
-        versionNumber: 1,
-      }),
+        versionTitle: 'Versión publicada',
+        publishedAt: new Date('2026-01-01'),
+      },
     ]);
 
     await expect(service.listAvailable()).resolves.toEqual([
@@ -50,6 +54,7 @@ describe('SurveysService', () => {
         versionNumber: 2,
       }),
     ]);
+    expect(listBuilder.distinctOn).toHaveBeenCalledWith(['version.surveyId']);
   });
 
   it('devuelve la última versión publicada con contenido ordenado', async () => {
@@ -79,13 +84,23 @@ describe('SurveysService', () => {
                   {
                     id: 'question-1',
                     code: 'Q1',
-                    type: SurveyQuestionType.Boolean,
+                    type: SurveyQuestionType.SingleChoice,
                     prompt: '¿Cuenta con una política institucional?',
                     helpText: null,
                     required: true,
                     order: 0,
                     validation: {},
-                    options: [],
+                    options: [
+                      {
+                        id: 'option-1',
+                        questionId: 'question-1',
+                        value: 'si',
+                        label: 'Sí',
+                        helpText: null,
+                        score: 100,
+                        order: 0,
+                      },
+                    ],
                   },
                 ],
               },
@@ -101,6 +116,9 @@ describe('SurveysService', () => {
     expect(published.version.dimensions[0].sections[0].questions[0]).toEqual(
       expect.objectContaining({ code: 'Q1', required: true }),
     );
+    expect(
+      published.version.dimensions[0].sections[0].questions[0].options[0],
+    ).toEqual(expect.objectContaining({ value: 'si', score: 100 }));
     expect(versionsRepository.findOne).toHaveBeenCalledTimes(1);
   });
 

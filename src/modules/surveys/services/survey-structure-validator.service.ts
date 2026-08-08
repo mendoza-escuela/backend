@@ -1,6 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { SurveyDimensionInputDto } from '../dto/update-survey-version.dto';
 import { SurveyQuestionType } from '../entities/survey-question-type.enum';
+import { isForbiddenInstitutionalSurveyOption } from '../policies/institutional-survey-option.policy';
+import {
+  isOfficialSurveyStructure,
+  OfficialSurveyDimensionCode,
+} from '../templates/official-survey-dimensions.template';
 
 @Injectable()
 export class SurveyStructureValidator {
@@ -20,6 +25,7 @@ export class SurveyStructureValidator {
   /** Devuelve todos los errores para que la interfaz pueda corregirlos en conjunto. */
   inspect(dimensions: SurveyDimensionInputDto[], requireContent = false) {
     const errors: string[] = [];
+    const isInstitutional = isOfficialSurveyStructure(dimensions);
     if (requireContent && dimensions.length === 0)
       errors.push('La versión debe contener al menos una dimensión.');
 
@@ -51,6 +57,13 @@ export class SurveyStructureValidator {
 
         for (const question of section.questions) {
           const questionPath = `${sectionPath} / pregunta ${question.code}`;
+          if (
+            isInstitutional &&
+            question.type !== SurveyQuestionType.SingleChoice
+          )
+            errors.push(
+              `${questionPath}: el cuestionario institucional sólo admite selección simple.`,
+            );
           const isChoice = [
             SurveyQuestionType.SingleChoice,
             SurveyQuestionType.MultipleChoice,
@@ -66,6 +79,53 @@ export class SurveyStructureValidator {
             `opción en ${question.code}`,
             errors,
           );
+          if (requireContent)
+            this.assertUniqueOptionLabels(
+              question.options.map((option) => option.label),
+              questionPath,
+              errors,
+            );
+
+          for (const option of question.options) {
+            if (
+              option.score !== undefined &&
+              option.score !== null &&
+              (!Number.isInteger(option.score) ||
+                option.score < 0 ||
+                option.score > 100)
+            )
+              errors.push(
+                `${questionPath} / opción ${option.value}: el puntaje debe ser un entero entre 0 y 100.`,
+              );
+            const institutionalScores =
+              dimension.code.trim().toLowerCase() ===
+              String(OfficialSurveyDimensionCode.MentalHealth)
+                ? [0, 33, 66, 100]
+                : [0, 50, 100];
+            if (
+              isInstitutional &&
+              option.score !== undefined &&
+              option.score !== null &&
+              !institutionalScores.includes(option.score)
+            )
+              errors.push(
+                `${questionPath} / opción ${option.value}: los puntajes permitidos para esta dimensión son ${institutionalScores.join(', ')}.`,
+              );
+            if (
+              requireContent &&
+              (option.score === undefined || option.score === null)
+            )
+              errors.push(
+                `${questionPath} / opción ${option.value}: debe tener un puntaje antes de publicar.`,
+              );
+            if (
+              isInstitutional &&
+              isForbiddenInstitutionalSurveyOption(option.value, option.label)
+            )
+              errors.push(
+                `${questionPath} / opción ${option.value}: el cuestionario institucional no admite “Otro” ni “No aplica”.`,
+              );
+          }
 
           const validation = question.validation ?? {};
           const isText = [
@@ -140,5 +200,29 @@ export class SurveyStructureValidator {
     );
     for (const duplicate of new Set(duplicates))
       errors.push(`El código de ${label} “${duplicate}” está repetido.`);
+  }
+
+  private assertUniqueOptionLabels(
+    labels: string[],
+    questionPath: string,
+    errors: string[],
+  ) {
+    const normalized = labels.map((label) =>
+      label
+        .trim()
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/\s+/g, ' '),
+    );
+    const duplicates = normalized.filter(
+      (label, index) => normalized.indexOf(label) !== index,
+    );
+    for (const duplicate of new Set(duplicates)) {
+      const label = labels[normalized.indexOf(duplicate)].trim();
+      errors.push(
+        `${questionPath}: la etiqueta de opción “${label}” está duplicada.`,
+      );
+    }
   }
 }

@@ -5,7 +5,14 @@ import { AdminUsersService } from './admin-users.service';
 import { BulkUserImportService } from './bulk-user-import.service';
 
 describe('BulkUserImportService', () => {
-  const schoolsRepository = { find: jest.fn().mockResolvedValue([]) };
+  const getRequestedSchools = jest.fn().mockResolvedValue([]);
+  const schoolsRepository = {
+    createQueryBuilder: jest.fn(() => ({
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      getMany: getRequestedSchools,
+    })),
+  };
   const getExistingUsers = jest.fn().mockResolvedValue([]);
   const usersRepository = {
     createQueryBuilder: jest.fn(() => ({
@@ -41,6 +48,7 @@ describe('BulkUserImportService', () => {
     expect(preview.errorCount).toBe(1);
     expect(preview.rows[0]).not.toHaveProperty('temporaryPassword');
     expect(preview.rows[1].errors.length).toBeGreaterThan(3);
+    expect(getRequestedSchools).toHaveBeenCalledTimes(1);
   });
 
   it('reads XLSX files using the same validation rules', async () => {

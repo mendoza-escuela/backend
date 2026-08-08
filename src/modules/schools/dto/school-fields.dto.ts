@@ -34,6 +34,11 @@ export class SchoolFieldsDto {
   @Length(2, 255)
   name: string;
 
+  @Transform(trim)
+  @IsString()
+  @Length(2, 200)
+  directorName: string;
+
   @Transform(optionalTrim)
   @IsOptional()
   @IsString()
@@ -71,17 +76,15 @@ export class SchoolFieldsDto {
   @Length(2, 120)
   managementType: string;
 
-  @Transform(optionalTrim)
-  @IsOptional()
+  @Transform(trim)
   @IsString()
-  @MaxLength(120)
-  scope?: string;
+  @Length(2, 120)
+  scope: string;
 
-  @Transform(optionalTrim)
-  @IsOptional()
+  @Transform(trim)
   @IsString()
-  @MaxLength(120)
-  shift?: string;
+  @Length(2, 120)
+  shift: string;
 
   @Transform(optionalTrim)
   @IsOptional()

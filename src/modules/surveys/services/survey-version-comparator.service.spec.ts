@@ -97,6 +97,37 @@ describe('SurveyVersionComparator', () => {
       }),
     );
   });
+
+  it('detecta cambios de puntaje en las opciones', () => {
+    const from = version({
+      id: 'from',
+      dimensions: [
+        dimension('entorno', 'Entorno', [
+          question('politica', '¿Tiene una política?', [
+            option('si', 'Sí', 50),
+          ]),
+        ]),
+      ],
+    });
+    const to = version({
+      id: 'to',
+      versionNumber: 2,
+      dimensions: [
+        dimension('entorno', 'Entorno', [
+          question('politica', '¿Tiene una política?', [
+            option('si', 'Sí', 100),
+          ]),
+        ]),
+      ],
+    });
+
+    expect(comparator.compare(from, to).changes).toContainEqual(
+      expect.objectContaining({
+        entityType: 'option',
+        changedFields: ['score'],
+      }),
+    );
+  });
 });
 
 function version(overrides: Partial<SurveyVersion>): SurveyVersion {
@@ -163,13 +194,14 @@ function question(
   };
 }
 
-function option(value: string, label: string) {
+function option(value: string, label: string, score: number | null = null) {
   return {
     id: `option-${value}`,
     questionId: 'question-politica',
     value,
     label,
     helpText: null,
+    score,
     order: value === 'si' ? 0 : 1,
   };
 }
