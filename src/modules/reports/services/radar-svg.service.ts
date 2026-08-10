@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { REPORT_THEME } from '../report-theme';
 
 @Injectable()
 export class RadarSvgService {
@@ -31,20 +32,20 @@ export class RadarSvgService {
       .map((_, index) => this.point(center, radius, index, values.length))
       .map(
         ({ x, y }) =>
-          `<line x1="${center}" y1="${center}" x2="${x.toFixed(2)}" y2="${y.toFixed(2)}" stroke="#D1D5DB" stroke-width="1"/>`,
+          `<line x1="${center}" y1="${center}" x2="${x.toFixed(2)}" y2="${y.toFixed(2)}" stroke="${REPORT_THEME.grid}" stroke-width="1"/>`,
       )
       .join('');
     const labels = values
       .map(({ title, score }, index) => {
         const { x, y } = this.point(center, radius + 32, index, values.length);
-        return `<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" dominant-baseline="middle" font-size="9" fill="#1F2937">${this.escape(title.slice(0, 28))} (${score === null ? 's/d' : score.toFixed(1)})</text>`;
+        return `<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" text-anchor="middle" dominant-baseline="middle" font-size="9" fill="${REPORT_THEME.text}">${this.escape(title.slice(0, 28))} (${score === null ? 's/d' : score.toFixed(1)})</text>`;
       })
       .join('');
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
-      <rect width="100%" height="100%" fill="#FFFFFF"/>
-      ${[0.25, 0.5, 0.75, 1].map((scale) => `<polygon points="${points(scale)}" fill="none" stroke="#E5E7EB" stroke-width="1"/>`).join('')}
+      <rect width="100%" height="100%" fill="${REPORT_THEME.surface}"/>
+      ${[0.25, 0.5, 0.75, 1].map((scale) => `<polygon points="${points(scale)}" fill="none" stroke="${REPORT_THEME.border}" stroke-width="1"/>`).join('')}
       ${axes}
-      <polygon points="${valuePoints}" fill="#3CB4E5" fill-opacity="0.28" stroke="#000F9F" stroke-width="2"/>
+      <polygon points="${valuePoints}" fill="${REPORT_THEME.secondary}" fill-opacity="0.28" stroke="${REPORT_THEME.primary}" stroke-width="2"/>
       ${labels}
     </svg>`;
   }

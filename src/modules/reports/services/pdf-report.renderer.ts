@@ -6,6 +6,7 @@ import type {
   TDocumentDefinitions,
 } from 'pdfmake/interfaces';
 import type { IndividualReportViewModel } from '../report.types';
+import { REPORT_THEME } from '../report-theme';
 
 @Injectable()
 export class PdfReportRenderer {
@@ -77,7 +78,7 @@ export class PdfReportRenderer {
             { text: question.prompt },
             {
               text: `Respuesta: ${question.answer?.selectedOption?.label ?? JSON.stringify(question.answer?.value ?? '')} · Puntaje: ${question.scoreUsed ?? 's/d'}`,
-              color: '#4B5563',
+              color: REPORT_THEME.muted,
             },
           ],
         })),
@@ -87,7 +88,12 @@ export class PdfReportRenderer {
               text: `${question.code}: ${question.prompt} — ${question.applicability.reasonDescription}`,
               margin: [0, 0, 0, 5],
             }))
-          : [{ text: 'No se registraron exclusiones.', color: '#4B5563' }]),
+          : [
+              {
+                text: 'No se registraron exclusiones.',
+                color: REPORT_THEME.muted,
+              },
+            ]),
         { text: 'Trazabilidad del cálculo', style: 'sectionTitle' },
         {
           text: `Algoritmo ${view.algorithm.version}. Configuración de estrellas: ${view.result.stars.configuration?.versionCode ?? view.result.stars.ruleVersion ?? 'sin versión informada'}. Calculado el ${this.date(view.algorithm.calculatedAt)}.`,
@@ -148,15 +154,19 @@ export class PdfReportRenderer {
       },
       pageSize: 'A4' as const,
       pageMargins: [46, 52, 46, 52] as [number, number, number, number],
-      defaultStyle: { font: 'Helvetica', fontSize: 9, color: '#1F2937' },
+      defaultStyle: {
+        font: 'Helvetica',
+        fontSize: 9,
+        color: REPORT_THEME.text,
+      },
       styles: {
-        title: { fontSize: 18, bold: true, color: '#000F9F' },
-        subtitle: { fontSize: 10, color: '#4B5563' },
-        lead: { fontSize: 12, bold: true, color: '#000F9F' },
+        title: { fontSize: 18, bold: true, color: REPORT_THEME.primary },
+        subtitle: { fontSize: 10, color: REPORT_THEME.muted },
+        lead: { fontSize: 12, bold: true, color: REPORT_THEME.primary },
         sectionTitle: {
           fontSize: 12,
           bold: true,
-          color: '#000F9F',
+          color: REPORT_THEME.primary,
           margin: [0, 18, 0, 8] as [number, number, number, number],
         },
       },
@@ -170,7 +180,7 @@ export class PdfReportRenderer {
           },
         ],
         fontSize: 8,
-        color: '#6B7280',
+        color: REPORT_THEME.mutedSoft,
       }),
     };
   }
@@ -188,7 +198,7 @@ export class PdfReportRenderer {
       : {
           text: `${view.branding.organizations} · ${view.branding.programName}`,
           bold: true,
-          color: '#000F9F',
+          color: REPORT_THEME.primary,
           margin: [0, 0, 0, 12],
         };
     return [
@@ -229,7 +239,7 @@ export class PdfReportRenderer {
             {
               text: `Clasificación\n${view.result.stars.value ? '★'.repeat(view.result.stars.value) : 'Sin clasificación'}`,
               style: 'lead',
-              color: '#9A753A',
+              color: REPORT_THEME.accentText,
               alignment: 'center',
               margin: [0, 14, 0, 0],
             },
@@ -242,14 +252,17 @@ export class PdfReportRenderer {
   private alerts(view: IndividualReportViewModel): Content {
     const alerts = view.result.stars.alerts ?? [];
     if (!alerts.length)
-      return { text: 'No se registraron alertas.', color: '#4B5563' };
+      return {
+        text: 'No se registraron alertas.',
+        color: REPORT_THEME.muted,
+      };
     return {
       ul: alerts.map((alert) =>
         typeof alert.message === 'string'
           ? alert.message
           : JSON.stringify(alert),
       ),
-      color: '#991B1B',
+      color: REPORT_THEME.critical,
     };
   }
 
@@ -258,7 +271,7 @@ export class PdfReportRenderer {
       table: {
         widths: [130, '*'],
         body: entries.map(([label, value]) => [
-          { text: label, bold: true, fillColor: '#F3F4F6' },
+          { text: label, bold: true, fillColor: REPORT_THEME.surfaceMuted },
           value ?? 'Sin dato',
         ]),
       },
@@ -284,14 +297,19 @@ export class PdfReportRenderer {
       content.push({
         text: view.branding.legalText,
         fontSize: 7,
-        color: '#6B7280',
+        color: REPORT_THEME.mutedSoft,
         margin: [0, 20, 0, 0],
       });
     return content;
   }
 
   private tableHeader(text: string): TableCell {
-    return { text, bold: true, color: '#FFFFFF', fillColor: '#000F9F' };
+    return {
+      text,
+      bold: true,
+      color: REPORT_THEME.surface,
+      fillColor: REPORT_THEME.primary,
+    };
   }
 
   private score(value: string) {

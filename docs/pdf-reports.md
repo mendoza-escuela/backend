@@ -21,6 +21,11 @@ reporte como el comprobante, incluye el radar SVG y verifica que ambos streams
 producen un documento `%PDF` no vacío. El renderer usa las fuentes estándar
 Helvetica, por lo que no incorpora ni distribuye archivos de fuentes privados.
 
+Los colores se consumen exclusivamente desde `report-theme.ts`, compartido por
+las plantillas y el radar SVG. Sus valores coinciden con los tokens
+institucionales del frontend. REM sólo podrá incorporarse al renderer si se
+reciben los archivos oficiales y una licencia que autorice su redistribución.
+
 ## Identidad institucional
 
 `ReportBrandingProvider` acepta únicamente imágenes PNG/JPEG existentes en las
@@ -30,3 +35,7 @@ activos aproximados.
 
 Las variables admitidas están documentadas en `backend/.env.example` bajo el
 prefijo `REPORT_`.
+
+Los reportes se generan sobre fondo claro. Cada ruta `REPORT_LOGO_*_PATH` debe
+apuntar a la variante oficial autorizada para ese fondo y contar con
+procedencia documentada. No se extraen activos de los PDF de referencia.
