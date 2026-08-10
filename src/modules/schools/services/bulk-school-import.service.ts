@@ -5,6 +5,7 @@ import ExcelJS from 'exceljs';
 import { DataSource } from 'typeorm';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { School } from '../entities/school.entity';
+import { SchoolContactType } from '../entities/school-contact.entity';
 import { SchoolsService } from './schools.service';
 
 type RawRecord = Record<string, string>;
@@ -28,6 +29,12 @@ type ValidatedSchoolRow = {
   referentLastName: string;
   referentEmail: string;
   referentPhone: string;
+  referentPosition: string;
+  healthReferentFirstName: string;
+  healthReferentLastName: string;
+  healthReferentPosition: string;
+  healthReferentEmail: string;
+  healthReferentPhone: string;
   enrollment: number | null;
   characteristics: Record<string, string | number | boolean | null>;
   isActive: boolean | null;
@@ -44,9 +51,9 @@ export class BulkSchoolImportService {
 
   template() {
     const headers =
-      'cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_correo,referente_telefono,matricula,caracteristicas,estado';
+      'cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_cargo,referente_correo,referente_telefono,salud_referente_nombre,salud_referente_apellido,salud_referente_cargo,salud_referente_correo,salud_referente_telefono,matricula,caracteristicas,estado';
     const example =
-      '500012300,Escuela Ejemplo,María González,1-001,Capital,Mendoza,Av. Ejemplo 123,5500,Primario,Estatal,Urbano,Completa,2614000000,escuela@ejemplo.edu.ar,Ana,Pérez,ana.perez@ejemplo.edu.ar,2614000001,350,"{""comedor"":true}",activo';
+      '500012300,Escuela Ejemplo,María González,1-001,Capital,Mendoza,Av. Ejemplo 123,5500,Primario,Estatal,Urbano,Completa,2614000000,escuela@ejemplo.edu.ar,Ana,Pérez,Secretaria,ana.perez@ejemplo.edu.ar,2614000001,Laura,Gómez,Docente,laura.gomez@ejemplo.edu.ar,2614000002,350,"{""comedor"":true}",activo';
     return Buffer.from(`\uFEFF${headers}\r\n${example}`, 'utf8');
   }
 
@@ -82,6 +89,28 @@ export class BulkSchoolImportService {
             referentLastName: row.referentLastName,
             referentEmail: row.referentEmail || undefined,
             referentPhone: row.referentPhone || undefined,
+            contacts: [
+              {
+                type: SchoolContactType.Respondent,
+                firstName: row.referentFirstName,
+                lastName: row.referentLastName,
+                position: row.referentPosition || undefined,
+                email: row.referentEmail || undefined,
+                phone: row.referentPhone || undefined,
+              },
+              ...(row.healthReferentFirstName
+                ? [
+                    {
+                      type: SchoolContactType.HealthPromotion,
+                      firstName: row.healthReferentFirstName,
+                      lastName: row.healthReferentLastName,
+                      position: row.healthReferentPosition || undefined,
+                      email: row.healthReferentEmail || undefined,
+                      phone: row.healthReferentPhone || undefined,
+                    },
+                  ]
+                : []),
+            ],
             enrollment: row.enrollment!,
             characteristics: row.characteristics,
             isActive: row.isActive!,
@@ -178,6 +207,21 @@ export class BulkSchoolImportService {
         referentLastName: record.referente_apellido.trim(),
         referentEmail: record.referente_correo.trim().toLowerCase(),
         referentPhone: record.referente_telefono.trim(),
+        referentPosition: this.optional(record, 'referente_cargo'),
+        healthReferentFirstName: this.optional(
+          record,
+          'salud_referente_nombre',
+        ),
+        healthReferentLastName: this.optional(
+          record,
+          'salud_referente_apellido',
+        ),
+        healthReferentPosition: this.optional(record, 'salud_referente_cargo'),
+        healthReferentEmail: this.optional(
+          record,
+          'salud_referente_correo',
+        ).toLowerCase(),
+        healthReferentPhone: this.optional(record, 'salud_referente_telefono'),
         enrollment,
         characteristics: characteristics.value,
         isActive,
@@ -222,6 +266,42 @@ export class BulkSchoolImportService {
         (!isEmail(row.referentEmail) || row.referentEmail.length > 255)
       )
         row.errors.push('Correo del referente inválido.');
+      if (
+        row.referentPosition &&
+        (row.referentPosition.length < 2 || row.referentPosition.length > 160)
+      )
+        row.errors.push('Cargo del referente inválido.');
+      const hasHealthContact = [
+        row.healthReferentFirstName,
+        row.healthReferentLastName,
+        row.healthReferentPosition,
+        row.healthReferentEmail,
+        row.healthReferentPhone,
+      ].some(Boolean);
+      if (
+        hasHealthContact &&
+        (row.healthReferentFirstName.length < 2 ||
+          row.healthReferentLastName.length < 2)
+      )
+        row.errors.push(
+          'El referente de promoción de la salud requiere nombre y apellido.',
+        );
+      if (
+        row.healthReferentPosition &&
+        (row.healthReferentPosition.length < 2 ||
+          row.healthReferentPosition.length > 160)
+      )
+        row.errors.push(
+          'Cargo del referente de promoción de la salud inválido.',
+        );
+      if (
+        row.healthReferentEmail &&
+        (!isEmail(row.healthReferentEmail) ||
+          row.healthReferentEmail.length > 255)
+      )
+        row.errors.push(
+          'Correo del referente de promoción de la salud inválido.',
+        );
       if (enrollment === null || enrollment < 0 || enrollment > 1_000_000)
         row.errors.push('Matrícula inválida.');
       if (isActive === null)
@@ -374,6 +454,9 @@ export class BulkSchoolImportService {
   private integer(value: string) {
     const number = Number(value);
     return Number.isInteger(number) ? number : null;
+  }
+  private optional(record: RawRecord, key: string) {
+    return record[key]?.trim() ?? '';
   }
   private status(value: string): boolean | null {
     const normalized = value.trim().toLowerCase();

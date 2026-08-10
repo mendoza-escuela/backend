@@ -28,18 +28,32 @@ export type SchoolRectificationSnapshot = {
   capturedAt?: string;
   name: string;
   cue: string;
+  schoolNumber?: string | null;
   directorName: string;
+  department?: string;
   address: string;
+  postalCode?: string | null;
   locality: string;
+  managementType?: string;
   scope: string;
   educationLevel: string;
   shift: string;
+  phone?: string | null;
+  email?: string | null;
   hasKiosk?: boolean | null;
   hasFoodService?: boolean | null;
   isBoarding?: boolean | null;
   shiftCatalog?: SchoolCatalogSnapshot | null;
   educationLevels?: SchoolEducationLevelSnapshot[];
   enrollmentTotal?: number | null;
+  contacts?: Array<{
+    type: 'RESPONDENT' | 'HEALTH_PROMOTION';
+    firstName: string;
+    lastName: string;
+    position: string | null;
+    phone: string | null;
+    email: string | null;
+  }>;
 };
 
 @Entity({ name: 'school_rectifications' })

@@ -11,6 +11,7 @@ import { AuthenticatedUser } from '../../../common/types/authenticated-user.type
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { CampaignStatus } from '../../campaigns/entities/campaign-status.enum';
 import { CampaignsService } from '../../campaigns/services/campaigns.service';
+import { CampaignSchoolsService } from '../../campaigns/services/campaign-schools.service';
 import { EvaluationResultsService } from '../../evaluation/services/evaluation-results.service';
 import { SchoolsService } from '../../schools/services/schools.service';
 import { SurveyQuestionType } from '../../surveys/entities/survey-question-type.enum';
@@ -39,16 +40,18 @@ export class SubmissionsService {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly campaignsService: CampaignsService,
+    private readonly campaignSchoolsService: CampaignSchoolsService,
     private readonly schoolsService: SchoolsService,
     private readonly surveyApplicability: SurveyApplicabilityService,
     private readonly evaluationResults: EvaluationResultsService,
   ) {}
 
   async availableCampaigns(actor: AuthenticatedUser) {
-    const [{ school, rectification }, campaigns] = await Promise.all([
-      this.schoolsService.evaluationContextForUser(actor.id),
-      this.campaignsService.operationalCampaigns(),
-    ]);
+    const { school, rectification } =
+      await this.schoolsService.evaluationContextForUser(actor.id);
+    const campaigns = await this.campaignsService.operationalCampaigns(
+      school.id,
+    );
     const campaignIds = campaigns.map((campaign) => campaign.id);
     const submissions = campaignIds.length
       ? await this.dataSource.getRepository(SurveySubmission).find({
@@ -101,6 +104,11 @@ export class SubmissionsService {
           await this.schoolsService.evaluationContextForUser(actor.id, manager);
         const campaign = await this.campaignsService.assertOperational(
           campaignId,
+          manager,
+        );
+        await this.campaignSchoolsService.assertAssigned(
+          campaignId,
+          school.id,
           manager,
         );
         const existing = await manager.findOne(SurveySubmission, {
@@ -228,6 +236,11 @@ export class SubmissionsService {
         await this.schoolsService.evaluationContextForUser(actor.id, manager);
       await this.schoolsService.assertActiveForEvaluation(school.id, manager);
       await this.campaignsService.assertOperational(campaignId, manager);
+      await this.campaignSchoolsService.assertAssigned(
+        campaignId,
+        school.id,
+        manager,
+      );
       const submission = await this.getSubmission(
         manager,
         campaignId,
@@ -280,6 +293,11 @@ export class SubmissionsService {
         await this.schoolsService.evaluationContextForUser(actor.id, manager);
       await this.schoolsService.assertActiveForEvaluation(school.id, manager);
       await this.campaignsService.assertOperational(campaignId, manager);
+      await this.campaignSchoolsService.assertAssigned(
+        campaignId,
+        school.id,
+        manager,
+      );
       const submission = await this.getSubmission(
         manager,
         campaignId,

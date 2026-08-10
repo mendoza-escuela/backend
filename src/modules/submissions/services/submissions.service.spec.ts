@@ -9,6 +9,7 @@ import { CampaignStatus } from '../../campaigns/entities/campaign-status.enum';
 import { CampaignType } from '../../campaigns/entities/campaign-type.enum';
 import { Campaign } from '../../campaigns/entities/campaign.entity';
 import { CampaignsService } from '../../campaigns/services/campaigns.service';
+import { CampaignSchoolsService } from '../../campaigns/services/campaign-schools.service';
 import { EvaluationResultsService } from '../../evaluation/services/evaluation-results.service';
 import { School } from '../../schools/entities/school.entity';
 import { SchoolsService } from '../../schools/services/schools.service';
@@ -70,6 +71,9 @@ describe('SubmissionsService', () => {
     operationalCampaigns: jest.fn(),
     assertOperational: jest.fn(),
   };
+  const campaignSchoolsService = {
+    assertAssigned: jest.fn(),
+  };
   const schoolsService = {
     evaluationContextForUser: jest.fn(),
     assertActiveForEvaluation: jest.fn(),
@@ -90,6 +94,7 @@ describe('SubmissionsService', () => {
     service = new SubmissionsService(
       dataSource as unknown as DataSource,
       campaignsService as unknown as CampaignsService,
+      campaignSchoolsService as unknown as CampaignSchoolsService,
       schoolsService as unknown as SchoolsService,
       surveyApplicability as unknown as SurveyApplicabilityService,
       evaluationResults as unknown as EvaluationResultsService,

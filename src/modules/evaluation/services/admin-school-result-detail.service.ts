@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { Campaign } from '../../campaigns/entities/campaign.entity';
+import { CampaignSchool } from '../../campaigns/entities/campaign-school.entity';
 import { School } from '../../schools/entities/school.entity';
 import { SurveySubmission } from '../../submissions/entities/survey-submission.entity';
 import { SubmissionStatus } from '../../submissions/entities/submission-status.enum';
@@ -36,11 +37,10 @@ export class AdminSchoolResultDetailService {
     const submission = await this.dataSource
       .getRepository(SurveySubmission)
       .findOne({ where: { campaignId, schoolId } });
-    const cutoff =
-      campaign.closedAt && campaign.closedAt < campaign.endsAt
-        ? campaign.closedAt
-        : campaign.endsAt;
-    if (!submission && school.createdAt > cutoff) {
+    const assignment = await this.dataSource
+      .getRepository(CampaignSchool)
+      .findOne({ where: { campaignId, schoolId } });
+    if (!assignment) {
       throw new NotFoundException(
         'La escuela no estaba incluida en el universo de esta campaña.',
       );

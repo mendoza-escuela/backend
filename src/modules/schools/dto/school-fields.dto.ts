@@ -1,5 +1,8 @@
 import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayUnique,
+  IsArray,
   IsBoolean,
   IsEmail,
   IsInt,
@@ -11,7 +14,9 @@ import {
   MaxLength,
   Matches,
   Min,
+  ValidateNested,
 } from 'class-validator';
+import { SchoolContactDto } from './school-contact.dto';
 
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : value;
@@ -119,6 +124,16 @@ export class SchoolFieldsDto {
   @IsString()
   @MaxLength(40)
   referentPhone?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(2)
+  @ArrayUnique((contact: SchoolContactDto) => contact.type, {
+    message: 'Sólo puede existir un referente de cada tipo.',
+  })
+  @ValidateNested({ each: true })
+  @Type(() => SchoolContactDto)
+  contacts?: SchoolContactDto[];
 
   @Type(() => Number)
   @IsInt()

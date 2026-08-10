@@ -14,6 +14,8 @@ import { SubmissionsModule } from './modules/submissions/submissions.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { EvaluationModule } from './modules/evaluation/evaluation.module';
 import { EvaluationConfigModule } from './modules/evaluation-config/evaluation-config.module';
+import { ExportsModule } from './modules/exports/exports.module';
+import { ReportsModule } from './modules/reports/reports.module';
 
 @Module({
   imports: [
@@ -38,6 +40,8 @@ import { EvaluationConfigModule } from './modules/evaluation-config/evaluation-c
     DashboardModule,
     EvaluationModule,
     EvaluationConfigModule,
+    ExportsModule,
+    ReportsModule,
     AuthModule,
   ],
 })

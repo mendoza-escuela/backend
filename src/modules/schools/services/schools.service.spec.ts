@@ -273,7 +273,7 @@ describe('SchoolsService annual rectification', () => {
       ]),
     );
     expect(savedSnapshot).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       hasKiosk: false,
       hasFoodService: true,
       isBoarding: null,

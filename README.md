@@ -64,13 +64,18 @@ Cada colegio admite un único usuario con rol `school`, y cada usuario sólo pue
 
 La importación acepta CSV/XLSX de hasta 2 MB y 500 filas, ofrece vista previa y realiza importación parcial. La plantilla se obtiene en `GET /admin/schools/import/template`. El padrón filtrado puede exportarse mediante `GET /admin/schools/export?format=csv` o `format=xlsx`; cada exportación queda auditada.
 
-Columnas de la plantilla de colegios:
+Columnas de la plantilla de colegios (los campos del segundo referente son
+opcionales):
 
 ```text
-cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_correo,referente_telefono,matricula,caracteristicas,estado
+cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_cargo,referente_correo,referente_telefono,salud_referente_nombre,salud_referente_apellido,salud_referente_cargo,salud_referente_correo,salud_referente_telefono,matricula,caracteristicas,estado
 ```
 
 `caracteristicas` debe ser un objeto JSON con hasta 30 valores simples, por ejemplo `{"comedor":true}`.
+Los referentes se guardan en `school_contacts` como `RESPONDENT` y
+`HEALTH_PROMOTION`; no son usuarios ni reciben credenciales automáticamente.
+Las columnas históricas del referente principal se mantienen temporalmente
+sincronizadas para compatibilidad.
 
 ## Portal del establecimiento
 
@@ -141,9 +146,25 @@ Las fechas ingresan como fechas civiles `AAAA-MM-DD`. El inicio se almacena a la
 
 La migración `AddCampaignManagement1720375211000` crea la tabla, enumeraciones, índice de estado/fechas y la relación protegida con `survey_versions`.
 
+### Selección de escuelas por campaña
+
+Los endpoints `GET /api/admin/campaigns/:id/schools` y `/schools/options`
+ofrecen listados paginados. `POST /schools/preview` anticipa el alcance y
+`POST /schools/assign` aplica una selección manual, por filtros o masiva;
+`DELETE /schools/:schoolId` realiza una baja lógica. Estas operaciones están
+limitadas a campañas borrador y quedan auditadas. Una asignación con una
+presentación existente no puede quitarse.
+
+La activación exige una versión publicada y al menos una asignación vigente.
+El portal escolar, presentaciones, seguimiento, participación, resultados y
+exportaciones parten siempre de `campaign_schools`.
+
 ## Presentaciones y borradores escolares
 
-`GET /api/school/campaigns` lista para el usuario Escuela todas las campañas activas cuyo período está abierto. No existe una asignación cerrada de escuelas por campaña: cualquier establecimiento activo incorporado durante el período puede verla inmediatamente. La respuesta informa si la ficha está rectificada para el año vigente y el motivo que impide iniciar, cuando corresponda.
+`GET /api/school/campaigns` lista para el usuario Escuela sólo las campañas
+activas, abiertas y asignadas explícitamente a su establecimiento mediante
+`campaign_schools`. La respuesta informa si la ficha está rectificada para el
+año vigente y el motivo que impide iniciar, cuando corresponda.
 
 El seguimiento administrativo se expone mediante
 `GET /api/admin/campaigns/:id/tracking/summary` y
@@ -170,9 +191,36 @@ Las rutas bajo `/api/admin/dashboard/participation` requieren rol `admin`. `GET 
 
 `GET /api/admin/dashboard/participation?campaignId=:uuid` calcula en PostgreSQL, desde una única consulta agregada, el total de escuelas activas, las no iniciadas, los borradores, los envíos y el porcentaje de envíos sobre el total. Admite los filtros `department`, `locality`, `schoolId`, `educationLevel`, `managementType`, `scope` y `shift`. Una escuela sin presentación se considera no iniciada; los estados persistidos `draft` y `submitted` determinan los otros dos grupos. Si el total es cero, el porcentaje devuelto es cero.
 
-Las campañas en borrador quedan fuera del seguimiento. Como actualmente las campañas son globales y no conservan un snapshot del padrón alcanzado, los totales históricos utilizan el estado actual de las escuelas.
+Las campañas en borrador quedan fuera del seguimiento. Los denominadores y
+resultados comienzan en `campaign_schools`, por lo que conservan el universo
+administrativamente asignado y no incorporan todo el padrón activo.
 
 La migración `AddSubmissionApplicabilityDecisions1720375214000` conserva por pregunta el estado resuelto, la regla aplicada, el código y descripción del motivo, la fecha y los hechos escolares relevantes. Los borradores adoptan la rectificación vigente cuando cambia y recalculan contra ese snapshot; los envíos consultan las decisiones congeladas y nunca la ficha escolar actual. Las preguntas excluidas quedan fuera de la completitud y del contrato entregado al cálculo, por lo que no suman cero ni modifican denominadores.
+
+## Exportaciones y reportes
+
+`GET /api/admin/exports/results` y `GET /api/admin/exports/answers` aceptan
+`campaignId`, los filtros del dashboard y `format=csv|xlsx`. CSV se escribe por
+streaming y XLSX usa `WorkbookWriter`; ambos recorren lotes de 100 escuelas y
+neutralizan celdas iniciadas con `=`, `+`, `-` o `@`. Las respuestas y textos
+provienen del snapshot de evaluación, no del cuestionario vigente. La
+auditoría conserva filtros, estado y cantidad de filas, nunca el contenido
+exportado.
+
+Los reportes históricos se descargan desde:
+
+- `GET /api/school/campaigns/:id/submission/report.pdf`
+- `GET /api/school/campaigns/:id/submission/receipt.pdf`
+- `GET /api/admin/campaigns/:campaignId/schools/:schoolId/report.pdf`
+
+El radar es SVG determinístico generado en backend. Logos, firmante, firma,
+texto legal y verificación se configuran con las variables `REPORT_*`; si no
+hay assets oficiales válidos se usa identificación textual.
+
+La distribución general de estrellas para escuelas está preparada en
+`GET /api/school/campaigns/:campaignId/star-distribution`, pero permanece
+desactivada con `SCHOOL_STAR_DISTRIBUTION_ENABLED=false`. Antes de habilitarla
+debe confirmarse el alcance provincial/departamental y el mínimo de muestra.
 
 ## Verificación
 

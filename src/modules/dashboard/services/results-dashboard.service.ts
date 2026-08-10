@@ -7,6 +7,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, SelectQueryBuilder } from 'typeorm';
 import { CampaignStatus } from '../../campaigns/entities/campaign-status.enum';
 import { Campaign } from '../../campaigns/entities/campaign.entity';
+import { CampaignSchool } from '../../campaigns/entities/campaign-school.entity';
 import { School } from '../../schools/entities/school.entity';
 import { SubmissionStatus } from '../../submissions/entities/submission-status.enum';
 import { OFFICIAL_SURVEY_DIMENSIONS } from '../../surveys/templates/official-survey-dimensions.template';
@@ -55,11 +56,9 @@ export class ResultsDashboardService {
       )
       .select('dimension_result.dimension_code', 'code')
       .addSelect('AVG(dimension_result.score)', 'average')
-      .where('school.is_active = true')
       .andWhere('evaluation.id IS NOT NULL')
       .andWhere('dimension_result.score IS NOT NULL')
       .groupBy('dimension_result.dimension_code');
-    this.applyFilters(dimensionBuilder, query);
     const dimensionRows = await dimensionBuilder.getRawMany<{
       code: string;
       average: string;
@@ -130,8 +129,9 @@ export class ResultsDashboardService {
 
   private base(query: ParticipationDashboardQueryDto) {
     const builder = this.dataSource
-      .getRepository(School)
-      .createQueryBuilder('school')
+      .getRepository(CampaignSchool)
+      .createQueryBuilder('assignment')
+      .innerJoin(School, 'school', 'school.id = assignment.schoolId')
       .leftJoin(
         'survey_submissions',
         'submission',
@@ -144,12 +144,15 @@ export class ResultsDashboardService {
         'evaluation.submission_id = submission.id AND submission.status = :submittedStatus',
         { submittedStatus: SubmissionStatus.Submitted },
       )
-      .where('school.is_active = true');
+      .where('assignment.campaignId = :campaignId', {
+        campaignId: query.campaignId,
+      })
+      .andWhere('assignment.removedAt IS NULL');
     this.applyFilters(builder, query);
     return builder;
   }
   private applyFilters(
-    builder: SelectQueryBuilder<School>,
+    builder: SelectQueryBuilder<CampaignSchool>,
     query: ParticipationDashboardQueryDto,
   ) {
     const filters: Array<[keyof ParticipationDashboardQueryDto, string]> = [

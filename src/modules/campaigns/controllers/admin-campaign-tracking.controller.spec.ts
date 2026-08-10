@@ -16,6 +16,7 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { CampaignsService } from '../services/campaigns.service';
 import { CampaignTrackingService } from '../services/campaign-tracking.service';
+import { CampaignSchoolsService } from '../services/campaign-schools.service';
 import { AdminCampaignsController } from './admin-campaigns.controller';
 
 @Injectable()
@@ -64,6 +65,10 @@ describe('Administrative campaign tracking authorization', () => {
         {
           provide: CampaignTrackingService,
           useValue: campaignTrackingService,
+        },
+        {
+          provide: CampaignSchoolsService,
+          useValue: {},
         },
         JwtAuthGuard,
         PasswordChangeRequiredGuard,

@@ -1,16 +1,37 @@
 import { Transform } from 'class-transformer';
-import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import {
+  IsEnum,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
+import { CampaignParticipationStatus } from '../../campaigns/dto/list-campaign-tracking-query.dto';
 
 const optionalText = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim() || undefined : value;
 
-export class ParticipationDashboardQueryDto {
+export class AdminExportQueryDto {
   @IsUUID()
   campaignId: string;
 
   @IsOptional()
   @IsUUID()
   schoolId?: string;
+
+  @IsOptional()
+  @IsIn(['csv', 'xlsx'])
+  format: 'csv' | 'xlsx' = 'csv';
+
+  @IsOptional()
+  @Transform(optionalText)
+  @IsString()
+  @MaxLength(120)
+  search?: string;
 
   @IsOptional()
   @Transform(optionalText)
@@ -47,22 +68,23 @@ export class ParticipationDashboardQueryDto {
   @IsString()
   @MaxLength(120)
   shift?: string;
-}
 
-export class ParticipationFilterOptionsQueryDto {
   @IsOptional()
-  @IsUUID()
-  campaignId?: string;
+  @IsEnum(CampaignParticipationStatus)
+  status?: CampaignParticipationStatus;
+
+  @IsOptional()
+  @Transform(({ value }) =>
+    value === '' || value === undefined ? undefined : Number(value),
+  )
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  stars?: number;
 
   @IsOptional()
   @Transform(optionalText)
   @IsString()
-  @MaxLength(120)
-  department?: string;
-
-  @IsOptional()
-  @Transform(optionalText)
-  @IsString()
-  @MaxLength(120)
-  locality?: string;
+  @MaxLength(80)
+  criticalArea?: string;
 }

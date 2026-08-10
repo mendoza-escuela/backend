@@ -14,6 +14,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { SchoolContactDto } from './school-contact.dto';
 
 const trim = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : value;
@@ -121,4 +122,11 @@ export class RectifySchoolDto {
   @IsOptional()
   @IsISO8601()
   expectedUpdatedAt?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(2)
+  @ValidateNested({ each: true })
+  @Type(() => SchoolContactDto)
+  contacts?: SchoolContactDto[];
 }

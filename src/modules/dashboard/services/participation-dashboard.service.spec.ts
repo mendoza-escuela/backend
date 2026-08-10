@@ -27,6 +27,7 @@ describe('ParticipationDashboardService', () => {
     };
     queryBuilder = {};
     for (const method of [
+      'innerJoin',
       'leftJoin',
       'select',
       'addSelect',
@@ -97,7 +98,9 @@ describe('ParticipationDashboardService', () => {
       locality: 'Ciudad',
       shift: 'Completa',
     });
-    expect(queryBuilder.andWhere).toHaveBeenCalledTimes(3);
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      'assignment.removedAt IS NULL',
+    );
     expect(queryBuilder.getRawOne).toHaveBeenCalledTimes(1);
   });
 

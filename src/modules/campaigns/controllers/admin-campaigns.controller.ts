@@ -19,11 +19,17 @@ import { RolesGuard } from '../../../common/guards/roles.guard';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { UserRole } from '../../users/entities/user-role.enum';
+import {
+  CampaignSchoolSelectionDto,
+  ListCampaignSchoolsQueryDto,
+  RemoveCampaignSchoolDto,
+} from '../dto/campaign-school-selection.dto';
 import { CreateCampaignDto } from '../dto/create-campaign.dto';
 import { ListCampaignTrackingQueryDto } from '../dto/list-campaign-tracking-query.dto';
 import { ListCampaignsQueryDto } from '../dto/list-campaigns-query.dto';
 import { SetCampaignStatusDto } from '../dto/set-campaign-status.dto';
 import { UpdateCampaignDto } from '../dto/update-campaign.dto';
+import { CampaignSchoolsService } from '../services/campaign-schools.service';
 import { CampaignsService } from '../services/campaigns.service';
 import { CampaignTrackingService } from '../services/campaign-tracking.service';
 
@@ -34,6 +40,7 @@ export class AdminCampaignsController {
   constructor(
     private readonly campaignsService: CampaignsService,
     private readonly campaignTrackingService: CampaignTrackingService,
+    private readonly campaignSchoolsService: CampaignSchoolsService,
   ) {}
 
   @Get()
@@ -62,6 +69,54 @@ export class AdminCampaignsController {
     @Query() query: ListCampaignTrackingQueryDto,
   ) {
     return this.campaignTrackingService.list(id, query);
+  }
+
+  @Get(':id/schools')
+  schools(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: ListCampaignSchoolsQueryDto,
+  ) {
+    return this.campaignSchoolsService.list(id, query);
+  }
+
+  @Get(':id/schools/options')
+  schoolOptions(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: ListCampaignSchoolsQueryDto,
+  ) {
+    return this.campaignSchoolsService.options(id, query);
+  }
+
+  @Post(':id/schools/preview')
+  previewSchools(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CampaignSchoolSelectionDto,
+  ) {
+    return this.campaignSchoolsService.preview(id, dto);
+  }
+
+  @Post(':id/schools/assign')
+  assignSchools(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CampaignSchoolSelectionDto,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    return this.campaignSchoolsService.assign(id, dto, request.user);
+  }
+
+  @Delete(':id/schools/:schoolId')
+  removeSchool(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('schoolId', ParseUUIDPipe) schoolId: string,
+    @Body() dto: RemoveCampaignSchoolDto,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    return this.campaignSchoolsService.remove(
+      id,
+      schoolId,
+      dto.reason,
+      request.user,
+    );
   }
 
   @Get(':id')

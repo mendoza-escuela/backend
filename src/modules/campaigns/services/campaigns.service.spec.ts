@@ -6,6 +6,7 @@ import { SurveyVersionStatus } from '../../surveys/entities/survey-version-statu
 import { SurveyVersion } from '../../surveys/entities/survey-version.entity';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { CampaignStatus } from '../entities/campaign-status.enum';
+import { CampaignSchool } from '../entities/campaign-school.entity';
 import { CampaignType } from '../entities/campaign-type.enum';
 import { Campaign } from '../entities/campaign.entity';
 import { CampaignsService } from './campaigns.service';
@@ -41,6 +42,7 @@ describe('CampaignsService', () => {
       (_entity: unknown, attributes: Record<string, unknown>) => attributes,
     ),
     findOne: jest.fn(),
+    count: jest.fn(),
     save: jest.fn(),
     delete: jest.fn(),
   };
@@ -129,5 +131,28 @@ describe('CampaignsService', () => {
     await expect(
       service.setStatus('campaign-id', CampaignStatus.Draft, actor),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('does not activate a campaign without assigned schools', async () => {
+    jest.spyOn(service, 'closeExpiredCampaigns').mockResolvedValue();
+    manager.findOne
+      .mockResolvedValueOnce({
+        id: 'campaign-id',
+        status: CampaignStatus.Draft,
+        surveyVersionId: version.id,
+        endsAt: new Date('2026-12-31T23:59:59.999Z'),
+      })
+      .mockResolvedValueOnce(version);
+    manager.count.mockResolvedValue(0);
+
+    await expect(
+      service.setStatus('campaign-id', CampaignStatus.Active, actor),
+    ).rejects.toThrow(
+      'No se puede activar una campaña sin escuelas asignadas.',
+    );
+    expect(manager.count).toHaveBeenCalledWith(
+      CampaignSchool,
+      expect.anything(),
+    );
   });
 });

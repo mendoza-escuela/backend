@@ -12,6 +12,7 @@ import {
 } from 'typeorm';
 import { SchoolEducationLevel } from './school-education-level.entity';
 import { SchoolShiftCatalog } from './school-shift-catalog.entity';
+import { SchoolContact } from './school-contact.entity';
 
 @Entity({ name: 'schools' })
 @Index('IDX_schools_created_at_id', ['createdAt', 'id'])
@@ -122,6 +123,9 @@ export class School {
 
   @OneToMany(() => SchoolEducationLevel, (level) => level.school)
   structuredEducationLevels: SchoolEducationLevel[];
+
+  @OneToMany(() => SchoolContact, (contact) => contact.school)
+  contacts: SchoolContact[];
 
   @Column({ type: 'jsonb', default: () => "'{}'::jsonb" })
   characteristics: Record<string, string | number | boolean | null>;

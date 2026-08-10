@@ -30,6 +30,11 @@ import { SchoolEducationLevel } from '../entities/school-education-level.entity'
 import { SchoolRectificationEducationLevel } from '../entities/school-rectification-education-level.entity';
 import { SchoolShiftCatalog } from '../entities/school-shift-catalog.entity';
 import { School } from '../entities/school.entity';
+import {
+  SchoolContact,
+  SchoolContactType,
+} from '../entities/school-contact.entity';
+import { SchoolContactDto } from '../dto/school-contact.dto';
 
 type SelectedEducationLevel = {
   level: EducationLevelCatalog;
@@ -164,6 +169,7 @@ export class SchoolsService {
       relations: {
         shiftCatalog: true,
         structuredEducationLevels: { level: true },
+        contacts: true,
       },
       order: { structuredEducationLevels: { order: 'ASC' } },
     });
@@ -439,6 +445,7 @@ export class SchoolsService {
           school,
           currentStructured.shiftCatalog,
           currentStructured.educationLevels,
+          currentStructured.contacts,
         );
         Object.assign(school, normalized);
         if (dto.hasKiosk !== undefined) school.hasKiosk = dto.hasKiosk;
@@ -449,6 +456,11 @@ export class SchoolsService {
           school.shiftCatalogId = selectedShift?.id ?? null;
         if (dto.enrollment !== undefined) school.enrollment = dto.enrollment;
         await manager.save(School, school);
+
+        const finalContacts =
+          dto.contacts === undefined
+            ? currentStructured.contacts
+            : await this.replaceContacts(manager, school, dto.contacts);
 
         if (dto.educationLevels !== undefined) {
           await manager.delete(SchoolEducationLevel, { schoolId });
@@ -480,6 +492,7 @@ export class SchoolsService {
           school,
           finalShift,
           finalLevels,
+          finalContacts,
           rectificationId,
           capturedAt,
         );
@@ -510,7 +523,12 @@ export class SchoolsService {
           rectificationId: rectification.id,
           changes: this.diff(
             before,
-            this.rectificationSnapshot(school, finalShift, finalLevels),
+            this.rectificationSnapshot(
+              school,
+              finalShift,
+              finalLevels,
+              finalContacts,
+            ),
           ),
           snapshot,
         });
@@ -523,6 +541,8 @@ export class SchoolsService {
 
   async create(dto: CreateSchoolDto, actor: AuthenticatedUser) {
     const normalized = this.normalize(dto);
+    const requestedContacts = normalized.contacts;
+    delete (normalized as Partial<CreateSchoolDto>).contacts;
     this.validateCharacteristics(normalized.characteristics);
     try {
       const id = await this.dataSource.transaction(async (manager) => {
@@ -530,6 +550,11 @@ export class SchoolsService {
         const school = await manager.save(
           School,
           manager.create(School, normalized),
+        );
+        await this.replaceContacts(
+          manager,
+          school,
+          requestedContacts ?? [this.legacyRespondentContact(school)],
         );
         await this.audit(
           manager,
@@ -555,12 +580,16 @@ export class SchoolsService {
         if (!school) throw new NotFoundException('Colegio no encontrado.');
         const before = this.snapshot(school);
         const normalized = this.normalize(dto);
+        const requestedContacts = normalized.contacts;
+        delete (normalized as Partial<UpdateSchoolDto>).contacts;
         if (normalized.cue && normalized.cue !== school.cue)
           await this.assertCueUnique(manager, normalized.cue, id);
         if (normalized.characteristics)
           this.validateCharacteristics(normalized.characteristics);
         Object.assign(school, normalized);
         await manager.save(School, school);
+        if (requestedContacts)
+          await this.replaceContacts(manager, school, requestedContacts);
         const changes = this.diff(before, this.snapshot(school));
         if (Object.keys(changes).length)
           await this.audit(manager, actor.id, 'SCHOOL_UPDATED', id, changes);
@@ -685,11 +714,25 @@ export class SchoolsService {
         'school.phone',
         'school.referentFirstName',
         'school.referentLastName',
+        'school.referentEmail',
+        'school.referentPhone',
         'school.enrollment',
         'school.isActive',
       ])
       .getMany();
     const currentYear = this.currentPeriodYear();
+    const contacts = schools.length
+      ? await this.dataSource.getRepository(SchoolContact).find({
+          where: { schoolId: In(schools.map(({ id }) => id)) },
+        })
+      : [];
+    const contactsBySchool = new Map<string, SchoolContact[]>();
+    contacts.forEach((contact) =>
+      contactsBySchool.set(contact.schoolId, [
+        ...(contactsBySchool.get(contact.schoolId) ?? []),
+        contact,
+      ]),
+    );
     const rectifiedRows = schools.length
       ? await this.dataSource
           .getRepository(SchoolRectification)
@@ -728,35 +771,62 @@ export class SchoolsService {
       'Jornada',
       'Correo',
       'Teléfono',
-      'Referente',
+      'Referente respondente',
+      'Cargo respondente',
+      'Correo respondente',
+      'Teléfono respondente',
+      'Referente de promoción de la salud',
+      'Cargo promoción de la salud',
+      'Correo promoción de la salud',
+      'Teléfono promoción de la salud',
       'Matrícula',
       'Estado',
       'Período de rectificación',
       'Rectificada',
       'Fecha de rectificación',
     ];
-    const rows = schools.map((school) => [
-      school.cue,
-      school.name,
-      school.directorName,
-      school.schoolNumber ?? '',
-      school.department,
-      school.locality,
-      school.address,
-      school.postalCode ?? '',
-      school.educationLevel,
-      school.managementType,
-      school.scope ?? '',
-      school.shift ?? '',
-      school.email ?? '',
-      school.phone ?? '',
-      `${school.referentLastName}, ${school.referentFirstName}`,
-      school.enrollment,
-      school.isActive ? 'Activo' : 'Inactivo',
-      currentYear,
-      rectifiedBySchool.has(school.id) ? 'Sí' : 'No',
-      rectifiedBySchool.get(school.id)?.toISOString() ?? '',
-    ]);
+    const rows = schools.map((school) => {
+      const schoolContacts = contactsBySchool.get(school.id) ?? [];
+      const respondent = schoolContacts.find(
+        ({ type }) => type === SchoolContactType.Respondent,
+      );
+      const healthPromotion = schoolContacts.find(
+        ({ type }) => type === SchoolContactType.HealthPromotion,
+      );
+      return [
+        school.cue,
+        school.name,
+        school.directorName,
+        school.schoolNumber ?? '',
+        school.department,
+        school.locality,
+        school.address,
+        school.postalCode ?? '',
+        school.educationLevel,
+        school.managementType,
+        school.scope ?? '',
+        school.shift ?? '',
+        school.email ?? '',
+        school.phone ?? '',
+        respondent
+          ? `${respondent.lastName}, ${respondent.firstName}`
+          : `${school.referentLastName}, ${school.referentFirstName}`,
+        respondent?.position ?? '',
+        respondent?.email ?? school.referentEmail ?? '',
+        respondent?.phone ?? school.referentPhone ?? '',
+        healthPromotion
+          ? `${healthPromotion.lastName}, ${healthPromotion.firstName}`
+          : '',
+        healthPromotion?.position ?? '',
+        healthPromotion?.email ?? '',
+        healthPromotion?.phone ?? '',
+        school.enrollment,
+        school.isActive ? 'Activo' : 'Inactivo',
+        currentYear,
+        rectifiedBySchool.has(school.id) ? 'Sí' : 'No',
+        rectifiedBySchool.get(school.id)?.toISOString() ?? '',
+      ];
+    });
     if (format === 'csv')
       return {
         buffer: Buffer.from(
@@ -931,25 +1001,32 @@ export class SchoolsService {
     school: School,
     shiftCatalog: SchoolShiftCatalog | null,
     educationLevels: SelectedEducationLevel[],
+    contacts: SchoolContact[],
     sourceRectificationId?: string,
     capturedAt?: Date,
   ): SchoolRectificationSnapshot {
     return {
       ...(sourceRectificationId
         ? {
-            schemaVersion: 2,
+            schemaVersion: 3,
             sourceRectificationId,
             capturedAt: (capturedAt ?? new Date()).toISOString(),
           }
         : {}),
       name: school.name,
       cue: school.cue,
+      schoolNumber: school.schoolNumber,
       directorName: school.directorName,
+      department: school.department,
       address: school.address,
+      postalCode: school.postalCode,
       locality: school.locality,
+      managementType: school.managementType,
       scope: school.scope,
       educationLevel: school.educationLevel,
       shift: school.shift,
+      phone: school.phone,
+      email: school.email,
       hasKiosk: school.hasKiosk ?? null,
       hasFoodService: school.hasFoodService ?? null,
       isBoarding: school.isBoarding ?? null,
@@ -967,6 +1044,17 @@ export class SchoolsService {
         enrollment,
       })),
       enrollmentTotal: school.enrollment ?? null,
+      contacts: contacts
+        .slice()
+        .sort((left, right) => left.type.localeCompare(right.type))
+        .map(({ type, firstName, lastName, position, phone, email }) => ({
+          type,
+          firstName,
+          lastName,
+          position,
+          phone,
+          email,
+        })),
     };
   }
 
@@ -976,6 +1064,7 @@ export class SchoolsService {
       relations: {
         shiftCatalog: true,
         structuredEducationLevels: { level: true },
+        contacts: true,
       },
       order: { structuredEducationLevels: { order: 'ASC' } },
     });
@@ -984,7 +1073,7 @@ export class SchoolsService {
   }
 
   private serializeSchool(school: School) {
-    const { structuredEducationLevels, ...fields } = school;
+    const { structuredEducationLevels, contacts, ...fields } = school;
     return {
       ...fields,
       shiftCatalog: school.shiftCatalog
@@ -1000,6 +1089,18 @@ export class SchoolsService {
           enrollment: selection.enrollment,
           order: selection.order,
         })),
+      contacts: (contacts ?? [])
+        .slice()
+        .sort((left, right) => left.type.localeCompare(right.type))
+        .map(({ id, type, firstName, lastName, position, phone, email }) => ({
+          id,
+          type,
+          firstName,
+          lastName,
+          position,
+          phone,
+          email,
+        })),
     };
   }
 
@@ -1009,8 +1110,9 @@ export class SchoolsService {
   ): Promise<{
     shiftCatalog: SchoolShiftCatalog | null;
     educationLevels: SelectedEducationLevel[];
+    contacts: SchoolContact[];
   }> {
-    const [shiftCatalog, selections] = await Promise.all([
+    const [shiftCatalog, selections, contacts] = await Promise.all([
       school.shiftCatalogId
         ? manager.findOneBy(SchoolShiftCatalog, {
             id: school.shiftCatalogId,
@@ -1021,6 +1123,10 @@ export class SchoolsService {
         relations: { level: true },
         order: { order: 'ASC' },
       }),
+      manager.find(SchoolContact, {
+        where: { schoolId: school.id },
+        order: { type: 'ASC' },
+      }),
     ]);
     return {
       shiftCatalog,
@@ -1028,6 +1134,70 @@ export class SchoolsService {
         level: selection.level,
         enrollment: selection.enrollment,
       })),
+      contacts,
+    };
+  }
+
+  /**
+   * Reemplaza de forma atómica los dos referentes y sincroniza el referente
+   * respondente con las columnas heredadas durante la ventana de transición.
+   */
+  private async replaceContacts(
+    manager: EntityManager,
+    school: School,
+    contacts: SchoolContactDto[],
+  ): Promise<SchoolContact[]> {
+    const types = contacts.map(({ type }) => type);
+    if (new Set(types).size !== types.length)
+      throw new BadRequestException(
+        'Sólo puede existir un referente escolar de cada tipo.',
+      );
+    if (!types.includes(SchoolContactType.Respondent))
+      throw new BadRequestException(
+        'Debe informarse el referente respondente del establecimiento.',
+      );
+    await manager.delete(SchoolContact, { schoolId: school.id });
+    const saved = contacts.length
+      ? await manager.save(
+          SchoolContact,
+          contacts.map((contact) =>
+            manager.create(SchoolContact, {
+              schoolId: school.id,
+              type: contact.type,
+              firstName: contact.firstName.trim(),
+              lastName: contact.lastName.trim(),
+              position: contact.position?.trim() || null,
+              phone: contact.phone?.trim() || null,
+              email: contact.email?.trim().toLowerCase() || null,
+            }),
+          ),
+        )
+      : [];
+    const respondent = saved.find(
+      ({ type }) => type === SchoolContactType.Respondent,
+    );
+    if (respondent) {
+      school.referentFirstName = respondent.firstName;
+      school.referentLastName = respondent.lastName;
+      school.referentPhone = respondent.phone;
+      school.referentEmail = respondent.email;
+      await manager.update(School, school.id, {
+        referentFirstName: respondent.firstName,
+        referentLastName: respondent.lastName,
+        referentPhone: respondent.phone,
+        referentEmail: respondent.email,
+      });
+    }
+    return saved;
+  }
+
+  private legacyRespondentContact(school: School): SchoolContactDto {
+    return {
+      type: SchoolContactType.Respondent,
+      firstName: school.referentFirstName,
+      lastName: school.referentLastName,
+      phone: school.referentPhone ?? undefined,
+      email: school.referentEmail ?? undefined,
     };
   }
 

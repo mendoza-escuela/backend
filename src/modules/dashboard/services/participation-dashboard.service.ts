@@ -7,6 +7,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, SelectQueryBuilder } from 'typeorm';
 import { CampaignStatus } from '../../campaigns/entities/campaign-status.enum';
 import { Campaign } from '../../campaigns/entities/campaign.entity';
+import { CampaignSchool } from '../../campaigns/entities/campaign-school.entity';
 import { School } from '../../schools/entities/school.entity';
 import { SubmissionStatus } from '../../submissions/entities/submission-status.enum';
 import {
@@ -26,7 +27,7 @@ export class ParticipationDashboardService {
   constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
   /**
-   * Calcula todos los indicadores desde el mismo conjunto de escuelas activas.
+   * Calcula todos los indicadores desde las asignaciones vigentes.
    * La presentación es única por escuela y campaña, por lo que el LEFT JOIN no
    * multiplica filas ni requiere descargar registros al cliente.
    */
@@ -41,8 +42,9 @@ export class ParticipationDashboardService {
       );
 
     const builder = this.dataSource
-      .getRepository(School)
-      .createQueryBuilder('school')
+      .getRepository(CampaignSchool)
+      .createQueryBuilder('assignment')
+      .innerJoin(School, 'school', 'school.id = assignment.schoolId')
       .leftJoin(
         'survey_submissions',
         'submission',
@@ -62,7 +64,10 @@ export class ParticipationDashboardService {
         'COUNT(school.id) FILTER (WHERE submission.status = :submittedStatus)',
         'submitted',
       )
-      .where('school.is_active = true')
+      .where('assignment.campaignId = :campaignId', {
+        campaignId: campaign.id,
+      })
+      .andWhere('assignment.removedAt IS NULL')
       .setParameters({
         draftStatus: SubmissionStatus.Draft,
         submittedStatus: SubmissionStatus.Submitted,
@@ -115,10 +120,33 @@ export class ParticipationDashboardService {
       .addOrderBy('campaign.name', 'ASC')
       .getMany();
 
+    const defaultCampaignId =
+      campaigns.find((campaign) => campaign.status === CampaignStatus.Active)
+        ?.id ?? null;
+    const selectedCampaignId =
+      campaigns.find((campaign) => campaign.id === query.campaignId)?.id ??
+      defaultCampaignId;
+    if (!selectedCampaignId)
+      return {
+        campaigns: [],
+        defaultCampaignId: null,
+        departments: [],
+        localities: [],
+        educationLevels: [],
+        managementTypes: [],
+        scopes: [],
+        shifts: [],
+        schools: [],
+      };
+
     const schoolBuilder = this.dataSource
-      .getRepository(School)
-      .createQueryBuilder('school')
-      .where('school.is_active = true');
+      .getRepository(CampaignSchool)
+      .createQueryBuilder('assignment')
+      .innerJoin(School, 'school', 'school.id = assignment.schoolId')
+      .where('assignment.campaignId = :selectedCampaignId', {
+        selectedCampaignId,
+      })
+      .andWhere('assignment.removedAt IS NULL');
     if (query.department)
       schoolBuilder.andWhere('school.department = :department', {
         department: query.department,
@@ -129,23 +157,26 @@ export class ParticipationDashboardService {
       });
 
     const [departments, localities, attributes, schools] = await Promise.all([
-      this.distinct('department'),
-      this.distinct('locality', query.department),
+      this.distinct('department', selectedCampaignId),
+      this.distinct('locality', selectedCampaignId, query.department),
       schoolBuilder
         .clone()
-        .select([
-          'school.educationLevel',
-          'school.managementType',
-          'school.scope',
-          'school.shift',
-        ])
-        .getMany(),
+        .select('school.educationLevel', 'educationLevel')
+        .addSelect('school.managementType', 'managementType')
+        .addSelect('school.scope', 'scope')
+        .addSelect('school.shift', 'shift')
+        .getRawMany<
+          Pick<School, 'educationLevel' | 'managementType' | 'scope' | 'shift'>
+        >(),
       schoolBuilder
         .clone()
-        .select(['school.id', 'school.cue', 'school.name'])
+        .select('school.id', 'id')
+        .addSelect('school.cue', 'cue')
+        .addSelect('school.name', 'name')
         .orderBy('school.name', 'ASC')
         .addOrderBy('school.cue', 'ASC')
-        .getMany(),
+        .addOrderBy('school.id', 'ASC')
+        .getRawMany<Pick<School, 'id' | 'cue' | 'name'>>(),
     ]);
 
     return {
@@ -156,9 +187,7 @@ export class ParticipationDashboardService {
         startsAt: campaign.startsAt,
         endsAt: campaign.endsAt,
       })),
-      defaultCampaignId:
-        campaigns.find((campaign) => campaign.status === CampaignStatus.Active)
-          ?.id ?? null,
+      defaultCampaignId,
       departments,
       localities,
       educationLevels: this.values(attributes, 'educationLevel'),
@@ -170,7 +199,7 @@ export class ParticipationDashboardService {
   }
 
   private applyFilters(
-    builder: SelectQueryBuilder<School>,
+    builder: SelectQueryBuilder<CampaignSchool>,
     query: ParticipationDashboardQueryDto,
   ) {
     const filters: Array<[keyof ParticipationDashboardQueryDto, string]> = [
@@ -191,14 +220,17 @@ export class ParticipationDashboardService {
 
   private async distinct(
     field: 'department' | 'locality',
+    campaignId: string,
     department?: string,
   ) {
     const column = field === 'department' ? 'department' : 'locality';
     const builder = this.dataSource
-      .getRepository(School)
-      .createQueryBuilder('school')
+      .getRepository(CampaignSchool)
+      .createQueryBuilder('assignment')
+      .innerJoin(School, 'school', 'school.id = assignment.schoolId')
       .select(`DISTINCT school.${column}`, 'value')
-      .where('school.is_active = true')
+      .where('assignment.campaignId = :campaignId', { campaignId })
+      .andWhere('assignment.removedAt IS NULL')
       .andWhere(`school.${column} IS NOT NULL`)
       .andWhere(`TRIM(school.${column}) != ''`)
       .orderBy(`school.${column}`, 'ASC');
@@ -208,7 +240,7 @@ export class ParticipationDashboardService {
     return rows.map(({ value }) => value);
   }
 
-  private values(schools: School[], field: keyof School) {
+  private values(schools: Array<Partial<School>>, field: keyof School) {
     return [...new Set(schools.map((school) => school[field]))]
       .filter((value): value is string => typeof value === 'string' && !!value)
       .sort((left, right) => left.localeCompare(right, 'es'));

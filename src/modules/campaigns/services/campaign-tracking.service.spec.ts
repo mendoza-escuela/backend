@@ -87,8 +87,14 @@ describe('CampaignTrackingService', () => {
 
   it('maps not-started, draft and submitted schools without hiding inactive history', async () => {
     const countBuilder = queryBuilder();
+    const idsBuilder = queryBuilder();
     const dataBuilder = queryBuilder();
     countBuilder.getCount.mockResolvedValue(3);
+    idsBuilder.getRawMany.mockResolvedValue([
+      { schoolId: 'school-not-started' },
+      { schoolId: 'school-draft' },
+      { schoolId: 'school-submitted' },
+    ]);
     dataBuilder.getRawMany.mockResolvedValue([
       trackingRow({
         schoolId: 'school-not-started',
@@ -116,6 +122,7 @@ describe('CampaignTrackingService', () => {
     ]);
     schoolRepository.createQueryBuilder
       .mockReturnValueOnce(countBuilder)
+      .mockReturnValueOnce(idsBuilder)
       .mockReturnValueOnce(dataBuilder);
 
     const response = await service.list(
@@ -150,12 +157,12 @@ describe('CampaignTrackingService', () => {
 
   it('applies status, CUE/name search, pagination and ordering in backend', async () => {
     const countBuilder = queryBuilder();
-    const dataBuilder = queryBuilder();
+    const idsBuilder = queryBuilder();
     countBuilder.getCount.mockResolvedValue(0);
-    dataBuilder.getRawMany.mockResolvedValue([]);
+    idsBuilder.getRawMany.mockResolvedValue([]);
     schoolRepository.createQueryBuilder
       .mockReturnValueOnce(countBuilder)
-      .mockReturnValueOnce(dataBuilder);
+      .mockReturnValueOnce(idsBuilder);
     const query = Object.assign(new ListCampaignTrackingQueryDto(), {
       search: '50001',
       status: CampaignParticipationStatus.Draft,
@@ -175,9 +182,9 @@ describe('CampaignTrackingService', () => {
       'submission.status = :trackingStatus',
       { trackingStatus: SubmissionStatus.Draft },
     );
-    expect(dataBuilder.skip).toHaveBeenCalledWith(10);
-    expect(dataBuilder.take).toHaveBeenCalledWith(10);
-    expect(dataBuilder.orderBy).toHaveBeenCalledWith(
+    expect(idsBuilder.offset).toHaveBeenCalledWith(10);
+    expect(idsBuilder.limit).toHaveBeenCalledWith(10);
+    expect(idsBuilder.orderBy).toHaveBeenCalledWith(
       'submission.lastSavedAt',
       'DESC',
       'NULLS LAST',
@@ -204,15 +211,17 @@ describe('CampaignTrackingService', () => {
 
     expect(summary.campaign.inclusionCutoff).toBe('2026-07-15T18:00:00.000Z');
     expect(builder.where).toHaveBeenCalledWith(
-      expect.stringContaining('school.createdAt <= :inclusionCutoff'),
-      { inclusionCutoff: manuallyClosed.closedAt },
+      'assignment.campaignId = :campaignId',
+      { campaignId: campaign.id },
     );
   });
 
   it('marks an incomplete historical respondent without dropping the sent row', async () => {
     const countBuilder = queryBuilder();
+    const idsBuilder = queryBuilder();
     const dataBuilder = queryBuilder();
     countBuilder.getCount.mockResolvedValue(1);
+    idsBuilder.getRawMany.mockResolvedValue([{ schoolId: 'school-id' }]);
     dataBuilder.getRawMany.mockResolvedValue([
       trackingRow({
         submissionId: 'submission-id',
@@ -226,6 +235,7 @@ describe('CampaignTrackingService', () => {
     ]);
     schoolRepository.createQueryBuilder
       .mockReturnValueOnce(countBuilder)
+      .mockReturnValueOnce(idsBuilder)
       .mockReturnValueOnce(dataBuilder);
 
     const response = await service.list(
@@ -252,6 +262,7 @@ describe('CampaignTrackingService', () => {
 
 function queryBuilder() {
   const builder = {
+    innerJoin: jest.fn(),
     leftJoin: jest.fn(),
     where: jest.fn(),
     andWhere: jest.fn(),
@@ -261,11 +272,14 @@ function queryBuilder() {
     addOrderBy: jest.fn(),
     skip: jest.fn(),
     take: jest.fn(),
+    limit: jest.fn(),
+    offset: jest.fn(),
     getCount: jest.fn(),
     getRawOne: jest.fn(),
     getRawMany: jest.fn(),
   };
   for (const method of [
+    'innerJoin',
     'leftJoin',
     'where',
     'andWhere',
@@ -275,6 +289,8 @@ function queryBuilder() {
     'addOrderBy',
     'skip',
     'take',
+    'limit',
+    'offset',
   ] as const) {
     builder[method].mockReturnValue(builder);
   }
