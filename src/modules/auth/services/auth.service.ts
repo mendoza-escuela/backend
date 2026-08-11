@@ -9,10 +9,19 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
 import { createHash, randomBytes, randomUUID } from 'crypto';
-import { DataSource, IsNull, MoreThan, Repository } from 'typeorm';
+import {
+  DataSource,
+  EntityManager,
+  IsNull,
+  MoreThan,
+  Repository,
+} from 'typeorm';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { UsersService } from '../../users/services/users.service';
 import { User } from '../../users/entities/user.entity';
+import { UserRole } from '../../users/entities/user-role.enum';
+import { UserSchool } from '../../users/entities/user-school.entity';
+import { School } from '../../schools/entities/school.entity';
 import { AuthSession } from '../entities/auth-session.entity';
 import { PasswordResetToken } from '../entities/password-reset-token.entity';
 import { assertStrongPassword } from '../utils/password-policy';
@@ -22,6 +31,11 @@ type SessionUser = AuthenticatedUser & {
   mustChangePassword: boolean;
   lastLoginAt: Date | null;
 };
+
+type NewAuthSession = Pick<
+  AuthSession,
+  'tokenId' | 'userId' | 'expiresAt' | 'revokedAt'
+>;
 
 @Injectable()
 export class AuthService {
@@ -77,15 +91,23 @@ export class AuthService {
     }
 
     const previousLastLoginAt = user.lastLoginAt;
-    await this.usersService.recordSuccessfulLogin(user.id);
     const tokenId = randomUUID();
     const expiresAt = new Date(Date.now() + this.sessionHours * 60 * 60_000);
-    await this.sessionsRepository.save({
+    const session: NewAuthSession = {
       tokenId,
       userId: user.id,
       expiresAt,
       revokedAt: null,
-    });
+    };
+
+    if (user.role === UserRole.School) {
+      const sessionCreated = await this.createSchoolSessionIfActive(session);
+      if (!sessionCreated) throw invalidCredentials;
+      await this.usersService.recordSuccessfulLogin(user.id);
+    } else {
+      await this.usersService.recordSuccessfulLogin(user.id);
+      await this.sessionsRepository.save(session);
+    }
 
     return {
       accessToken: await this.jwtService.signAsync({
@@ -119,6 +141,16 @@ export class AuthService {
     const user = session ? await this.usersService.findById(userId) : null;
     if (!session || !user)
       throw new UnauthorizedException('La sesión no es válida o venció.');
+    if (
+      user.role === UserRole.School &&
+      !(await this.hasActiveSchoolAssignment(this.dataSource.manager, user.id))
+    ) {
+      await this.sessionsRepository.update(
+        { tokenId, userId, revokedAt: IsNull() },
+        { revokedAt: new Date() },
+      );
+      throw new UnauthorizedException('La sesión no es válida o venció.');
+    }
     return {
       id: user.id,
       firstName: user.firstName,
@@ -255,6 +287,51 @@ export class AuthService {
     if (exceptTokenId)
       query.andWhere('token_id <> :exceptTokenId', { exceptTokenId });
     await query.execute();
+  }
+
+  /**
+   * Crea una sesión escolar sólo mientras la fila del establecimiento está
+   * bloqueada para lectura. La baja usa un bloqueo de escritura sobre esa misma
+   * fila, por lo que necesariamente revocará esta sesión o se ejecutará antes y
+   * hará fallar la validación de estado.
+   */
+  private createSchoolSessionIfActive(
+    session: NewAuthSession,
+  ): Promise<boolean> {
+    return this.dataSource.transaction(async (manager) => {
+      const association = await manager.findOneBy(UserSchool, {
+        userId: session.userId,
+      });
+      if (!association) return false;
+
+      const school = await manager.getRepository(School).findOne({
+        where: { id: association.schoolId },
+        lock: { mode: 'pessimistic_read' },
+      });
+      if (!school?.isActive) return false;
+
+      // La asociación pudo cambiar mientras se esperaba el lock de la escuela.
+      const currentAssociation = await manager.findOneBy(UserSchool, {
+        userId: session.userId,
+        schoolId: school.id,
+      });
+      if (!currentAssociation) return false;
+
+      await manager.getRepository(AuthSession).save(session);
+      return true;
+    });
+  }
+
+  /** Comprueba la asociación 1:1 en cada uso de una sesión escolar. */
+  private async hasActiveSchoolAssignment(
+    manager: EntityManager,
+    userId: string,
+  ): Promise<boolean> {
+    const association = await manager.findOne(UserSchool, {
+      where: { userId },
+      relations: { school: true },
+    });
+    return association?.school.isActive === true;
   }
 
   private hashToken(token: string): string {

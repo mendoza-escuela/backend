@@ -18,6 +18,13 @@ import { SurveyStructureValidator } from './survey-structure-validator.service';
 import { SurveyVersionComparator } from './survey-version-comparator.service';
 import { ApplicabilityRulesService } from './applicability-rules.service';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
+import { ApplicabilityEngine } from './applicability-engine.service';
+import { SurveyApplicabilityRule } from '../entities/survey-applicability-rule.entity';
+import { SurveyApplicabilityCondition } from '../entities/survey-applicability-condition.entity';
+import {
+  OFFICIAL_SURVEY_DIMENSIONS,
+  OfficialSurveyDimensionCode,
+} from '../templates/official-survey-dimensions.template';
 
 describe('AdminSurveysService', () => {
   const manager = {
@@ -47,6 +54,7 @@ describe('AdminSurveysService', () => {
       {
         validateRules: jest.fn(() => []),
       } as unknown as ApplicabilityRulesService,
+      new ApplicabilityEngine(),
     );
   });
 
@@ -86,6 +94,7 @@ describe('AdminSurveysService', () => {
       {
         validateRules: jest.fn(() => []),
       } as unknown as ApplicabilityRulesService,
+      new ApplicabilityEngine(),
     );
 
     const response = await listService.list({
@@ -134,6 +143,108 @@ describe('AdminSurveysService', () => {
       service.publishVersion('survey-id', 'version-id', actor),
     ).rejects.toBeInstanceOf(BadRequestException);
 
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('impide publicar silenciosamente el banco oficial con definiciones provisionales', async () => {
+    const draft = officialPublishableDraft();
+    manager.findOne
+      .mockResolvedValueOnce({ id: draft.surveyId })
+      .mockResolvedValueOnce(draft)
+      .mockResolvedValueOnce(draft);
+
+    let caught: unknown;
+    try {
+      await service.publishVersion(draft.surveyId, draft.id, actor);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(BadRequestException);
+    const response = (caught as BadRequestException).getResponse() as {
+      message: string;
+      errors: string[];
+    };
+    expect(response.message).toBe(
+      'El cuestionario institucional todavía no está listo para publicarse.',
+    );
+    expect(response.errors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('p038'),
+        expect.stringContaining('alternativa intermedia'),
+        expect.stringContaining('nueve preguntas'),
+      ]),
+    );
+    expect(manager.find).not.toHaveBeenCalled();
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('impide publicar si se permuta la secuencia oficial de puntajes', async () => {
+    const draft = officialPublishableDraft();
+    const p001 = draft.dimensions[0].sections[0].questions.find(
+      ({ code }) => code === 'p001',
+    )!;
+    p001.options.forEach((option, index) => {
+      option.score = [0, 50, 100][index];
+    });
+    manager.findOne
+      .mockResolvedValueOnce({ id: draft.surveyId })
+      .mockResolvedValueOnce(draft)
+      .mockResolvedValueOnce(draft);
+
+    let caught: unknown;
+    try {
+      await service.publishVersion(draft.surveyId, draft.id, actor);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(BadRequestException);
+    const response = (caught as BadRequestException).getResponse() as {
+      errors: string[];
+    };
+    expect(response.errors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('p001'),
+        expect.stringContaining('100/50/0'),
+        expect.stringContaining('0/50/100'),
+      ]),
+    );
+    expect(manager.find).not.toHaveBeenCalled();
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('impide publicar un banco oficial incompleto o con preguntas opcionales', async () => {
+    const draft = officialPublishableDraft();
+    draft.dimensions[0].sections[0].questions[0].required = false;
+    draft.dimensions = draft.dimensions.filter(
+      ({ code }) => code !== String(OfficialSurveyDimensionCode.MentalHealth),
+    );
+    manager.findOne
+      .mockResolvedValueOnce({ id: draft.surveyId })
+      .mockResolvedValueOnce(draft)
+      .mockResolvedValueOnce(draft);
+
+    let caught: unknown;
+    try {
+      await service.publishVersion(draft.surveyId, draft.id, actor);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(BadRequestException);
+    const response = (caught as BadRequestException).getResponse() as {
+      errors: string[];
+    };
+    expect(response.errors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Faltan dimensiones del banco oficial'),
+        expect.stringContaining('salud_mental'),
+        expect.stringContaining('preguntas aplicables deben ser obligatorias'),
+        expect.stringContaining('p001'),
+      ]),
+    );
+    expect(manager.find).not.toHaveBeenCalled();
     expect(manager.save).not.toHaveBeenCalled();
   });
 
@@ -326,6 +437,42 @@ describe('AdminSurveysService', () => {
     });
   });
 
+  it('expone obligatoriedad y dimensiones faltantes en la validación previa oficial', async () => {
+    const repository = {
+      findOneBy: jest.fn().mockResolvedValue({ id: 'survey-id' }),
+    };
+    const draft = officialPublishableDraft();
+    draft.dimensions[0].sections[0].questions[0].required = false;
+    draft.dimensions[0].sections[0].questions[0].options.forEach(
+      (option, index) => {
+        option.score = [0, 50, 100][index];
+      },
+    );
+    draft.dimensions = draft.dimensions.filter(
+      ({ code }) => code !== String(OfficialSurveyDimensionCode.MentalHealth),
+    );
+    (dataSource as { getRepository?: jest.Mock }).getRepository = jest
+      .fn()
+      .mockReturnValue(repository);
+    (dataSource as { manager?: EntityManager }).manager =
+      manager as unknown as EntityManager;
+    manager.findOne.mockResolvedValue(draft);
+
+    const response = await service.validateVersion(draft.surveyId, draft.id);
+
+    expect(response.valid).toBe(false);
+    expect(response.errors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Faltan dimensiones del banco oficial'),
+        expect.stringContaining('salud_mental'),
+        expect.stringContaining('preguntas aplicables deben ser obligatorias'),
+        expect.stringContaining('p001'),
+        expect.stringContaining('100/50/0'),
+        expect.stringContaining('0/50/100'),
+      ]),
+    );
+  });
+
   it('crea un borrador nuevo con las seis dimensiones oficiales por defecto', async () => {
     manager.findOne
       .mockResolvedValueOnce({ id: 'survey-id' })
@@ -504,6 +651,65 @@ describe('AdminSurveysService', () => {
     expect(manager.delete).not.toHaveBeenCalled();
   });
 
+  it('incorpora la regla oficial de kiosco al importar p021', async () => {
+    manager.findOne
+      .mockResolvedValueOnce({ id: 'survey-id' })
+      .mockResolvedValueOnce(null);
+    manager.save.mockImplementation(
+      (entity: unknown, attributes: Record<string, unknown>) => ({
+        ...attributes,
+        id: entity === SurveyVersion ? 'imported-version-id' : 'saved-id',
+      }),
+    );
+    jest
+      .spyOn(service, 'findVersion')
+      .mockResolvedValue({ id: 'imported-version-id' } as never);
+
+    await service.createImportedVersion(
+      'survey-id',
+      { title: 'Importación oficial' },
+      [
+        {
+          code: 'entorno_alimentario',
+          title: 'Entorno Alimentario Seguro y Saludable',
+          sections: [
+            {
+              code: 'kiosco',
+              title: 'Kiosco',
+              questions: [
+                {
+                  code: 'p021',
+                  type: SurveyQuestionType.SingleChoice,
+                  prompt: '¿Pregunta sobre kiosco?',
+                  required: true,
+                  options: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      actor,
+    );
+
+    expect(manager.save).toHaveBeenCalledWith(
+      SurveyApplicabilityRule,
+      expect.objectContaining({
+        questionId: 'saved-id',
+        action: 'show',
+        defaultAction: 'omit',
+      }),
+    );
+    expect(manager.save).toHaveBeenCalledWith(
+      SurveyApplicabilityCondition,
+      expect.objectContaining({
+        feature: 'has_kiosk',
+        operator: 'equals',
+        expectedValue: true,
+      }),
+    );
+  });
+
   it('rechaza combinar una plantilla con la clonación de una versión', async () => {
     await expect(
       service.createVersion(
@@ -616,4 +822,89 @@ function publishableVersion(
     ] as SurveyVersion['dimensions'],
     ...overrides,
   });
+}
+
+function officialPublishableDraft(): SurveyVersion {
+  const dimensions = OFFICIAL_SURVEY_DIMENSIONS.map((definition) => ({
+    id: `dimension-${definition.order}`,
+    versionId: 'version-id',
+    code: definition.code,
+    title: definition.title,
+    description: definition.description,
+    order: definition.order,
+    sections: [
+      {
+        id: `section-${definition.order}`,
+        dimensionId: `dimension-${definition.order}`,
+        code: `section_${definition.order}`,
+        title: definition.title,
+        description: null,
+        order: 0,
+        questions: [],
+      },
+    ],
+  })) as SurveyDimension[];
+
+  for (let number = 1; number <= 60; number += 1) {
+    const dimension = dimensions.find(
+      ({ code }) => code === String(officialDimensionFor(number)),
+    )!;
+    const code = `p${String(number).padStart(3, '0')}`;
+    const labels =
+      number === 32
+        ? [
+            'Se incluyen diariamente.',
+            'Se incluyen de 2 a 3 veces por semana.',
+            'Se incluyen una vez por semana.',
+          ]
+        : [
+            'Respuesta óptima',
+            'Respuesta intermedia',
+            number === 46 ? 'No se abordan estos temas.' : 'Respuesta inicial',
+          ];
+    dimension.sections[0].questions.push({
+      id: `question-${number}`,
+      sectionId: dimension.sections[0].id,
+      code,
+      type: SurveyQuestionType.SingleChoice,
+      prompt:
+        number === 10
+          ? 'Tiempo adecuado para las comidas escolares: Garantía de un tiempo adecuado, asegurando al menos 10 minutos para desayunos y meriendas, y 30 minutos para almuerzos.'
+          : number === 32
+            ? 'Inclusión diaria de frutas y/o verduras frescas, crudas y preferentemente de estación.'
+            : `Pregunta ${number}`,
+      helpText: null,
+      required: true,
+      order: number,
+      validation: {},
+      applicabilityRules: [],
+      options: labels.map((label, index) => ({
+        id: `option-${number}-${index}`,
+        questionId: `question-${number}`,
+        value: `opcion_${index + 1}`,
+        label:
+          number === 10 && index === 0
+            ? 'Se garantiza sistemáticamente 10 minutos para desayuno/merienda y 30 minutos para almuerzo.'
+            : label,
+        helpText: null,
+        score:
+          dimension.code === String(OfficialSurveyDimensionCode.MentalHealth)
+            ? [100, 66, 0][index]
+            : [100, 50, 0][index],
+        order: index,
+      })),
+    });
+  }
+
+  return version({ dimensions });
+}
+
+function officialDimensionFor(number: number): OfficialSurveyDimensionCode {
+  if (number <= 5) return OfficialSurveyDimensionCode.InstitutionalCommitment;
+  if (number <= 7) return OfficialSurveyDimensionCode.HealthTeamCoordination;
+  if (number <= 34) return OfficialSurveyDimensionCode.HealthyFoodEnvironment;
+  if (number <= 40) return OfficialSurveyDimensionCode.PhysicalActivity;
+  if (number <= 43) return OfficialSurveyDimensionCode.MentalHealth;
+  if (number <= 46) return OfficialSurveyDimensionCode.SmokeFreeSpaces;
+  return OfficialSurveyDimensionCode.MentalHealth;
 }

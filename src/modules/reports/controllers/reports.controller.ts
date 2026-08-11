@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import type { Request, Response } from 'express';
+import { pipeline } from 'node:stream/promises';
 import { DataSource } from 'typeorm';
 import { Roles } from '../../../common/decorators/roles.decorator';
 import { PasswordChangeRequiredGuard } from '../../../common/guards/password-change-required.guard';
@@ -21,6 +22,7 @@ import { UserSchool } from '../../users/entities/user-school.entity';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { IndividualReportService } from '../services/individual-report.service';
 import { PdfReportRenderer } from '../services/pdf-report.renderer';
+import { XlsxReportRenderer } from '../services/xlsx-report.renderer';
 
 abstract class BaseReportsController {
   constructor(
@@ -41,26 +43,50 @@ abstract class BaseReportsController {
       type === 'report'
         ? this.renderer.report(view)
         : this.renderer.receipt(view);
-    await this.dataSource.getRepository(AuditLog).save({
-      actorUserId: actor.id,
+    await this.auditDownload({
+      actor,
       action:
         type === 'report'
           ? 'INDIVIDUAL_REPORT_DOWNLOADED'
           : 'RECEIPT_DOWNLOADED',
-      entityType: 'SurveySubmission',
-      entityId: view.submission.id,
-      changes: { campaignId, schoolId },
+      submissionId: view.submission.id,
+      campaignId,
+      schoolId,
+      format: 'pdf',
     });
     response.setHeader('Content-Type', 'application/pdf');
     response.setHeader(
       'Content-Disposition',
       `attachment; filename="${type === 'report' ? 'reporte' : 'comprobante'}-${this.filePart(view.school.cue)}.pdf"`,
     );
-    document.pipe(response);
+    response.setHeader('Cache-Control', 'private, no-store');
+    const delivery = pipeline(document, response);
     document.end();
+    await delivery;
   }
 
-  private filePart(value: string) {
+  protected async auditDownload(input: {
+    actor: AuthenticatedUser;
+    action: string;
+    submissionId: string;
+    campaignId: string;
+    schoolId: string;
+    format: 'pdf' | 'xlsx';
+  }) {
+    await this.dataSource.getRepository(AuditLog).save({
+      actorUserId: input.actor.id,
+      action: input.action,
+      entityType: 'SurveySubmission',
+      entityId: input.submissionId,
+      changes: {
+        campaignId: input.campaignId,
+        schoolId: input.schoolId,
+        format: input.format,
+      },
+    });
+  }
+
+  protected filePart(value: string) {
     return value.replace(/[^a-zA-Z0-9_-]+/g, '-') || 'escuela';
   }
 }
@@ -73,6 +99,7 @@ export class SchoolReportsController extends BaseReportsController {
     reports: IndividualReportService,
     renderer: PdfReportRenderer,
     @InjectDataSource() dataSource: DataSource,
+    private readonly xlsxRenderer: XlsxReportRenderer,
   ) {
     super(reports, renderer, dataSource);
   }
@@ -95,6 +122,33 @@ export class SchoolReportsController extends BaseReportsController {
   ) {
     const schoolId = await this.schoolId(request.user.id);
     return this.send('receipt', campaignId, schoolId, request.user, response);
+  }
+
+  @Get(':campaignId/submission/report.xlsx')
+  async xlsxReport(
+    @Param('campaignId', ParseUUIDPipe) campaignId: string,
+    @Req() request: Request & { user: AuthenticatedUser },
+    @Res() response: Response,
+  ) {
+    const schoolId = await this.schoolId(request.user.id);
+    const view = await this.reports.get(campaignId, schoolId);
+    const workbook = await this.xlsxRenderer.report(view);
+    await this.auditDownload({
+      actor: request.user,
+      action: 'INDIVIDUAL_XLSX_REPORT_DOWNLOADED',
+      submissionId: view.submission.id,
+      campaignId,
+      schoolId,
+      format: 'xlsx',
+    });
+    response.setHeader('Content-Type', XlsxReportRenderer.mimeType);
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="reporte-${this.filePart(view.school.cue)}.xlsx"`,
+    );
+    response.setHeader('Content-Length', workbook.byteLength);
+    response.setHeader('Cache-Control', 'private, no-store');
+    return response.send(workbook);
   }
 
   private async schoolId(userId: string) {

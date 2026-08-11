@@ -100,8 +100,15 @@ export class SubmissionsService {
     let submissionId: string | null = null;
     try {
       submissionId = await this.dataSource.transaction(async (manager) => {
-        const { school, rectification } =
-          await this.schoolsService.evaluationContextForUser(actor.id, manager);
+        const context = await this.schoolsService.evaluationContextForUser(
+          actor.id,
+          manager,
+        );
+        await this.schoolsService.assertActiveForEvaluation(
+          context.school.id,
+          manager,
+        );
+        const { school, rectification } = context;
         const campaign = await this.campaignsService.assertOperational(
           campaignId,
           manager,
@@ -116,10 +123,6 @@ export class SubmissionsService {
           lock: { mode: 'pessimistic_write' },
         });
         if (existing) return existing.id;
-        if (!school.isActive)
-          throw new ConflictException(
-            'El establecimiento está inactivo y no puede iniciar una evaluación.',
-          );
         if (
           !rectification.isRectified ||
           !rectification.id ||
@@ -191,6 +194,10 @@ export class SubmissionsService {
           actor.id,
           manager,
         );
+        await this.schoolsService.assertActiveForEvaluation(
+          context.school.id,
+          manager,
+        );
         const loaded = await this.getSubmission(
           manager,
           campaignId,
@@ -232,9 +239,15 @@ export class SubmissionsService {
     actor: AuthenticatedUser,
   ) {
     await this.dataSource.transaction(async (manager) => {
-      const { school, rectification } =
-        await this.schoolsService.evaluationContextForUser(actor.id, manager);
-      await this.schoolsService.assertActiveForEvaluation(school.id, manager);
+      const context = await this.schoolsService.evaluationContextForUser(
+        actor.id,
+        manager,
+      );
+      await this.schoolsService.assertActiveForEvaluation(
+        context.school.id,
+        manager,
+      );
+      const { school, rectification } = context;
       await this.campaignsService.assertOperational(campaignId, manager);
       await this.campaignSchoolsService.assertAssigned(
         campaignId,
@@ -289,9 +302,15 @@ export class SubmissionsService {
 
   async submit(campaignId: string, actor: AuthenticatedUser) {
     await this.dataSource.transaction(async (manager) => {
-      const { school, rectification } =
-        await this.schoolsService.evaluationContextForUser(actor.id, manager);
-      await this.schoolsService.assertActiveForEvaluation(school.id, manager);
+      const context = await this.schoolsService.evaluationContextForUser(
+        actor.id,
+        manager,
+      );
+      await this.schoolsService.assertActiveForEvaluation(
+        context.school.id,
+        manager,
+      );
+      const { school, rectification } = context;
       await this.campaignsService.assertOperational(campaignId, manager);
       await this.campaignSchoolsService.assertAssigned(
         campaignId,

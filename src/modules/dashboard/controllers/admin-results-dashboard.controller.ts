@@ -4,7 +4,11 @@ import { PasswordChangeRequiredGuard } from '../../../common/guards/password-cha
 import { RolesGuard } from '../../../common/guards/roles.guard';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { UserRole } from '../../users/entities/user-role.enum';
-import { ParticipationDashboardQueryDto } from '../dto/participation-dashboard-query.dto';
+import {
+  CriticalAlertsDashboardQueryDto,
+  ParticipationDashboardQueryDto,
+  ResultsComparisonDashboardQueryDto,
+} from '../dto/participation-dashboard-query.dto';
 import { ResultsDashboardService } from '../services/results-dashboard.service';
 
 @Controller('admin/dashboard/results')
@@ -19,5 +23,15 @@ export class AdminResultsDashboardController {
     @Query() query: ParticipationDashboardQueryDto,
   ) {
     return this.dashboard.distribution(query);
+  }
+  @Get('comparison') comparison(
+    @Query() query: ResultsComparisonDashboardQueryDto,
+  ) {
+    return this.dashboard.comparison(query);
+  }
+  @Get('critical-alerts') criticalAlerts(
+    @Query() query: CriticalAlertsDashboardQueryDto,
+  ) {
+    return this.dashboard.criticalAlerts(query);
   }
 }

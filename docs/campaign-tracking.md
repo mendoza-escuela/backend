@@ -6,9 +6,25 @@ El universo se define explícitamente mediante `campaign_schools`. El
 seguimiento incluye sólo asignaciones vigentes (`removed_at IS NULL`) de la
 campaña seleccionada, incluso si la escuela fue desactivada posteriormente.
 
-Las asignaciones sólo pueden modificarse mientras la campaña está en borrador.
-No se permite quitar una escuela que ya tenga una presentación. Al activar se
-exige una versión publicada y al menos una escuela asignada.
+Mientras la campaña está en borrador se pueden incorporar, reactivar y quitar
+escuelas. No se permite quitar una escuela que ya tenga una presentación. Al
+activar se exige una versión publicada y al menos una escuela asignada.
+
+Durante una campaña activa el universo admite únicamente incorporaciones: una
+escuela habilitada puede agregarse de forma manual, masiva o por filtros y queda
+disponible inmediatamente dentro del período de carga. No se permiten bajas en
+este estado, de modo que una incorporación no puede retirar ni alterar el
+histórico de otra escuela. Las campañas cerradas o archivadas son de sólo
+lectura; también se rechaza el alta si la fecha de cierre ya venció aunque el
+proceso periódico todavía no haya persistido el estado `closed`.
+
+Cada alta conserva en `campaign_schools` la fecha, el origen y el administrador
+responsable. La misma transacción registra en auditoría el estado de la campaña,
+las escuelas efectivamente incorporadas y las asignaciones reactivadas. La
+restricción única por campaña y escuela hace que una solicitud repetida sea
+idempotente. Si la escuela es desactivada después, su asignación y su historial
+permanecen en el universo, aunque el acceso y las nuevas cargas queden
+bloqueados.
 
 La migración `AddCampaignSchoolsAndSchoolContacts1720375219000` conserva las
 campañas existentes: crea asignaciones para el universo histórico anterior y

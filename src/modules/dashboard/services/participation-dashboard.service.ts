@@ -4,16 +4,19 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, SelectQueryBuilder } from 'typeorm';
+import { DataSource } from 'typeorm';
+import { multiValueFilter } from '../../../common/transforms/multi-value-query.transform';
 import { CampaignStatus } from '../../campaigns/entities/campaign-status.enum';
 import { Campaign } from '../../campaigns/entities/campaign.entity';
 import { CampaignSchool } from '../../campaigns/entities/campaign-school.entity';
 import { School } from '../../schools/entities/school.entity';
 import { SubmissionStatus } from '../../submissions/entities/submission-status.enum';
+import { OFFICIAL_SURVEY_DIMENSIONS } from '../../surveys/templates/official-survey-dimensions.template';
 import {
   ParticipationDashboardQueryDto,
   ParticipationFilterOptionsQueryDto,
 } from '../dto/participation-dashboard-query.dto';
+import { applyDashboardSchoolFilters } from '../dashboard-query-filters';
 
 type MetricRow = {
   totalSchools: string;
@@ -51,6 +54,11 @@ export class ParticipationDashboardService {
         'submission.school_id = school.id AND submission.campaign_id = :campaignId',
         { campaignId: campaign.id },
       )
+      .leftJoin(
+        'evaluation_results',
+        'evaluation',
+        'evaluation.submission_id = submission.id AND submission.status = :submittedStatus',
+      )
       .select('COUNT(school.id)', 'totalSchools')
       .addSelect(
         'COUNT(school.id) FILTER (WHERE submission.id IS NULL)',
@@ -73,7 +81,7 @@ export class ParticipationDashboardService {
         submittedStatus: SubmissionStatus.Submitted,
       });
 
-    this.applyFilters(builder, query);
+    applyDashboardSchoolFilters(builder, query);
     const row = await builder.getRawOne<MetricRow>();
     const totalSchools = Number(row?.totalSchools ?? 0);
     const submitted = Number(row?.submitted ?? 0);
@@ -133,12 +141,23 @@ export class ParticipationDashboardService {
         departments: [],
         localities: [],
         educationLevels: [],
+        educationLevelOptions: [],
+        educationTypes: [],
         managementTypes: [],
         scopes: [],
         shifts: [],
+        criticalAreas: OFFICIAL_SURVEY_DIMENSIONS.map(({ code, title }) => ({
+          value: code,
+          label: title,
+        })),
         schools: [],
       };
 
+    const departmentsFilter = multiValueFilter(
+      query.departments,
+      query.department,
+    );
+    const localitiesFilter = multiValueFilter(query.localities, query.locality);
     const schoolBuilder = this.dataSource
       .getRepository(CampaignSchool)
       .createQueryBuilder('assignment')
@@ -147,18 +166,42 @@ export class ParticipationDashboardService {
         selectedCampaignId,
       })
       .andWhere('assignment.removedAt IS NULL');
-    if (query.department)
-      schoolBuilder.andWhere('school.department = :department', {
-        department: query.department,
+    if (departmentsFilter.length)
+      schoolBuilder.andWhere('school.department IN (:...departments)', {
+        departments: departmentsFilter,
       });
-    if (query.locality)
-      schoolBuilder.andWhere('school.locality = :locality', {
-        locality: query.locality,
+    if (localitiesFilter.length)
+      schoolBuilder.andWhere('school.locality IN (:...localities)', {
+        localities: localitiesFilter,
       });
 
-    const [departments, localities, attributes, schools] = await Promise.all([
+    const [
+      departments,
+      localities,
+      educationLevelOptions,
+      attributes,
+      schools,
+    ] = await Promise.all([
       this.distinct('department', selectedCampaignId),
-      this.distinct('locality', selectedCampaignId, query.department),
+      this.distinct('locality', selectedCampaignId, departmentsFilter),
+      schoolBuilder
+        .clone()
+        .leftJoin(
+          'school_education_levels',
+          'school_level_option',
+          'school_level_option.school_id = school.id',
+        )
+        .leftJoin(
+          'education_level_catalogs',
+          'education_level_option',
+          'education_level_option.id = school_level_option.level_id',
+        )
+        .select('DISTINCT education_level_option.code', 'value')
+        .addSelect('education_level_option.label', 'label')
+        .andWhere('education_level_option.id IS NOT NULL')
+        .orderBy('education_level_option.label', 'ASC')
+        .addOrderBy('education_level_option.code', 'ASC')
+        .getRawMany<{ value: string; label: string }>(),
       schoolBuilder
         .clone()
         .select('school.educationLevel', 'educationLevel')
@@ -190,38 +233,25 @@ export class ParticipationDashboardService {
       defaultCampaignId,
       departments,
       localities,
+      // Compatibilidad: esta clave histórica contenía Tipo de educación.
       educationLevels: this.values(attributes, 'educationLevel'),
+      educationLevelOptions,
+      educationTypes: this.values(attributes, 'educationLevel'),
       managementTypes: this.values(attributes, 'managementType'),
       scopes: this.values(attributes, 'scope'),
       shifts: this.values(attributes, 'shift'),
+      criticalAreas: OFFICIAL_SURVEY_DIMENSIONS.map(({ code, title }) => ({
+        value: code,
+        label: title,
+      })),
       schools: schools.map(({ id, cue, name }) => ({ id, cue, name })),
     };
-  }
-
-  private applyFilters(
-    builder: SelectQueryBuilder<CampaignSchool>,
-    query: ParticipationDashboardQueryDto,
-  ) {
-    const filters: Array<[keyof ParticipationDashboardQueryDto, string]> = [
-      ['schoolId', 'school.id'],
-      ['department', 'school.department'],
-      ['locality', 'school.locality'],
-      ['educationLevel', 'school.education_level'],
-      ['managementType', 'school.management_type'],
-      ['scope', 'school.scope'],
-      ['shift', 'school.shift'],
-    ];
-    for (const [property, column] of filters) {
-      const value = query[property];
-      if (value)
-        builder.andWhere(`${column} = :${property}`, { [property]: value });
-    }
   }
 
   private async distinct(
     field: 'department' | 'locality',
     campaignId: string,
-    department?: string,
+    departments: string[] = [],
   ) {
     const column = field === 'department' ? 'department' : 'locality';
     const builder = this.dataSource
@@ -234,8 +264,10 @@ export class ParticipationDashboardService {
       .andWhere(`school.${column} IS NOT NULL`)
       .andWhere(`TRIM(school.${column}) != ''`)
       .orderBy(`school.${column}`, 'ASC');
-    if (department && field === 'locality')
-      builder.andWhere('school.department = :department', { department });
+    if (departments.length && field === 'locality')
+      builder.andWhere('school.department IN (:...departments)', {
+        departments,
+      });
     const rows = await builder.getRawMany<{ value: string }>();
     return rows.map(({ value }) => value);
   }

@@ -7,7 +7,15 @@ import {
 import { InjectDataSource } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import ExcelJS from 'exceljs';
-import { DataSource, EntityManager, In, SelectQueryBuilder } from 'typeorm';
+import { isEmail } from 'class-validator';
+import {
+  DataSource,
+  EntityManager,
+  In,
+  IsNull,
+  MoreThan,
+  SelectQueryBuilder,
+} from 'typeorm';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { AuthSession } from '../../auth/entities/auth-session.entity';
@@ -15,6 +23,7 @@ import { UserRole } from '../../users/entities/user-role.enum';
 import { UserSchool } from '../../users/entities/user-school.entity';
 import { User } from '../../users/entities/user.entity';
 import { AssignSchoolUserDto } from '../dto/assign-school-user.dto';
+import { AdminRectifySchoolDto } from '../dto/admin-rectify-school.dto';
 import { CreateSchoolDto } from '../dto/create-school.dto';
 import { ListAssignableUsersQueryDto } from '../dto/list-assignable-users-query.dto';
 import { ListSchoolsQueryDto } from '../dto/list-schools-query.dto';
@@ -35,6 +44,10 @@ import {
   SchoolContactType,
 } from '../entities/school-contact.entity';
 import { SchoolContactDto } from '../dto/school-contact.dto';
+import {
+  isOfficialCatalogLabel,
+  OFFICIAL_SCHOOL_RECTIFICATION_CATALOGS,
+} from '../school-rectification.catalogs';
 
 type SelectedEducationLevel = {
   level: EducationLevelCatalog;
@@ -344,6 +357,22 @@ export class SchoolsService {
           : 'El catálogo oficial de niveles educativos todavía no fue configurado.',
         items: educationLevels.map((level) => this.catalogSummary(level)),
       },
+      managementTypes:
+        OFFICIAL_SCHOOL_RECTIFICATION_CATALOGS.managementTypes.map(
+          (option) => ({ ...option }),
+        ),
+      scopes: OFFICIAL_SCHOOL_RECTIFICATION_CATALOGS.scopes.map((option) => ({
+        ...option,
+      })),
+      educationTypes: OFFICIAL_SCHOOL_RECTIFICATION_CATALOGS.educationTypes.map(
+        (option) => ({
+          ...option,
+        }),
+      ),
+      characteristics:
+        OFFICIAL_SCHOOL_RECTIFICATION_CATALOGS.characteristics.map(
+          (option) => ({ ...option }),
+        ),
     };
   }
 
@@ -371,12 +400,16 @@ export class SchoolsService {
       },
       order: { rectifiedAt: 'DESC' },
     });
+    const isRectified = Boolean(
+      rectification &&
+      this.isCompleteRectificationSnapshot(rectification.snapshot),
+    );
     return {
       school: association.school,
       rectification: {
         id: rectification?.id ?? null,
         periodYear,
-        isRectified: Boolean(rectification),
+        isRectified,
         rectifiedAt: rectification?.rectifiedAt ?? null,
         snapshot: rectification?.snapshot ?? null,
       },
@@ -405,6 +438,34 @@ export class SchoolsService {
     dto: RectifySchoolDto,
     actor: AuthenticatedUser,
   ) {
+    return this.performRectification(schoolId, dto, actor);
+  }
+
+  /**
+   * Rectifica desde administración y aplica los campos administrativos dentro
+   * de la misma transacción que genera el snapshot histórico.
+   */
+  async rectifyAsAdmin(
+    schoolId: string,
+    dto: AdminRectifySchoolDto,
+    actor: AuthenticatedUser,
+  ) {
+    return this.performRectification(
+      schoolId,
+      dto,
+      actor,
+      this.adminRectificationFields(dto),
+    );
+  }
+
+  private async performRectification(
+    schoolId: string,
+    dto: RectifySchoolDto,
+    actor: AuthenticatedUser,
+    adminFields: Partial<
+      Pick<School, 'schoolNumber' | 'postalCode' | 'phone' | 'email'>
+    > = {},
+  ) {
     const periodYear = this.currentPeriodYear();
     try {
       await this.dataSource.transaction(async (manager) => {
@@ -413,19 +474,26 @@ export class SchoolsService {
           lock: { mode: 'pessimistic_write' },
         });
         if (!school) throw new NotFoundException('Colegio no encontrado.');
+        if (!school.isActive && actor.role === UserRole.School)
+          throw new ConflictException(
+            'El colegio está inactivo y no puede rectificar su ficha.',
+          );
+        this.assertCompleteRectification(dto);
         this.assertExpectedUpdate(school, dto.expectedUpdatedAt);
         const currentStructured = await this.structuredState(manager, school);
         const normalized = {
           name: dto.name,
           cue: dto.cue.toUpperCase(),
           directorName: dto.directorName,
+          department: dto.department,
           address: dto.address,
           locality: dto.locality,
           scope: dto.scope,
-          ...(dto.educationLevel !== undefined
-            ? { educationLevel: dto.educationLevel }
+          educationLevel: dto.educationLevel,
+          ...(dto.managementType !== undefined
+            ? { managementType: dto.managementType }
             : {}),
-          ...(dto.shift !== undefined ? { shift: dto.shift } : {}),
+          ...adminFields,
         };
         if (normalized.cue !== school.cue)
           await this.assertCueUnique(manager, normalized.cue, schoolId);
@@ -441,6 +509,14 @@ export class SchoolsService {
           dto.educationLevels,
           currentStructured.educationLevels,
         );
+        if (!selectedShift)
+          throw new BadRequestException(
+            'Debe seleccionarse una jornada del catálogo oficial.',
+          );
+        if (!selectedLevels.length)
+          throw new BadRequestException(
+            'Debe seleccionarse al menos un nivel educativo.',
+          );
         const before = this.rectificationSnapshot(
           school,
           currentStructured.shiftCatalog,
@@ -448,46 +524,28 @@ export class SchoolsService {
           currentStructured.contacts,
         );
         Object.assign(school, normalized);
-        if (dto.hasKiosk !== undefined) school.hasKiosk = dto.hasKiosk;
-        if (dto.hasFoodService !== undefined)
-          school.hasFoodService = dto.hasFoodService;
+        school.hasKiosk = dto.hasKiosk;
+        school.hasFoodService = dto.hasFoodService;
         if (dto.isBoarding !== undefined) school.isBoarding = dto.isBoarding;
-        if (dto.shiftCatalogId !== undefined)
-          school.shiftCatalogId = selectedShift?.id ?? null;
+        school.shiftCatalogId = selectedShift.id;
+        school.shift = selectedShift.label;
+        school.characteristics = this.mergeCharacteristics(
+          school.characteristics,
+          dto.characteristics,
+        );
         if (dto.enrollment !== undefined) school.enrollment = dto.enrollment;
         await manager.save(School, school);
 
-        const finalContacts =
-          dto.contacts === undefined
-            ? currentStructured.contacts
-            : await this.replaceContacts(manager, school, dto.contacts);
+        const finalContacts = dto.contacts
+          ? await this.replaceContacts(manager, school, dto.contacts)
+          : currentStructured.contacts;
 
-        if (dto.educationLevels !== undefined) {
-          await manager.delete(SchoolEducationLevel, { schoolId });
-          if (selectedLevels.length)
-            await manager.save(
-              SchoolEducationLevel,
-              selectedLevels.map((selected, order) =>
-                manager.create(SchoolEducationLevel, {
-                  schoolId,
-                  levelId: selected.level.id,
-                  enrollment: selected.enrollment,
-                  order,
-                }),
-              ),
-            );
-        }
+        await this.replaceEducationLevels(manager, schoolId, selectedLevels);
 
         const rectificationId = randomUUID();
         const capturedAt = new Date();
-        const finalShift =
-          dto.shiftCatalogId === undefined
-            ? currentStructured.shiftCatalog
-            : selectedShift;
-        const finalLevels =
-          dto.educationLevels === undefined
-            ? currentStructured.educationLevels
-            : selectedLevels;
+        const finalShift = selectedShift;
+        const finalLevels = selectedLevels;
         const snapshot = this.rectificationSnapshot(
           school,
           finalShift,
@@ -542,16 +600,36 @@ export class SchoolsService {
   async create(dto: CreateSchoolDto, actor: AuthenticatedUser) {
     const normalized = this.normalize(dto);
     const requestedContacts = normalized.contacts;
+    const requestedEducationLevels = normalized.educationLevels;
     delete (normalized as Partial<CreateSchoolDto>).contacts;
+    delete (normalized as Partial<CreateSchoolDto>).educationLevels;
     this.validateCharacteristics(normalized.characteristics);
     try {
       const id = await this.dataSource.transaction(async (manager) => {
         await this.assertCueUnique(manager, normalized.cue);
+        const selectedShift = await this.resolveShift(
+          manager,
+          { shiftCatalogId: null } as School,
+          normalized.shiftCatalogId,
+          null,
+        );
+        const selectedLevels = await this.resolveEducationLevels(
+          manager,
+          '',
+          requestedEducationLevels,
+          [],
+        );
+        if (selectedShift) {
+          normalized.shiftCatalogId = selectedShift.id;
+          normalized.shift = selectedShift.label;
+        }
         const school = await manager.save(
           School,
           manager.create(School, normalized),
         );
-        await this.replaceContacts(
+        if (requestedEducationLevels !== undefined)
+          await this.replaceEducationLevels(manager, school.id, selectedLevels);
+        const finalContacts = await this.replaceContacts(
           manager,
           school,
           requestedContacts ?? [this.legacyRespondentContact(school)],
@@ -561,7 +639,12 @@ export class SchoolsService {
           actor.id,
           'SCHOOL_CREATED',
           school.id,
-          this.snapshot(school),
+          this.administrativeSnapshot(
+            school,
+            selectedShift,
+            selectedLevels,
+            finalContacts,
+          ),
         );
         return school.id;
       });
@@ -578,19 +661,60 @@ export class SchoolsService {
           .getRepository(School)
           .findOne({ where: { id }, lock: { mode: 'pessimistic_write' } });
         if (!school) throw new NotFoundException('Colegio no encontrado.');
-        const before = this.snapshot(school);
         const normalized = this.normalize(dto);
         const requestedContacts = normalized.contacts;
+        const requestedEducationLevels = normalized.educationLevels;
         delete (normalized as Partial<UpdateSchoolDto>).contacts;
+        delete (normalized as Partial<UpdateSchoolDto>).educationLevels;
         if (normalized.cue && normalized.cue !== school.cue)
           await this.assertCueUnique(manager, normalized.cue, id);
         if (normalized.characteristics)
           this.validateCharacteristics(normalized.characteristics);
+        const currentStructured = await this.structuredState(manager, school);
+        const before = this.administrativeSnapshot(
+          school,
+          currentStructured.shiftCatalog,
+          currentStructured.educationLevels,
+          currentStructured.contacts,
+        );
+        const mergedCharacteristics = this.mergeCharacteristics(
+          school.characteristics,
+          normalized.characteristics,
+        );
+        const selectedShift = await this.resolveShift(
+          manager,
+          school,
+          normalized.shiftCatalogId,
+          currentStructured.shiftCatalog,
+        );
+        const selectedLevels = await this.resolveEducationLevels(
+          manager,
+          id,
+          requestedEducationLevels,
+          currentStructured.educationLevels,
+        );
+        if (normalized.shiftCatalogId !== undefined) {
+          normalized.shiftCatalogId = selectedShift?.id ?? null;
+          if (selectedShift) normalized.shift = selectedShift.label;
+        }
         Object.assign(school, normalized);
+        school.characteristics = mergedCharacteristics;
         await manager.save(School, school);
-        if (requestedContacts)
-          await this.replaceContacts(manager, school, requestedContacts);
-        const changes = this.diff(before, this.snapshot(school));
+        if (requestedEducationLevels !== undefined)
+          await this.replaceEducationLevels(manager, id, selectedLevels);
+        const finalContacts =
+          requestedContacts !== undefined
+            ? await this.replaceContacts(manager, school, requestedContacts)
+            : currentStructured.contacts;
+        const changes = this.diff(
+          before,
+          this.administrativeSnapshot(
+            school,
+            selectedShift,
+            selectedLevels,
+            finalContacts,
+          ),
+        );
         if (Object.keys(changes).length)
           await this.audit(manager, actor.id, 'SCHOOL_UPDATED', id, changes);
       });
@@ -606,7 +730,25 @@ export class SchoolsService {
         .getRepository(School)
         .findOne({ where: { id }, lock: { mode: 'pessimistic_write' } });
       if (!school) throw new NotFoundException('Colegio no encontrado.');
-      if (school.isActive === isActive) return;
+
+      // Una segunda baja sigue conciliando sesiones por seguridad. Al reactivar
+      // también se cierran SIDs legados para que sólo un nuevo login otorgue
+      // acceso. Active→active permanece como un no-op real.
+      const statusChanged = school.isActive !== isActive;
+      const revokedSessionsCount =
+        !isActive || statusChanged
+          ? await this.revokeActiveSchoolSessions(manager, id, new Date())
+          : 0;
+      if (school.isActive === isActive) {
+        if (!isActive && revokedSessionsCount > 0)
+          await this.audit(manager, actor.id, 'SCHOOL_SESSIONS_REVOKED', id, {
+            isActive: { from: false, to: false },
+            newEvaluationsAllowed: false,
+            revokedSessionsCount,
+          });
+        return;
+      }
+
       school.isActive = isActive;
       await manager.save(School, school);
       await this.audit(
@@ -617,10 +759,39 @@ export class SchoolsService {
         {
           isActive: { from: !isActive, to: isActive },
           newEvaluationsAllowed: isActive,
+          revokedSessionsCount,
         },
       );
     });
     return this.findOne(id);
+  }
+
+  /**
+   * Revoca solamente sesiones vigentes de los usuarios asociados sin alterar
+   * la asociación ni el estado propio de esas cuentas.
+   */
+  private async revokeActiveSchoolSessions(
+    manager: EntityManager,
+    schoolId: string,
+    revokedAt: Date,
+  ) {
+    const assignments = await manager.find(UserSchool, {
+      select: { userId: true },
+      where: { schoolId },
+    });
+    const userIds = assignments.map(({ userId }) => userId);
+    if (!userIds.length) return 0;
+
+    const update = await manager.update(
+      AuthSession,
+      {
+        userId: In(userIds),
+        revokedAt: IsNull(),
+        expiresAt: MoreThan(revokedAt),
+      },
+      { revokedAt },
+    );
+    return update.affected ?? 0;
   }
 
   /** Valida en backend que un colegio pueda iniciar una nueva evaluación. */
@@ -628,11 +799,16 @@ export class SchoolsService {
     schoolId: string,
     manager: EntityManager = this.dataSource.manager,
   ) {
-    const school = await manager.findOneBy(School, { id: schoolId });
+    const school = await manager.getRepository(School).findOne({
+      where: { id: schoolId },
+      lock: manager.queryRunner?.isTransactionActive
+        ? { mode: 'pessimistic_read' }
+        : undefined,
+    });
     if (!school) throw new NotFoundException('Colegio no encontrado.');
     if (!school.isActive)
       throw new ConflictException(
-        'El colegio está inactivo y no puede iniciar nuevas evaluaciones.',
+        'El colegio está inactivo y no puede realizar cargas ni evaluaciones.',
       );
     return school;
   }
@@ -950,6 +1126,41 @@ export class SchoolsService {
       );
   }
 
+  /**
+   * Fusiona únicamente valores informados y conserva `null` como limpieza
+   * explícita de una característica previamente conocida.
+   */
+  private mergeCharacteristics(
+    current: School['characteristics'] | null | undefined,
+    updates: object | undefined,
+  ): School['characteristics'] {
+    if (!updates) return { ...(current ?? {}) };
+    const informedUpdates = Object.fromEntries(
+      Object.entries(updates).filter(([, value]) => value !== undefined),
+    );
+    return { ...(current ?? {}), ...informedUpdates };
+  }
+
+  private adminRectificationFields(
+    dto: AdminRectifySchoolDto,
+  ): Partial<Pick<School, 'schoolNumber' | 'postalCode' | 'phone' | 'email'>> {
+    const fields: Partial<
+      Pick<School, 'schoolNumber' | 'postalCode' | 'phone' | 'email'>
+    > = {};
+    const normalizedText = (value: string | null) =>
+      value === null ? null : value.trim().replace(/\s+/g, ' ') || null;
+    if (dto.schoolNumber !== undefined)
+      fields.schoolNumber = normalizedText(dto.schoolNumber);
+    if (dto.postalCode !== undefined)
+      fields.postalCode = normalizedText(dto.postalCode);
+    if (dto.phone !== undefined) fields.phone = normalizedText(dto.phone);
+    if (dto.email !== undefined) {
+      const email = normalizedText(dto.email);
+      fields.email = email?.toLowerCase() ?? null;
+    }
+    return fields;
+  }
+
   private async assertCueUnique(
     manager: EntityManager,
     cue: string,
@@ -988,8 +1199,58 @@ export class SchoolsService {
       hasKiosk: school.hasKiosk,
       hasFoodService: school.hasFoodService,
       isBoarding: school.isBoarding,
-      characteristics: school.characteristics,
+      characteristics: { ...(school.characteristics ?? {}) },
       isActive: school.isActive,
+    };
+  }
+
+  /** Captura las relaciones estructuradas usadas por la ficha institucional. */
+  private structuredProfileSnapshot(
+    shiftCatalog: SchoolShiftCatalog | null,
+    educationLevels: SelectedEducationLevel[],
+    contacts: SchoolContact[],
+  ) {
+    return {
+      shiftCatalog: shiftCatalog
+        ? {
+            id: shiftCatalog.id,
+            code: shiftCatalog.code,
+            label: shiftCatalog.label,
+          }
+        : null,
+      educationLevels: educationLevels.map(({ level, enrollment }) => ({
+        id: level.id,
+        code: level.code,
+        label: level.label,
+        enrollment,
+      })),
+      contacts: contacts
+        .slice()
+        .sort((left, right) => left.type.localeCompare(right.type))
+        .map(({ type, firstName, lastName, position, phone, email }) => ({
+          type,
+          firstName,
+          lastName,
+          position,
+          phone,
+          email,
+        })),
+    };
+  }
+
+  private administrativeSnapshot(
+    school: School,
+    shiftCatalog: SchoolShiftCatalog | null,
+    educationLevels: SelectedEducationLevel[],
+    contacts: SchoolContact[],
+  ) {
+    return {
+      ...this.snapshot(school),
+      ...this.structuredProfileSnapshot(
+        shiftCatalog,
+        educationLevels,
+        contacts,
+      ),
     };
   }
 
@@ -1008,7 +1269,7 @@ export class SchoolsService {
     return {
       ...(sourceRectificationId
         ? {
-            schemaVersion: 3,
+            schemaVersion: 4,
             sourceRectificationId,
             capturedAt: (capturedAt ?? new Date()).toISOString(),
           }
@@ -1030,31 +1291,13 @@ export class SchoolsService {
       hasKiosk: school.hasKiosk ?? null,
       hasFoodService: school.hasFoodService ?? null,
       isBoarding: school.isBoarding ?? null,
-      shiftCatalog: shiftCatalog
-        ? {
-            id: shiftCatalog.id,
-            code: shiftCatalog.code,
-            label: shiftCatalog.label,
-          }
-        : null,
-      educationLevels: educationLevels.map(({ level, enrollment }) => ({
-        id: level.id,
-        code: level.code,
-        label: level.label,
-        enrollment,
-      })),
+      characteristics: { ...school.characteristics },
+      ...this.structuredProfileSnapshot(
+        shiftCatalog,
+        educationLevels,
+        contacts,
+      ),
       enrollmentTotal: school.enrollment ?? null,
-      contacts: contacts
-        .slice()
-        .sort((left, right) => left.type.localeCompare(right.type))
-        .map(({ type, firstName, lastName, position, phone, email }) => ({
-          type,
-          firstName,
-          lastName,
-          position,
-          phone,
-          email,
-        })),
     };
   }
 
@@ -1258,6 +1501,160 @@ export class SchoolsService {
     });
   }
 
+  private async replaceEducationLevels(
+    manager: EntityManager,
+    schoolId: string,
+    levels: SelectedEducationLevel[],
+  ) {
+    await manager.delete(SchoolEducationLevel, { schoolId });
+    if (!levels.length) return;
+    await manager.save(
+      SchoolEducationLevel,
+      levels.map((selected, order) =>
+        manager.create(SchoolEducationLevel, {
+          schoolId,
+          levelId: selected.level.id,
+          enrollment: selected.enrollment,
+          order,
+        }),
+      ),
+    );
+  }
+
+  /**
+   * Repite en la capa de negocio las reglas mínimas que habilitan una
+   * evaluación, incluso cuando el servicio es invocado sin pasar por un DTO.
+   */
+  private assertCompleteRectification(dto: RectifySchoolDto) {
+    const requiredText = [
+      dto.name,
+      dto.cue,
+      dto.directorName,
+      dto.department,
+      dto.address,
+      dto.locality,
+    ];
+    if (
+      requiredText.some(
+        (value) => typeof value !== 'string' || value.trim().length < 2,
+      )
+    )
+      throw new BadRequestException(
+        'La ficha institucional contiene datos obligatorios incompletos.',
+      );
+    if (!isOfficialCatalogLabel('scopes', dto.scope))
+      throw new BadRequestException(
+        'El ámbito no pertenece al catálogo oficial.',
+      );
+    if (!isOfficialCatalogLabel('educationTypes', dto.educationLevel))
+      throw new BadRequestException(
+        'El tipo de educación no pertenece al catálogo oficial.',
+      );
+    if (
+      dto.managementType !== undefined &&
+      !isOfficialCatalogLabel('managementTypes', dto.managementType)
+    )
+      throw new BadRequestException(
+        'El sector/gestión no pertenece al catálogo oficial.',
+      );
+    if (typeof dto.shiftCatalogId !== 'string' || !dto.shiftCatalogId.trim())
+      throw new BadRequestException(
+        'Debe seleccionarse una jornada del catálogo oficial.',
+      );
+    if (!Array.isArray(dto.educationLevels) || !dto.educationLevels.length)
+      throw new BadRequestException(
+        'Debe seleccionarse al menos un nivel educativo.',
+      );
+    if (
+      dto.educationLevels.some(
+        ({ levelId }) => typeof levelId !== 'string' || !levelId.trim(),
+      )
+    )
+      throw new BadRequestException(
+        'Los niveles educativos informados son inválidos.',
+      );
+    if (
+      typeof dto.hasKiosk !== 'boolean' ||
+      typeof dto.hasFoodService !== 'boolean'
+    )
+      throw new BadRequestException(
+        'Deben informarse kiosco y comedor/servicio alimentario.',
+      );
+    if (
+      dto.characteristics &&
+      ((dto.characteristics.isMultigrade !== undefined &&
+        dto.characteristics.isMultigrade !== null &&
+        typeof dto.characteristics.isMultigrade !== 'boolean') ||
+        (dto.characteristics.isInterculturalBilingual !== undefined &&
+          dto.characteristics.isInterculturalBilingual !== null &&
+          typeof dto.characteristics.isInterculturalBilingual !== 'boolean'))
+    )
+      throw new BadRequestException(
+        'Las características oficiales deben informarse como verdadero, falso o sin dato.',
+      );
+    if (dto.contacts) {
+      const contactTypes = new Set(dto.contacts.map(({ type }) => type));
+      if (
+        contactTypes.size !== dto.contacts.length ||
+        dto.contacts.some(
+          ({ type }) =>
+            type !== SchoolContactType.Respondent &&
+            type !== SchoolContactType.HealthPromotion,
+        )
+      )
+        throw new BadRequestException(
+          'Sólo puede existir un referente escolar de cada tipo.',
+        );
+      for (const contact of dto.contacts) {
+        const invalidOptionalText = (value: unknown) =>
+          value !== undefined &&
+          value !== null &&
+          (typeof value !== 'string' || value.trim().length < 2);
+        if (
+          [contact.firstName, contact.lastName].some(
+            (value) => typeof value !== 'string' || value.trim().length < 2,
+          ) ||
+          invalidOptionalText(contact.position) ||
+          invalidOptionalText(contact.phone) ||
+          (contact.email !== undefined &&
+            contact.email !== null &&
+            (typeof contact.email !== 'string' || !isEmail(contact.email)))
+        )
+          throw new BadRequestException(
+            'Los datos informados para cada referente deben ser válidos.',
+          );
+      }
+    }
+  }
+
+  /** Una rectificación histórica incompleta no habilita una evaluación. */
+  private isCompleteRectificationSnapshot(
+    snapshot: SchoolRectificationSnapshot,
+  ) {
+    const hasText = (value: unknown) =>
+      typeof value === 'string' && value.trim().length >= 2;
+    return (
+      [
+        snapshot.name,
+        snapshot.cue,
+        snapshot.directorName,
+        snapshot.department,
+        snapshot.address,
+        snapshot.locality,
+      ].every(hasText) &&
+      hasText(snapshot.scope) &&
+      hasText(snapshot.educationLevel) &&
+      Boolean(
+        snapshot.shiftCatalog?.id &&
+        snapshot.shiftCatalog.code &&
+        snapshot.shiftCatalog.label,
+      ) &&
+      Boolean(snapshot.educationLevels?.length) &&
+      typeof snapshot.hasKiosk === 'boolean' &&
+      typeof snapshot.hasFoodService === 'boolean'
+    );
+  }
+
   private assertExpectedUpdate(school: School, expected?: string) {
     if (!expected) return;
     const expectedTime = new Date(expected).getTime();
@@ -1294,7 +1691,9 @@ export class SchoolsService {
     );
     return {
       periodYear,
-      isRectified: Boolean(latest),
+      isRectified: Boolean(
+        latest && this.isCompleteRectificationSnapshot(latest.snapshot),
+      ),
       rectifiedAt: latest?.rectifiedAt ?? null,
       rectifiedBy: this.userSummary(latest?.actorUser ?? null),
     };

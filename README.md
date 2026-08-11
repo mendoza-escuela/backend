@@ -26,7 +26,12 @@ El seed del administrador no forma parte del arranque automático: debe ejecutar
 ## Seguridad de autenticación
 
 - El JWT se entrega en una cookie `HttpOnly`, `Secure`, `SameSite=None` y particionada en producción, porque el frontend y la API se publican en hosts distintos.
+- `ThrottlerGuard` se aplica globalmente: el límite general es de 100 solicitudes por minuto e incluye límites más estrictos en login y recuperación de contraseña.
+- Toda solicitud `POST`, `PUT`, `PATCH` o `DELETE` del navegador debe enviar `X-CSRF-Protection: 1`. La API rechaza orígenes distintos de `FRONTEND_URL`; el cliente Axios central agrega la cabecera automáticamente.
+- `FRONTEND_URL` debe ser un origen HTTP(S) exacto, sin rutas. No usar comodines con credenciales.
+- Si producción utiliza Nginx u otro proxy, configurar `TRUST_PROXY_HOPS` con la cantidad exacta de saltos confiables para que el rate limiting identifique correctamente la IP del cliente. No habilitarlo cuando la API esté expuesta directamente.
 - Cada JWT referencia una sesión persistida que puede revocarse al cerrar sesión o recuperar la contraseña.
+- Las sesiones con rol `school` exigen una asociación vigente con una escuela activa; la baja revoca sus SIDs y la reactivación requiere un login nuevo.
 - Cinco intentos fallidos bloquean temporalmente la cuenta durante 15 minutos por defecto.
 - Los tokens de recuperación se almacenan hasheados, vencen y son de un solo uso.
 - El cambio desde perfil valida la contraseña actual y revoca las demás sesiones.
@@ -58,7 +63,7 @@ Primero debe ejecutarse la vista previa. La importación es parcial: crea las fi
 
 Las rutas protegidas bajo `/admin/schools` permiten alta, listado paginado, búsqueda por CUE/nombre/número, filtros territoriales e institucionales, detalle, edición, activación y desactivación. El detalle incluye el usuario Colegio, accesos recientes, historial de asociaciones y auditoría. Campañas y evaluaciones se informan explícitamente como no disponibles hasta que existan esos módulos; no se generan datos ficticios.
 
-Cada colegio admite un único usuario con rol `school`, y cada usuario sólo puede pertenecer a un colegio. Los reemplazos y desvinculaciones conservan un historial independiente. Un colegio inactivo conserva sus datos e historial; `SchoolsService.assertActiveForEvaluation` es la validación obligatoria que deberá usar el módulo de evaluaciones antes de crear una nueva.
+Cada colegio admite un único usuario con rol `school`, y cada usuario sólo puede pertenecer a un colegio. Los reemplazos y desvinculaciones conservan un historial independiente. Un colegio inactivo conserva sus datos e historial, bloquea nuevos logins y cargas, y revoca transaccionalmente las sesiones escolares vigentes. La reactivación exige un login nuevo. El diseño, la concurrencia y los datos preservados se documentan en [`docs/school-deactivation.md`](docs/school-deactivation.md).
 
 `GET /api/admin/schools` pagina en PostgreSQL mediante `page` y `limit` y selecciona únicamente las columnas del listado. `GET /api/admin/schools/:id/assignable-users` busca y pagina usuarios disponibles para asociación en backend, evitando descargar cuentas ocupadas y filtrarlas en el navegador.
 
@@ -83,7 +88,7 @@ sincronizadas para compatibilidad.
 
 `PUT /api/schools/me/rectification` permite revisar y rectificar la ficha obligatoria del establecimiento asociado para el año calendario vigente. La operación conserva un snapshot autocontenido con período, fecha, usuario, características ternarias, jornada catalogada, niveles y matrículas, y registra auditoría. `expectedUpdatedAt` permite detectar una edición concurrente. Los administradores conservan el endpoint existente `PUT /api/admin/schools/:id/rectification`.
 
-`GET /api/schools/me/rectification/catalogs` devuelve los catálogos de jornadas y niveles desde backend, incluidos los valores inactivos necesarios para representar el historial. La migración crea la infraestructura sin precargar valores: los códigos y etiquetas productivos siguen pendientes del catálogo oficial del programa. El endpoint informa explícitamente cuando un catálogo está vacío.
+`GET /api/schools/me/rectification/catalogs` devuelve los catálogos de jornadas y niveles desde backend, incluidos los valores inactivos necesarios para representar el historial. También expone Sector/Gestión, Ámbito, Tipo de educación y Características con códigos estables. La migración `SeedOfficialSchoolCatalogs1720375221000` carga las seis jornadas y los cuatro niveles provistos y sólo vincula datos históricos cuando existe una coincidencia normalizada inequívoca. El endpoint informa explícitamente si alguno de los catálogos persistidos no está disponible.
 
 Al iniciar una presentación se vincula la última rectificación del año vigente y se copia su snapshot en `survey_submissions`. Mientras la presentación es borrador puede adoptar una rectificación posterior, recalcular la aplicabilidad y conservar las respuestas que queden excluidas. Al enviarse, el vínculo, el snapshot y las decisiones quedan inmutables para preservar el historial.
 
@@ -126,7 +131,13 @@ Los borradores pueden guardarse incompletos para permitir construcción progresi
 
 La plantilla `official_dimensions` crea únicamente el esqueleto aprobado: nombres, descripciones, códigos internos y orden de las seis dimensiones. No precarga secciones ni preguntas. “Entorno Socioemocional” no se registra como una séptima dimensión; las preguntas 41, 42 y 43 quedan identificadas para su futura carga dentro de `salud_mental`.
 
-La importación institucional admite exclusivamente preguntas de selección simple, no genera ni permite “Otro” o “No aplica” y valida las escalas `100/50/0` para las dimensiones generales y `100/66/33/0` para Salud Mental. La columna `condicion` se incluye como reserva, pero debe permanecer vacía hasta contar con el modelo formal de reglas; no se persiste texto opaco que el motor de evaluación no pueda ejecutar.
+La importación institucional admite exclusivamente preguntas de selección simple, no genera ni permite “Otro” o “No aplica” y valida desde una política central las escalas `100/50/0` para las dimensiones generales y `100/66/33/0` para Salud Mental. La matriz confirmada aplica `100/50/0` a las ternarias generales, `100/0` a p022, p023 y p025, y `0/33/66/100` a p052. p038 y las preguntas mentales de tres opciones permanecen bloqueadas sin puntajes hasta contar con el mapeo del cliente. La columna `condicion` se incluye como reserva, pero debe permanecer vacía hasta contar con el modelo formal de reglas; no se persiste texto opaco que el motor de evaluación no pueda ejecutar.
+
+La planilla consolidada de 60 preguntas se versiona en `docs/plantilla-cuestionario-completo.xlsx` y se regenera con `npm run survey:generate-official-template`. Incorpora las correcciones funcionales cerradas para p010, p020, p032 y p046, incluye una hoja con el inventario completo de puntuación y se valida contra el importador real. La validación debe rechazar solamente los puntajes aún no definidos de p038 y las 16 preguntas mentales ternarias; la planilla no es importable hasta resolverlos. Las decisiones de contenido, puntuación y aplicabilidad se documentan en [`docs/cuestionario-oficial-sur02.md`](docs/cuestionario-oficial-sur02.md).
+
+SUR-04 exige que las 60 preguntas del banco institucional se publiquen como obligatorias y que cada pregunta aplicable tenga respuesta antes del envío final. Las excluidas quedan fuera de la completitud; los cuestionarios personalizados conservan sus preguntas opcionales y usan códigos distintos del espacio reservado oficial. La política, el comportamiento transaccional y sus regresiones se documentan en [`docs/questionnaire-required-answers.md`](docs/questionnaire-required-answers.md).
+
+SUR-05 centraliza las escalas institucionales `100/50/0` y `100/66/33/0`, valida la secuencia exacta por código antes de publicar y mantiene bloqueados, sin inferencias, `p038` y los dieciséis mapeos mentales todavía no definidos por el cliente. La matriz y las decisiones pendientes se documentan en [`docs/official-survey-scoring.md`](docs/official-survey-scoring.md).
 
 Publicar es una operación irreversible: el servicio impide editar o eliminar la versión y la migración `ProtectPublishedSurveyVersions1720375206000` agrega triggers PostgreSQL que también protegen la versión y todos sus descendientes ante escrituras por fuera de la API. Para cambiar contenido publicado debe clonarse como una versión borrador nueva.
 
@@ -152,8 +163,11 @@ Los endpoints `GET /api/admin/campaigns/:id/schools` y `/schools/options`
 ofrecen listados paginados. `POST /schools/preview` anticipa el alcance y
 `POST /schools/assign` aplica una selección manual, por filtros o masiva;
 `DELETE /schools/:schoolId` realiza una baja lógica. Estas operaciones están
-limitadas a campañas borrador y quedan auditadas. Una asignación con una
-presentación existente no puede quitarse.
+auditadas. Las altas y su vista previa están habilitadas en campañas borrador
+y activas no vencidas; durante una activa sólo se incorporan escuelas
+habilitadas. Las bajas continúan limitadas a borrador y una asignación con una
+presentación existente no puede quitarse. El detalle se documenta en
+[`docs/campaign-active-school-assignment.md`](docs/campaign-active-school-assignment.md).
 
 La activación exige una versión publicada y al menos una asignación vigente.
 El portal escolar, presentaciones, seguimiento, participación, resultados y
@@ -187,9 +201,11 @@ Cada presentación referencia la versión publicada fijada por la campaña. Las 
 
 ## Dashboard administrativo de participación
 
-Las rutas bajo `/api/admin/dashboard/participation` requieren rol `admin`. `GET /api/admin/dashboard/participation/filters` devuelve campañas activas, cerradas o archivadas y las opciones del padrón activo. Departamento y localidad limitan las localidades y escuelas disponibles.
+Las rutas bajo `/api/admin/dashboard/participation` requieren rol `admin`. `GET /api/admin/dashboard/participation/filters` devuelve campañas activas, cerradas o archivadas y las opciones de las escuelas con asignación vigente en la campaña. Departamento y localidad limitan las localidades y escuelas disponibles.
 
-`GET /api/admin/dashboard/participation?campaignId=:uuid` calcula en PostgreSQL, desde una única consulta agregada, el total de escuelas activas, las no iniciadas, los borradores, los envíos y el porcentaje de envíos sobre el total. Admite los filtros `department`, `locality`, `schoolId`, `educationLevel`, `managementType`, `scope` y `shift`. Una escuela sin presentación se considera no iniciada; los estados persistidos `draft` y `submitted` determinan los otros dos grupos. Si el total es cero, el porcentaje devuelto es cero.
+`GET /api/admin/dashboard/participation?campaignId=:uuid` calcula en PostgreSQL, desde una única consulta agregada, el total de escuelas con asignación vigente, las no iniciadas, los borradores, los envíos y el porcentaje de envíos sobre ese universo. Los filtros territoriales, escolares, institucionales, de estado, estrellas y áreas críticas admiten multiselección; usan OR dentro de una categoría y AND entre categorías. Una escuela sin presentación se considera no iniciada; los estados persistidos `draft` y `submitted` determinan los otros dos grupos. Si el total es cero, el porcentaje devuelto es cero. El contrato, las claves plurales y la compatibilidad con las claves anteriores se documentan en [`docs/dashboard-multiselect-filters.md`](docs/dashboard-multiselect-filters.md).
+
+`GET /api/admin/dashboard/results/comparison` compara de dos a seis campañas en el orden solicitado, con filtros institucionales multiselección y denominadores independientes por período. Los filtros de estado, estrellas y áreas críticas se excluyen para no seleccionar la población por su propio resultado. Puntaje general y distribución de estrellas son las métricas históricas estandarizadas; la trayectoria dimensional se habilita sólo para una escuela y declara si es comparable o meramente descriptiva según la versión del cuestionario, algoritmo y configuración persistidos. El contrato y las decisiones funcionales se documentan en [`docs/dashboard-period-comparison.md`](docs/dashboard-period-comparison.md).
 
 Las campañas en borrador quedan fuera del seguimiento. Los denominadores y
 resultados comienzan en `campaign_schools`, por lo que conservan el universo
@@ -202,7 +218,8 @@ La migración `AddSubmissionApplicabilityDecisions1720375214000` conserva por pr
 `GET /api/admin/exports/results` y `GET /api/admin/exports/answers` aceptan
 `campaignId`, los filtros del dashboard y `format=csv|xlsx`. CSV se escribe por
 streaming y XLSX usa `WorkbookWriter`; ambos recorren lotes de 100 escuelas y
-neutralizan celdas iniciadas con `=`, `+`, `-` o `@`. Las respuestas y textos
+neutralizan celdas que, aun tras espacios o caracteres de control, comienzan
+con `=`, `+`, `-` o `@`. Las respuestas y textos
 provienen del snapshot de evaluación, no del cuestionario vigente. La
 auditoría conserva filtros, estado y cantidad de filas, nunca el contenido
 exportado.
@@ -211,7 +228,14 @@ Los reportes históricos se descargan desde:
 
 - `GET /api/school/campaigns/:id/submission/report.pdf`
 - `GET /api/school/campaigns/:id/submission/receipt.pdf`
+- `GET /api/school/campaigns/:id/submission/report.xlsx`
 - `GET /api/admin/campaigns/:campaignId/schools/:schoolId/report.pdf`
+
+El XLSX escolar reúne `Resumen`, `Dimensiones`, `Respuestas` y `Exclusiones`
+desde el snapshot histórico del envío. La escuela se resuelve exclusivamente
+desde su sesión, la descarga exige una presentación enviada con resultado y
+queda auditada; el cliente nunca envía un `schoolId`. Las respuestas residuales
+de preguntas excluidas no se incluyen.
 
 El radar es SVG determinístico generado en backend. Logos, firmante, firma,
 texto legal y verificación se configuran con las variables `REPORT_*`; si no

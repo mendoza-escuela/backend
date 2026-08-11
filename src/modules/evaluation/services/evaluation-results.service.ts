@@ -243,70 +243,89 @@ export class EvaluationResultsService {
     actorUserId: string | null,
     source: EvaluationCalculationSource = 'single_recalculation',
   ): Promise<EvaluationResult> {
-    return this.dataSource.transaction(async (manager) => {
-      const lockedSubmission = await manager.findOne(SurveySubmission, {
-        where: { id: submissionId },
-        select: { id: true },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!lockedSubmission) {
-        throw new NotFoundException('La presentación indicada no existe.');
-      }
-
-      const submission = await manager.findOne(SurveySubmission, {
-        where: { id: submissionId },
-        relations: {
-          answers: { option: true },
-          applicabilityDecisions: true,
-          surveyVersion: {
-            survey: true,
-            dimensions: {
-              sections: {
-                questions: {
-                  options: true,
-                  applicabilityRules: { conditions: true },
-                },
-              },
-            },
-          },
-        },
-        order: {
-          surveyVersion: {
-            dimensions: {
-              order: 'ASC',
-              sections: {
-                order: 'ASC',
-                questions: {
-                  order: 'ASC',
-                  options: { order: 'ASC' },
-                  applicabilityRules: {
-                    order: 'ASC',
-                    conditions: { order: 'ASC' },
-                  },
-                },
-              },
-            },
-          },
-        },
-      });
-      if (!submission) {
-        throw new NotFoundException('La presentación indicada no existe.');
-      }
-      if (submission.status !== SubmissionStatus.Submitted) {
-        throw new ConflictException(
-          'Sólo pueden recalcularse presentaciones enviadas.',
-        );
-      }
-
-      return this.calculateAndPersist(
+    return this.dataSource.transaction((manager) =>
+      this.recalculateSubmissionWithManager(
         manager,
-        submission,
-        submission.surveyVersion,
-        this.applicabilityFromStoredDecisions(submission),
+        submissionId,
         actorUserId,
         source,
-      );
+      ),
+    );
+  }
+
+  /**
+   * Variante transaccional reutilizable por reparaciones controladas. La
+   * presentación se bloquea y todo el resultado se reconstruye desde sus
+   * respuestas y decisiones históricas persistidas.
+   */
+  async recalculateSubmissionWithManager(
+    manager: EntityManager,
+    submissionId: string,
+    actorUserId: string | null,
+    source: EvaluationCalculationSource = 'single_recalculation',
+  ): Promise<EvaluationResult> {
+    const lockedSubmission = await manager.findOne(SurveySubmission, {
+      where: { id: submissionId },
+      select: { id: true },
+      lock: { mode: 'pessimistic_write' },
     });
+    if (!lockedSubmission) {
+      throw new NotFoundException('La presentación indicada no existe.');
+    }
+
+    const submission = await manager.findOne(SurveySubmission, {
+      where: { id: submissionId },
+      relations: {
+        answers: { option: true },
+        applicabilityDecisions: true,
+        surveyVersion: {
+          survey: true,
+          dimensions: {
+            sections: {
+              questions: {
+                options: true,
+                applicabilityRules: { conditions: true },
+              },
+            },
+          },
+        },
+      },
+      order: {
+        surveyVersion: {
+          dimensions: {
+            order: 'ASC',
+            sections: {
+              order: 'ASC',
+              questions: {
+                order: 'ASC',
+                options: { order: 'ASC' },
+                applicabilityRules: {
+                  order: 'ASC',
+                  conditions: { order: 'ASC' },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!submission) {
+      throw new NotFoundException('La presentación indicada no existe.');
+    }
+    if (submission.status !== SubmissionStatus.Submitted) {
+      throw new ConflictException(
+        'Sólo pueden recalcularse presentaciones enviadas.',
+      );
+    }
+
+    return this.calculateAndPersist(
+      manager,
+      submission,
+      submission.surveyVersion,
+      this.applicabilityFromStoredDecisions(submission),
+      actorUserId,
+      source,
+    );
   }
 
   /**
@@ -1214,6 +1233,8 @@ export class EvaluationResultsService {
           snapshot.result.generalScore,
           'puntaje general',
         ),
+        numerator: Number(snapshot.result.numerator),
+        denominator: snapshot.result.denominator,
         stars: {
           available: snapshot.result.stars.value !== null,
           base: snapshot.result.stars.baseValue ?? snapshot.result.stars.value,

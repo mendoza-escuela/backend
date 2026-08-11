@@ -6,6 +6,11 @@ describe('spreadsheetSafeCell', () => {
     (value) => expect(spreadsheetSafeCell(value)).toBe(`'${value}`),
   );
 
+  it.each(['\t=CMD()', '\r+SUM(A1:A2)', '  -2+3', '\uFEFF@IMPORTDATA("url")'])(
+    'neutralizes a formula prefix after leading whitespace/control characters in %s',
+    (value) => expect(spreadsheetSafeCell(value)).toBe(`'${value}`),
+  );
+
   it('keeps ordinary values and serializes structured values safely', () => {
     expect(spreadsheetSafeCell('Escuela 1')).toBe('Escuela 1');
     expect(spreadsheetSafeCell(80)).toBe(80);

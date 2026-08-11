@@ -1,5 +1,5 @@
 import { DataSource } from 'typeorm';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { School } from '../../schools/entities/school.entity';
 import { UserRole } from '../entities/user-role.enum';
@@ -179,6 +179,95 @@ describe('AdminUsersService', () => {
     });
     expect(JSON.stringify(auditSave?.[1])).not.toContain('Temporal!Clave2026');
     expect(created.email).toBe('ana@mendoza.gov.ar');
+  });
+
+  it('returns a structured email conflict for a concurrent unique violation', async () => {
+    const queryBuilder = {
+      where: jest.fn().mockReturnThis(),
+      getExists: jest.fn().mockResolvedValue(false),
+    };
+    const manager = {
+      getRepository: jest.fn(() => ({
+        createQueryBuilder: () => queryBuilder,
+      })),
+      create: jest.fn((_entity: unknown, values: unknown) => values),
+      save: jest.fn((entity: unknown) => {
+        if (entity === User)
+          return Promise.reject(
+            Object.assign(new Error('duplicate email'), {
+              code: '23505',
+              constraint: 'IDX_users_email_unique',
+            }),
+          );
+        return Promise.resolve({});
+      }),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (transactionManager: typeof manager) => Promise<string>) =>
+          callback(manager),
+      ),
+    } as unknown as DataSource;
+
+    const promise = new AdminUsersService(dataSource).create(
+      {
+        firstName: 'Ana',
+        lastName: 'Pérez',
+        email: 'ANA@EXAMPLE.COM',
+        role: UserRole.Admin,
+        temporaryPassword: 'Temporal!Clave2026',
+      },
+      { id: 'actor-id' } as never,
+    );
+
+    await expect(promise).rejects.toBeInstanceOf(ConflictException);
+    await expect(promise).rejects.toMatchObject({
+      response: {
+        code: 'USER_EMAIL_CONFLICT',
+        field: 'email',
+        message: 'Ya existe un usuario con ese correo.',
+      },
+    });
+    expect(queryBuilder.where).toHaveBeenCalledWith(
+      'LOWER(user.email) = :email',
+      { email: 'ana@example.com' },
+    );
+  });
+
+  it('does not mislabel an unrelated unique violation as duplicate email', async () => {
+    const databaseError = {
+      code: '23505',
+      constraint: 'IDX_user_schools_one_user_per_school',
+    };
+    const manager = {
+      getRepository: jest.fn(() => ({
+        createQueryBuilder: () => ({
+          where: jest.fn().mockReturnThis(),
+          getExists: jest.fn().mockResolvedValue(false),
+        }),
+      })),
+      create: jest.fn((_entity: unknown, values: unknown) => values),
+      save: jest.fn().mockRejectedValue(databaseError),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (transactionManager: typeof manager) => Promise<string>) =>
+          callback(manager),
+      ),
+    } as unknown as DataSource;
+
+    await expect(
+      new AdminUsersService(dataSource).create(
+        {
+          firstName: 'Ana',
+          lastName: 'Pérez',
+          email: 'ana@example.com',
+          role: UserRole.Admin,
+          temporaryPassword: 'Temporal!Clave2026',
+        },
+        { id: 'actor-id' } as never,
+      ),
+    ).rejects.toBe(databaseError);
   });
 
   it('revokes sessions and forces a password change after an administrative reset', async () => {

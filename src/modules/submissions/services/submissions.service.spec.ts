@@ -157,6 +157,10 @@ describe('SubmissionsService', () => {
 
     await service.startOrGet(campaign.id, actor);
 
+    expect(schoolsService.assertActiveForEvaluation).toHaveBeenCalledWith(
+      school.id,
+      manager,
+    );
     expect(manager.save).toHaveBeenCalledWith(
       SurveySubmission,
       expect.objectContaining({
@@ -389,6 +393,39 @@ describe('SubmissionsService', () => {
     await expect(service.workspace(campaign.id, actor)).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+  it('blocks an inactive workspace before refreshing or recalculating its draft', async () => {
+    const inactiveSchool = { ...school, isActive: false } as School;
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school: inactiveSchool,
+      rectification: {
+        id: 'rectification-id',
+        isRectified: true,
+        snapshot: schoolSnapshot(),
+      },
+    });
+    schoolsService.assertActiveForEvaluation.mockRejectedValueOnce(
+      new ConflictException(
+        'El colegio está inactivo y no puede realizar cargas ni evaluaciones.',
+      ),
+    );
+
+    await expect(service.workspace(campaign.id, actor)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+
+    expect(schoolsService.assertActiveForEvaluation).toHaveBeenCalledWith(
+      inactiveSchool.id,
+      manager,
+    );
+    expect(manager.findOne).not.toHaveBeenCalled();
+    expect(manager.find).not.toHaveBeenCalled();
+    expect(manager.update).not.toHaveBeenCalled();
+    expect(manager.delete).not.toHaveBeenCalled();
+    expect(manager.save).not.toHaveBeenCalled();
+    expect(surveyApplicability.evaluate).not.toHaveBeenCalled();
+    expect(surveyApplicability.result).not.toHaveBeenCalled();
   });
 
   it('loads workspace collections with separate queries to avoid cartesian growth', async () => {

@@ -57,11 +57,7 @@ export class IndividualReportService {
             : Number(dimension.result.score),
       }));
     const viewModel: IndividualReportViewModel = {
-      school: {
-        ...snapshot.school,
-        department: snapshot.school.department ?? school.department,
-        managementType: snapshot.school.managementType ?? school.managementType,
-      },
+      school: snapshot.school,
       campaign: {
         id: campaign.id,
         name: campaign.name,

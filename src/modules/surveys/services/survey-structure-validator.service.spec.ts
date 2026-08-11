@@ -268,7 +268,7 @@ describe('SurveyStructureValidator', () => {
       }),
     ];
 
-    expectValidationError(generalDimensions, false, '0, 50, 100');
+    expectValidationError(generalDimensions, false, '100, 50, 0');
     expect(() =>
       validator.validate(mentalHealthDimensions, false),
     ).not.toThrow();

@@ -77,6 +77,8 @@ export type SchoolPreliminaryResultDto = {
   };
   result: {
     generalScore: number;
+    numerator: number;
+    denominator: number;
     stars: {
       available: boolean;
       base: number | null;

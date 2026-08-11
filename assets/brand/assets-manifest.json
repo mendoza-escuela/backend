@@ -1,0 +1,44 @@
+{
+  "status": "provisional-authorized",
+  "providedBy": "Cliente del proyecto",
+  "providedAt": "2026-08-11",
+  "usageTerms": "Uso provisional autorizado para reportes del Producto 1; reemplazar por los archivos definitivos cuando sean entregados.",
+  "files": [
+    {
+      "organization": "Gobierno de Mendoza",
+      "path": "assets/brand/official/mendoza/marca-gobierno-mendoza.png",
+      "originalFilename": "marca_gov.png",
+      "sha256": "0034ba6cd9fc9bbcb2f8008ab4134d83cb4ef32434a45ee238a9aacc3b229543"
+    },
+    {
+      "organization": "Gobierno de Mendoza",
+      "path": "assets/brand/official/mendoza/simbolo-mendoza.png",
+      "originalFilename": "SITIO-AC_200x200-1-300x300-1.png",
+      "sha256": "a3bc1f65c9fa7dae63f25bd7ba719c6d3cbd5d316c371d4d6a7572f61d1f5980"
+    },
+    {
+      "organization": "OPS/OMS",
+      "path": "assets/brand/official/ops/oms-ops.jpg",
+      "originalFilename": "OMS-OPS2-1.jpg",
+      "sha256": "022476ce33a54bc1180e0f55aed3cda41775803f47caa47dc8ca3b43ee8c3948"
+    },
+    {
+      "organization": "OPS",
+      "path": "assets/brand/official/ops/ops-horizontal.png",
+      "originalFilename": "descarga.png",
+      "sha256": "ff1df926edb3e397056477c5e0d2c443d38d1d6957d2378022708d6b24449831"
+    }
+  ],
+  "notProvided": [
+    "Logo específico de Salud",
+    "Logo específico de la Dirección General de Escuelas",
+    "Archivos distribuibles de la familia tipográfica REM"
+  ],
+  "duplicatesOmitted": [
+    {
+      "originalFilename": "marca_gov (1).png",
+      "duplicateOf": "assets/brand/official/mendoza/marca-gobierno-mendoza.png",
+      "sha256": "0034ba6cd9fc9bbcb2f8008ab4134d83cb4ef32434a45ee238a9aacc3b229543"
+    }
+  ]
+}

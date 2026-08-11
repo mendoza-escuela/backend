@@ -1,4 +1,4 @@
-# Decisión técnica para reportes PDF
+# Reportes institucionales PDF y Excel
 
 ## Alcance
 
@@ -28,14 +28,59 @@ reciben los archivos oficiales y una licencia que autorice su redistribución.
 
 ## Identidad institucional
 
-`ReportBrandingProvider` acepta únicamente imágenes PNG/JPEG existentes en las
-rutas configuradas. Si faltan logos o firma oficiales, el documento usa los
-nombres institucionales en texto y omite la firma; no recrea marcas ni produce
-activos aproximados.
+`ReportBrandingProvider` acepta únicamente imágenes PNG/JPEG existentes. Mientras
+se esperan los activos definitivos, usa por defecto los logos provisionales
+versionados de Gobierno de Mendoza y OMS/OPS:
+
+```text
+assets/brand/official/mendoza/marca-gobierno-mendoza.png
+assets/brand/official/ops/oms-ops.jpg
+```
+
+`REPORT_LOGO_MENDOZA_PATH` y `REPORT_LOGO_OPS_PATH` permiten reemplazarlos sin
+modificar código. `REPORT_LOGO_HEALTH_PATH` y `REPORT_LOGO_DGE_PATH` siguen siendo
+opcionales. Una ruta configurada sólo se incorpora si existe y es PNG o JPEG. Si
+un activo no está disponible, el documento conserva la identificación textual;
+la firma también se omite si no fue configurada.
+
+La línea de organismos se imprime aun cuando existan logos, por lo que Salud y
+la Dirección General de Escuelas permanecen identificadas por nombre hasta que
+se entreguen sus variantes gráficas autorizadas.
 
 Las variables admitidas están documentadas en `backend/.env.example` bajo el
 prefijo `REPORT_`.
 
-Los reportes se generan sobre fondo claro. Cada ruta `REPORT_LOGO_*_PATH` debe
-apuntar a la variante oficial autorizada para ese fondo y contar con
-procedencia documentada. No se extraen activos de los PDF de referencia.
+Los reportes se generan sobre fondo claro. Cada override `REPORT_LOGO_*_PATH`
+debe apuntar a una variante autorizada para ese fondo y contar con procedencia
+documentada. Los activos provisionales podrán sustituirse cuando el cliente
+entregue las versiones definitivas.
+
+## Descarga Excel para la escuela (EXP-02)
+
+`GET /api/school/campaigns/:campaignId/submission/report.xlsx` descarga un
+único libro institucional con cuatro hojas:
+
+- `Resumen`: ficha, campaña, envío, resultado y trazabilidad del cálculo.
+- `Dimensiones`: numerador, denominador, puntaje y criticidad persistidos.
+- `Respuestas`: sólo preguntas aplicables y sus respuestas declaradas.
+- `Exclusiones`: preguntas excluidas y motivo histórico, sin exponer una
+  eventual respuesta residual.
+
+La ruta requiere rol `school`, contraseña definitiva y una asociación 1:1
+vigente. No acepta `schoolId`: el establecimiento se obtiene desde la sesión y
+`IndividualReportService` verifica asignación, presentación enviada y snapshot
+de resultado. De esta manera no es posible pedir el archivo de otra escuela ni
+exportar un borrador.
+
+El libro se materializa completamente con `Workbook.xlsx.writeBuffer()` antes
+de enviarlo. Esto evita respuestas ZIP truncadas y permite fijar `Content-Length`.
+El MIME es
+`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, el nombre
+es `reporte-{cue}.xlsx`, la respuesta usa `Cache-Control: private, no-store` y
+la descarga se registra como `INDIVIDUAL_XLSX_REPORT_DOWNLOADED` sin guardar
+respuestas en la auditoría.
+
+Todo texto dinámico pasa por `spreadsheetSafeCell`; también se neutralizan
+prefijos de fórmula precedidos por espacios, tabulaciones u otros caracteres de
+control. Las fechas visibles usan `America/Argentina/Mendoza`, evitando mostrar
+como día siguiente en UTC el cierre civil de una campaña.

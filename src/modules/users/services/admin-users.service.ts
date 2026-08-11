@@ -185,8 +185,8 @@ export class AdminUsersService {
         return user.id;
       });
     } catch (error) {
-      if (this.isUniqueViolation(error)) {
-        throw new ConflictException('Ya existe un usuario con ese correo.');
+      if (this.isEmailUniqueViolation(error)) {
+        throw this.duplicateEmailConflict();
       }
       throw error;
     }
@@ -283,8 +283,8 @@ export class AdminUsersService {
         }
       });
     } catch (error) {
-      if (this.isUniqueViolation(error)) {
-        throw new ConflictException('Ya existe un usuario con ese correo.');
+      if (this.isEmailUniqueViolation(error)) {
+        throw this.duplicateEmailConflict();
       }
       throw error;
     }
@@ -362,8 +362,7 @@ export class AdminUsersService {
         email: email.trim().toLowerCase(),
       });
     if (exceptId) builder.andWhere('user.id <> :exceptId', { exceptId });
-    if (await builder.getExists())
-      throw new ConflictException('Ya existe un usuario con ese correo.');
+    if (await builder.getExists()) throw this.duplicateEmailConflict();
   }
 
   private async resolveSchool(
@@ -381,7 +380,7 @@ export class AdminUsersService {
     }
     if (!schoolId)
       throw new BadRequestException(
-        'El rol Colegio requiere un establecimiento asociado.',
+        'El rol Escuela requiere un establecimiento asociado.',
       );
     const school = await manager.findOneBy(School, { id: schoolId });
     if (!school)
@@ -495,16 +494,25 @@ export class AdminUsersService {
     );
   }
 
-  private isUniqueViolation(error: unknown): boolean {
+  private isEmailUniqueViolation(error: unknown): boolean {
     if (!error || typeof error !== 'object') return false;
     const databaseError = error as {
       code?: string;
-      driverError?: { code?: string };
+      constraint?: string;
+      driverError?: { code?: string; constraint?: string };
     };
-    return (
-      databaseError.code === '23505' ||
-      databaseError.driverError?.code === '23505'
-    );
+    const code = databaseError.code ?? databaseError.driverError?.code;
+    const constraint =
+      databaseError.constraint ?? databaseError.driverError?.constraint;
+    return code === '23505' && constraint === 'IDX_users_email_unique';
+  }
+
+  private duplicateEmailConflict() {
+    return new ConflictException({
+      code: 'USER_EMAIL_CONFLICT',
+      field: 'email',
+      message: 'Ya existe un usuario con ese correo.',
+    });
   }
 
   private toResponse(user: User) {

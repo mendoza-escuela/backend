@@ -3,6 +3,14 @@ require('reflect-metadata');
 const fs = require('node:fs');
 const path = require('node:path');
 const ExcelJS = require('exceljs');
+const {
+  OFFICIAL_GENERAL_SCORE_PROFILE,
+  OFFICIAL_MENTAL_HEALTH_SCORE_PROFILE,
+  OFFICIAL_UNRESOLVED_P038_CODE,
+  OFFICIAL_MENTAL_HEALTH_PENDING_QUESTION_CODES,
+  getApprovedOfficialQuestionScoreSequence,
+  getOfficialScoreProfile,
+} = require('../src/modules/surveys/policies/official-survey-scoring.policy.ts');
 
 const OUTPUT_PATH = path.resolve(
   __dirname,
@@ -51,7 +59,14 @@ const DIMENSIONS = [
   },
 ];
 
-const q = (number, dimensionCode, sectionCode, sectionTitle, prompt, options) => ({
+const q = (
+  number,
+  dimensionCode,
+  sectionCode,
+  sectionTitle,
+  prompt,
+  options,
+) => ({
   number,
   dimensionCode,
   sectionCode,
@@ -180,7 +195,7 @@ const QUESTIONS = [
     'Entorno Alimentario Seguro y Saludable',
     'Tiempo adecuado para las comidas escolares: Garantía de un tiempo adecuado, asegurando al menos 10 minutos para desayunos y meriendas, y 30 minutos para almuerzos.',
     [
-      'Se garantiza sistemáticamente: ≥20 min para desayuno/merienda y ≥30 min para almuerzo',
+      'Se garantiza sistemáticamente 10 minutos para desayuno/merienda y 30 minutos para almuerzo.',
       'Se respeta parcialmente (sólo en algunos turnos o niveles)',
       'No se evalúa o controla el tiempo de las comidas',
     ],
@@ -195,7 +210,9 @@ const QUESTIONS = [
       'Comparte el espacio, acompaña, cuida y promueve la alimentación saludable',
       'Comparte el mismo espacio, pero no se vincula con los estudiantes',
       'No hay acompañamiento durante las comidas',
-      na('El establecimiento no es Albergue, y no cuenta con Jornada extendida'),
+      na(
+        'El establecimiento no es Albergue, y no cuenta con Jornada extendida',
+      ),
     ],
   ),
   q(
@@ -208,7 +225,9 @@ const QUESTIONS = [
       'El clima es positivo y se promueve activamente el respeto, la comunicación, el aprendizaje y fortalecimiento de vínculos',
       'El clima es variable o se interviene solo ante conflictos',
       'Se observan conflictos frecuentes',
-      na('El establecimiento no es Albergue, y no cuenta con Jornada extendida'),
+      na(
+        'El establecimiento no es Albergue, y no cuenta con Jornada extendida',
+      ),
     ],
   ),
   q(
@@ -269,7 +288,9 @@ const QUESTIONS = [
       'Hay un espacio exclusivo, limpio, seguro, techado o con sombra y equipado para comer',
       'Hay un espacio, pero no cumple con condiciones de limpieza y seguridad',
       'No hay un espacio definido o se utiliza el aula para comer',
-      na('El establecimiento no es Albergue, y no cuenta con Jornada extendida'),
+      na(
+        'El establecimiento no es Albergue, y no cuenta con Jornada extendida',
+      ),
     ],
   ),
   q(
@@ -282,7 +303,9 @@ const QUESTIONS = [
       'El mobiliario es suficiente y adecuado a la matrícula del comedor',
       'Hay mobiliario, pero no es suficiente para la matrícula del comedor',
       'No hay mobiliario específico para las comidas',
-      na('El establecimiento no es Albergue, y no cuenta con Jornada extendida'),
+      na(
+        'El establecimiento no es Albergue, y no cuenta con Jornada extendida',
+      ),
     ],
   ),
   q(
@@ -295,7 +318,9 @@ const QUESTIONS = [
       'Se dispone de utensilios en cantidad suficiente, en buenas condiciones y adaptados a la edad de los estudiantes',
       'Se cuenta con utensilios adecuados, pero no en cantidad suficiente o presentan deterioros',
       'No se dispone de utensilios suficientes o están en mal estado',
-      na('El establecimiento no es Albergue, y no cuenta con Jornada extendida'),
+      na(
+        'El establecimiento no es Albergue, y no cuenta con Jornada extendida',
+      ),
     ],
   ),
   q(
@@ -308,6 +333,7 @@ const QUESTIONS = [
       'No se observan logos ni marcas comerciales en el equipamiento escolar',
       'Algunos elementos presentan logos, pero no están en espacios visibles para los estudiantes',
       'El equipamiento presenta logos o marcas comerciales visibles',
+      na('El establecimiento no cuenta con Comedor'),
     ],
   ),
   q(
@@ -455,11 +481,11 @@ const QUESTIONS = [
     'entorno_alimentario',
     'entorno_alimentario',
     'Entorno Alimentario Seguro y Saludable',
-    'Inclusión diaria de frutas y verduras: El menú que se brinda en el Comedor, incluye diariamente frutas y/o verduras, frescas, crudas y preferentemente de estación.',
+    'Inclusión diaria de frutas y/o verduras frescas, crudas y preferentemente de estación.',
     [
-      'Incluidos de forma explícita y con implementación activa y sostenida',
-      'Incluidos en el PEI o en proyectos, pero sin implementación activa',
-      'No están incluidos en el PEI ni cuentan con proyectos específicos',
+      'Se incluyen diariamente.',
+      'Se incluyen de 2 a 3 veces por semana.',
+      'Se incluyen una vez por semana.',
       na('El establecimiento no cuenta con Comedor'),
     ],
   ),
@@ -629,7 +655,7 @@ const QUESTIONS = [
     [
       'Se abordan de forma activa y transversal en el plan de estudios, y se realizan actividades de sensibilización planificadas y regulares.',
       'Se abordan ocasionalmente o sin enfoque sistemático',
-      'Se abordan ocasionalmente o sin enfoque sistemático',
+      'No se abordan estos temas.',
     ],
   ),
   q(
@@ -819,14 +845,22 @@ const QUESTIONS = [
   ),
 ];
 
-const PENDING_ITEMS = [
+const PENDING_SCORE_DEFINITIONS = [
   {
-    priority: 'Bloqueante para publicación',
-    questions: '10',
-    topic: 'Tiempo mínimo de comidas',
-    detail:
-      'El enunciado indica al menos 10 minutos para desayuno/merienda, pero la primera respuesta exige ≥20 minutos. Confirmar cuál es el umbral correcto.',
+    questionCodes: [OFFICIAL_UNRESOLVED_P038_CODE],
+    questions: '38',
+    topic: 'Cuatro respuestas en escala general',
+    detail: `La escala general confirmada es ${OFFICIAL_GENERAL_SCORE_PROFILE.join('/')}, pero la pregunta tiene cuatro niveles. Falta el mapeo exacto opción–puntaje; todas sus celdas de puntaje permanecen vacías para no repetir un valor sin aprobación.`,
   },
+  {
+    questionCodes: [...OFFICIAL_MENTAL_HEALTH_PENDING_QUESTION_CODES],
+    questions: '41 a 43 y 47 a 51, 53 a 60',
+    topic: 'Tres respuestas en dimensión Salud Mental',
+    detail: `La escala confirmada para Salud Mental es ${OFFICIAL_MENTAL_HEALTH_SCORE_PROFILE.join('/')}, pero estas preguntas tienen tres opciones. Falta definir el mapeo exacto, en especial si la alternativa intermedia vale 66 o 33; todas sus celdas de puntaje permanecen vacías.`,
+  },
+];
+
+const PENDING_ITEMS = [
   {
     priority: 'Bloqueante para publicación',
     questions: '11, 12, 17, 18 y 19',
@@ -839,28 +873,21 @@ const PENDING_ITEMS = [
     questions: '20',
     topic: 'Aplicabilidad por comedor',
     detail:
-      'La pregunta menciona equipamiento del comedor, pero el PDF no ofrece alternativa para establecimientos sin comedor. Confirmar si debe excluirse automáticamente cuando no existe comedor.',
+      'La respuesta funcional final agrega “El establecimiento no cuenta con Comedor”. Se conserva en la hoja Fuente, pero no puede importarse como respuesta puntuable: confirmar si p020 debe excluirse automáticamente cuando no existe comedor.',
   },
   {
     priority: 'Bloqueante para publicación',
     questions: '21 a 27',
     topic: 'Condición por kiosco',
     detail:
-      'Las alternativas manuales “El establecimiento no cuenta con Kiosco” se conservaron en la hoja Fuente PDF, pero se excluyeron de la hoja importable. Falta confirmar la condición automática y si este es el conjunto completo de preguntas dependientes del kiosco.',
+      'La respuesta funcional enumera p021–p027, pero más adelante dice que el filtro anula 9 preguntas sin identificar las dos adicionales. El backend aplica la definición enumerada de 7; falta resolver la contradicción antes de publicar.',
   },
   {
     priority: 'Bloqueante para publicación',
     questions: '28 a 32',
     topic: 'Condición por comedor',
     detail:
-      'Las alternativas manuales “El establecimiento no cuenta con Comedor” se conservaron en la hoja Fuente PDF, pero se excluyeron de la hoja importable. Falta confirmar la condición automática y si existen más preguntas dependientes del comedor.',
-  },
-  {
-    priority: 'Bloqueante para publicación',
-    questions: '32',
-    topic: 'Opciones posiblemente copiadas',
-    detail:
-      'Las respuestas hablan de inclusión en el PEI/proyectos y no de la frecuencia de frutas y verduras del menú. Solicitar las opciones definitivas.',
+      'Las alternativas manuales “El establecimiento no cuenta con Comedor” se conservaron en la hoja Fuente, pero se excluyeron de la hoja importable. Falta confirmar la condición automática y si existen más preguntas dependientes del comedor.',
   },
   {
     priority: 'Bloqueante para publicación',
@@ -869,33 +896,18 @@ const PENDING_ITEMS = [
     detail:
       'La pregunta refiere al personal que prepara alimentos, pero no aclara qué ocurre si el establecimiento no prepara alimentos. Confirmar si corresponde una exclusión automática.',
   },
-  {
-    priority: 'Bloqueante para publicación',
-    questions: '38',
-    topic: 'Cuatro respuestas en escala general',
-    detail:
-      'La escala general sólo admite 100/50/0, pero la pregunta tiene cuatro niveles. Para que la planilla sea importable se asignó provisionalmente 100/50/0/0. Confirmar la puntuación definitiva.',
-  },
-  {
-    priority: 'Bloqueante para publicación',
-    questions: '41 a 43 y 47 a 51, 53 a 60',
-    topic: 'Tres respuestas en dimensión Salud Mental',
-    detail:
-      'La escala aprobada para Salud Mental es 100/66/33/0, pero estas preguntas tienen tres opciones. Para que la planilla sea importable se asignó provisionalmente 100/66/0. Confirmar si el nivel intermedio debe valer 66, 33 u otro valor.',
-  },
+  ...PENDING_SCORE_DEFINITIONS.map((definition) => ({
+    priority: 'Bloqueante para importación y publicación',
+    questions: definition.questions,
+    topic: definition.topic,
+    detail: definition.detail,
+  })),
   {
     priority: 'Corrección de contenido',
     questions: '41',
     topic: 'Redacción',
     detail:
       'La primera opción dice “Se trabaja de forma limpia, transversal y sostenida”. Confirmar si “limpia” es el término esperado.',
-  },
-  {
-    priority: 'Bloqueante para publicación',
-    questions: '46',
-    topic: 'Respuesta duplicada',
-    detail:
-      'La segunda y la tercera opción tienen exactamente el mismo texto en el PDF. Se conservaron ambas para trazabilidad, con puntajes 50 y 0. Solicitar la tercera opción correcta.',
   },
   {
     priority: 'Bloqueante para publicación',
@@ -911,36 +923,90 @@ const PENDING_ITEMS = [
     detail:
       'La primera opción dice “Incluido de forma con implementación específica activa y sostenida”. Solicitar la redacción definitiva.',
   },
-  {
-    priority: 'Definición transversal',
-    questions: 'Todas',
-    topic: 'Obligatoriedad',
-    detail:
-      'El PDF no identifica preguntas optativas. La hoja importable marca todas como obligatorias una vez aplicadas las exclusiones automáticas. Confirmar esta regla.',
-  },
 ];
 
-function scoreFor(question, option, index, scorableOptions) {
-  if (option.excludedFromImport) return null;
-  if (Number.isInteger(option.explicitScore)) return option.explicitScore;
-
-  if (question.dimensionCode === 'salud_mental') {
-    if (scorableOptions.length === 3) return [100, 66, 0][index];
-    if (scorableOptions.length === 4) return [100, 66, 33, 0][index];
-  }
-
-  if (scorableOptions.length === 2) return [100, 0][index];
-  if (scorableOptions.length === 3) return [100, 50, 0][index];
-  if (scorableOptions.length === 4) return [100, 50, 0, 0][index];
-  throw new Error(
-    `No hay una escala definida para ${question.number} (${scorableOptions.length} opciones).`,
+function scoreMappingForQuestion(question) {
+  const scorableOptions = question.options.filter(
+    (option) => !option.excludedFromImport,
   );
+  const questionCode = `p${String(question.number).padStart(3, '0')}`;
+  const pendingDefinition = PENDING_SCORE_DEFINITIONS.find((definition) =>
+    definition.questionCodes.includes(questionCode),
+  );
+  const officialScale = [...getOfficialScoreProfile(question.dimensionCode)];
+
+  if (pendingDefinition)
+    return {
+      questionNumber: question.number,
+      questionCode,
+      dimensionCode: question.dimensionCode,
+      optionCount: scorableOptions.length,
+      officialScale,
+      scores: scorableOptions.map(() => null),
+      status: 'pending',
+      detail: pendingDefinition.detail,
+    };
+
+  const approvedScores = getApprovedOfficialQuestionScoreSequence(questionCode);
+  if (!approvedScores)
+    throw new Error(
+      `La política no inventaría un mapeo aprobado ni pendiente para ${questionCode}.`,
+    );
+  const scores = [...approvedScores];
+  if (scores.length !== scorableOptions.length)
+    throw new Error(
+      `${questionCode} tiene ${scorableOptions.length} opciones, pero la política define ${scores.length} puntajes.`,
+    );
+
+  const explicitScores = scorableOptions.map((option) =>
+    Number.isInteger(option.explicitScore) ? option.explicitScore : null,
+  );
+  const hasExplicitScores = explicitScores.some((score) => score !== null);
+  if (
+    hasExplicitScores &&
+    JSON.stringify(explicitScores) !== JSON.stringify(scores)
+  )
+    throw new Error(
+      `${questionCode} contradice el mapeo central: fuente ${explicitScores.join('/')} / política ${scores.join('/')}.`,
+    );
+
+  const invalidScores = scores.filter(
+    (score) => !Number.isInteger(score) || !officialScale.includes(score),
+  );
+  if (invalidScores.length)
+    throw new Error(
+      `La pregunta ${question.number} usa puntajes fuera de la escala oficial: ${invalidScores.join(', ')}.`,
+    );
+
+  return {
+    questionNumber: question.number,
+    questionCode,
+    dimensionCode: question.dimensionCode,
+    optionCount: scorableOptions.length,
+    officialScale,
+    scores,
+    status: 'confirmed',
+    detail: hasExplicitScores
+      ? 'Mapeo explícito confirmado en la fuente funcional.'
+      : 'Mapeo obtenido de la política central de puntuación oficial.',
+  };
 }
+
+const SCORE_MAPPING_INVENTORY = QUESTIONS.map(scoreMappingForQuestion);
+const SCORE_MAPPING_BY_QUESTION = new Map(
+  SCORE_MAPPING_INVENTORY.map((mapping) => [
+    mapping.questionNumber,
+    mapping,
+  ]),
+);
 
 function recordsForQuestion(question, includeExcluded) {
   const scorableOptions = question.options.filter(
     (option) => !option.excludedFromImport,
   );
+  const scoreMapping = SCORE_MAPPING_BY_QUESTION.get(question.number);
+  if (!scoreMapping)
+    throw new Error(`Falta inventariar la pregunta ${question.number}.`);
   let scorableIndex = 0;
   return question.options
     .filter((option) => includeExcluded || !option.excludedFromImport)
@@ -948,6 +1014,10 @@ function recordsForQuestion(question, includeExcluded) {
       const currentScorableIndex = option.excludedFromImport
         ? -1
         : scorableIndex++;
+      const score =
+        currentScorableIndex === -1
+          ? null
+          : scoreMapping.scores[currentScorableIndex];
       return {
         dimension_codigo: question.dimensionCode,
         seccion_codigo: question.sectionCode,
@@ -957,23 +1027,16 @@ function recordsForQuestion(question, includeExcluded) {
         texto_ayuda: '',
         opcion_codigo: `opcion_${optionIndex + 1}`,
         opcion: option.label,
-        puntaje:
-          currentScorableIndex === -1
-            ? ''
-            : String(
-                scoreFor(
-                  question,
-                  option,
-                  currentScorableIndex,
-                  scorableOptions,
-                ),
-              ),
+        puntaje: score === null ? '' : String(score),
         obligatoria: 'si',
         orden: String(question.number),
         condicion: '',
         estado_importacion: option.excludedFromImport
           ? 'Excluida: debe reemplazarse por condición automática'
-          : 'Incluida',
+          : scoreMapping.status === 'pending'
+            ? 'Pendiente: puntaje sin definición funcional'
+            : 'Incluida',
+        estado_puntuacion: scoreMapping.status,
       };
     });
 }
@@ -1027,9 +1090,19 @@ function addImportSheet(workbook) {
     views: [{ state: 'frozen', ySplit: 1 }],
   });
   sheet.addRow(HEADERS);
-  IMPORT_RECORDS.forEach((record) =>
-    sheet.addRow(HEADERS.map((header) => record[header])),
-  );
+  IMPORT_RECORDS.forEach((record) => {
+    const row = sheet.addRow(HEADERS.map((header) => record[header]));
+    if (record.estado_puntuacion === 'pending') {
+      const scoreCell = row.getCell(9);
+      scoreCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: colors.warning },
+      };
+      scoreCell.note =
+        'Puntaje pendiente de definición funcional. No completar sin aprobación del cliente.';
+    }
+  });
   styleHeader(sheet.getRow(1));
   styleBody(sheet, 'L');
   const widths = [28, 25, 38, 18, 75, 28, 18, 75, 11, 13, 9, 28];
@@ -1040,7 +1113,9 @@ function addImportSheet(workbook) {
     sheet.getCell(`A${row}`).dataValidation = {
       type: 'list',
       allowBlank: false,
-      formulae: [`"${DIMENSIONS.map((dimension) => dimension.code).join(',')}"`],
+      formulae: [
+        `"${DIMENSIONS.map((dimension) => dimension.code).join(',')}"`,
+      ],
     };
     sheet.getCell(`I${row}`).dataValidation = {
       type: 'whole',
@@ -1079,23 +1154,27 @@ function addInstructionsSheet(workbook) {
     ],
     [
       'Contenido',
-      `Incluye las ${QUESTIONS.length} preguntas del PDF, organizadas en las seis dimensiones oficiales.`,
+      `Incluye las ${QUESTIONS.length} preguntas del PDF, organizadas en las seis dimensiones oficiales y con las correcciones funcionales cerradas para p010, p020, p032 y p046.`,
     ],
     [
       'Opciones no aplicables',
       'Las respuestas manuales por inexistencia de kiosco, comedor o jornada/albergue no se incluyeron en la hoja importable. Deben reemplazarse por exclusiones automáticas cuando se implemente y confirme la condicionalidad.',
     ],
     [
-      'Fuente PDF',
-      'La hoja “Fuente PDF” conserva las 196 alternativas del documento, incluidas las opciones no aplicables, para trazabilidad y revisión funcional.',
+      'Fuente consolidada',
+      'La hoja “Fuente” conserva las alternativas del documento y la opción de comedor agregada por la respuesta funcional final, incluidas las no importables, para trazabilidad y revisión funcional.',
+    ],
+    [
+      'Inventario de puntuación',
+      'La hoja “Mapeo de puntajes” enumera las 60 preguntas, su escala oficial, el mapeo aplicado en el orden de las opciones y cualquier definición pendiente.',
     ],
     [
       'Puntajes generales',
-      'Se cargaron 100/50/0. En preguntas binarias se usó 100/0. La pregunta 38 usa provisoriamente 100/50/0/0 porque el PDF contiene cuatro alternativas.',
+      `La escala oficial es ${OFFICIAL_GENERAL_SCORE_PROFILE.join('/')}. Las ternarias confirmadas usan ${OFFICIAL_GENERAL_SCORE_PROFILE.join('/')} y las binarias p022, p023 y p025 usan 100/0. p038 permanece completamente sin puntuar porque tiene cuatro alternativas y no existe un mapeo aprobado.`,
     ],
     [
       'Puntajes de Salud Mental',
-      'La pregunta 52 usa 0/33/66/100 según el orden creciente de madurez del PDF. Las preguntas de tres alternativas usan provisoriamente 100/66/0.',
+      `La escala oficial es ${OFFICIAL_MENTAL_HEALTH_SCORE_PROFILE.join('/')}. p052 usa 0/33/66/100 según el orden creciente de madurez confirmado. Las preguntas mentales de tres alternativas permanecen completamente sin puntuar hasta definir si la opción intermedia vale 66 o 33.`,
     ],
     [
       'Obligatoriedad',
@@ -1107,21 +1186,18 @@ function addInstructionsSheet(workbook) {
     ],
     [
       'Estado de la versión',
-      'La importación crea una versión nueva en borrador. No publiques la versión hasta resolver los puntos de la hoja “Pendientes”.',
+      'La planilla no puede importarse mientras existan puntajes vacíos. La vista previa del backend debe rechazar exclusivamente p038 y las preguntas mentales de tres opciones. La hoja “Pendientes” enumera las definiciones requeridas.',
     ],
     [
       'Origen',
-      'Arquitectura de datos para la App de Escuelas Promotoras de Salud Mendoza. DEFINITIVA (PDF provisto el 28/07/2026).',
+      'Arquitectura de datos para la App de Escuelas Promotoras de Salud Mendoza. DEFINITIVA y Respuestas Funcionales Final (prioridad ante contradicciones).',
     ],
   ];
   rows.forEach((row) => sheet.addRow(row));
   sheet.addRow([]);
   sheet.addRow(['Dimensiones oficiales', '']);
   DIMENSIONS.forEach((dimension, index) =>
-    sheet.addRow([
-      dimension.code,
-      `${index + 1}. ${dimension.title}`,
-    ]),
+    sheet.addRow([dimension.code, `${index + 1}. ${dimension.title}`]),
   );
   styleHeader(sheet.getRow(1));
   sheet.eachRow((row, rowNumber) => {
@@ -1136,6 +1212,51 @@ function addInstructionsSheet(workbook) {
       };
     }
   });
+}
+
+function addScoreMappingSheet(workbook) {
+  const sheet = workbook.addWorksheet('Mapeo de puntajes', {
+    views: [{ state: 'frozen', ySplit: 1 }],
+  });
+  sheet.columns = [
+    { key: 'questionCode', width: 20 },
+    { key: 'dimensionCode', width: 32 },
+    { key: 'optionCount', width: 20 },
+    { key: 'officialScale', width: 24 },
+    { key: 'appliedMapping', width: 34 },
+    { key: 'status', width: 22 },
+    { key: 'detail', width: 110 },
+  ];
+  sheet.addRow([
+    'pregunta_codigo',
+    'dimension_codigo',
+    'cantidad_opciones',
+    'escala_oficial',
+    'mapeo_segun_orden_opciones',
+    'estado',
+    'detalle',
+  ]);
+  SCORE_MAPPING_INVENTORY.forEach((mapping) => {
+    const row = sheet.addRow([
+      mapping.questionCode,
+      mapping.dimensionCode,
+      mapping.optionCount,
+      mapping.officialScale.join('/'),
+      mapping.scores.every((score) => score === null)
+        ? 'SIN DEFINIR'
+        : mapping.scores.join('/'),
+      mapping.status === 'confirmed' ? 'Confirmado' : 'Pendiente',
+      mapping.detail,
+    ]);
+    if (mapping.status === 'pending')
+      row.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: colors.warning },
+      };
+  });
+  styleHeader(sheet.getRow(1));
+  styleBody(sheet, 'G');
 }
 
 function addPendingSheet(workbook) {
@@ -1165,10 +1286,9 @@ function addPendingSheet(workbook) {
       type: 'pattern',
       pattern: 'solid',
       fgColor: {
-        argb:
-          row.getCell(1).value === 'Bloqueante para publicación'
-            ? colors.warning
-            : colors.white,
+        argb: String(row.getCell(1).value).startsWith('Bloqueante')
+          ? colors.warning
+          : colors.white,
       },
     };
   });
@@ -1176,7 +1296,7 @@ function addPendingSheet(workbook) {
 
 function addSourceSheet(workbook) {
   const headers = [...HEADERS, 'estado_importacion'];
-  const sheet = workbook.addWorksheet('Fuente PDF', {
+  const sheet = workbook.addWorksheet('Fuente', {
     views: [{ state: 'frozen', ySplit: 1 }],
   });
   sheet.addRow(headers);
@@ -1192,7 +1312,7 @@ function addSourceSheet(workbook) {
   sheet.eachRow((row, rowNumber) => {
     if (
       rowNumber > 1 &&
-      String(row.getCell(13).value).startsWith('Excluida')
+      /^(Excluida|Pendiente)/.test(String(row.getCell(13).value))
     ) {
       row.fill = {
         type: 'pattern',
@@ -1213,14 +1333,70 @@ function assertDataset() {
   }
   if (new Set(questionNumbers).size !== 60)
     throw new Error('Hay números de pregunta duplicados.');
-  if (SOURCE_RECORDS.length !== 196)
+  if (SOURCE_RECORDS.length !== 197)
     throw new Error(
-      `Se esperaban 196 opciones en la fuente y hay ${SOURCE_RECORDS.length}.`,
+      `Se esperaban 197 opciones en la fuente consolidada y hay ${SOURCE_RECORDS.length}.`,
     );
   if (IMPORT_RECORDS.length !== 179)
     throw new Error(
       `Se esperaban 179 opciones importables y hay ${IMPORT_RECORDS.length}.`,
     );
+  if (SCORE_MAPPING_INVENTORY.length !== QUESTIONS.length)
+    throw new Error('El inventario de puntuación no cubre las 60 preguntas.');
+
+  const expectedPendingCodes = PENDING_SCORE_DEFINITIONS.flatMap(
+    (definition) => definition.questionCodes,
+  ).sort();
+  const pendingMappings = SCORE_MAPPING_INVENTORY.filter(
+    (mapping) => mapping.status === 'pending',
+  );
+  const actualPendingCodes = pendingMappings
+    .map((mapping) => mapping.questionCode)
+    .sort();
+  if (
+    JSON.stringify(actualPendingCodes) !== JSON.stringify(expectedPendingCodes)
+  )
+    throw new Error(
+      `Los pendientes de puntuación no coinciden: ${actualPendingCodes.join(', ')}.`,
+    );
+
+  SCORE_MAPPING_INVENTORY.forEach((mapping) => {
+    if (mapping.scores.length !== mapping.optionCount)
+      throw new Error(
+        `El mapeo de ${mapping.questionCode} no cubre todas sus opciones.`,
+      );
+    if (
+      mapping.status === 'pending' &&
+      mapping.scores.some((score) => score !== null)
+    )
+      throw new Error(
+        `${mapping.questionCode} es pendiente y no debe tener puntajes provisorios.`,
+      );
+    if (
+      mapping.status === 'confirmed' &&
+      mapping.scores.some(
+        (score) =>
+          !Number.isInteger(score) || !mapping.officialScale.includes(score),
+      )
+    )
+      throw new Error(
+        `${mapping.questionCode} contiene valores fuera de su escala oficial.`,
+      );
+  });
+
+  if (
+    JSON.stringify(SCORE_MAPPING_BY_QUESTION.get(52)?.scores) !==
+    JSON.stringify([0, 33, 66, 100])
+  )
+    throw new Error('p052 debe conservar el mapeo confirmado 0/33/66/100.');
+
+  if (
+    JSON.stringify(OFFICIAL_GENERAL_SCORE_PROFILE) !==
+      JSON.stringify([100, 50, 0]) ||
+    JSON.stringify(OFFICIAL_MENTAL_HEALTH_SCORE_PROFILE) !==
+      JSON.stringify([100, 66, 33, 0])
+  )
+    throw new Error('Las escalas oficiales centrales fueron modificadas.');
   const officialCodes = new Set(DIMENSIONS.map((dimension) => dimension.code));
   QUESTIONS.forEach((question) => {
     if (!officialCodes.has(question.dimensionCode))
@@ -1259,22 +1435,33 @@ async function validateWithBackend() {
     new SurveyImportFileService(),
   );
   const preview = await service.preview(file);
-  if (!preview.canImport)
+  const pendingQuestionCodes = new Set(
+    SCORE_MAPPING_INVENTORY.filter(
+      (mapping) => mapping.status === 'pending',
+    ).map((mapping) => mapping.questionCode),
+  );
+  const expectedPendingRows = SCORE_MAPPING_INVENTORY.filter(
+    (mapping) => mapping.status === 'pending',
+  ).reduce((total, mapping) => total + mapping.optionCount, 0);
+  const invalidRows = preview.rows.filter((row) => row.errors.length);
+  const unexpectedErrors = invalidRows.filter(
+    (row) =>
+      !pendingQuestionCodes.has(row.questionCode) ||
+      row.errors.some(
+        (error) => error !== 'puntaje: debe ser un entero entre 0 y 100.',
+      ),
+  );
+  if (
+    preview.canImport ||
+    preview.errorCount !== expectedPendingRows ||
+    unexpectedErrors.length
+  )
     throw new Error(
-      `El backend rechazó la planilla: ${JSON.stringify(
-        preview.rows.filter((row) => row.errors.length),
+      `La validación del backend no coincide con los puntajes pendientes: ${JSON.stringify(
+        invalidRows,
         null,
         2,
       )}`,
-    );
-  if (
-    preview.counts.dimensions !== 6 ||
-    preview.counts.sections !== 7 ||
-    preview.counts.questions !== 60 ||
-    preview.counts.options !== 179
-  )
-    throw new Error(
-      `Los totales del backend no coinciden: ${JSON.stringify(preview.counts)}.`,
     );
   return preview;
 }
@@ -1289,10 +1476,11 @@ async function main() {
   workbook.subject = 'Plantilla de carga del cuestionario institucional';
   workbook.title = 'Cuestionario completo - Escuelas Promotoras de Salud';
   workbook.description =
-    'Planilla importable generada desde la arquitectura de datos provista.';
+    'Planilla de revisión del cuestionario institucional con pendientes funcionales explícitos.';
 
   addImportSheet(workbook);
   addInstructionsSheet(workbook);
+  addScoreMappingSheet(workbook);
   addPendingSheet(workbook);
   addSourceSheet(workbook);
 
@@ -1305,6 +1493,9 @@ async function main() {
         sourceQuestions: QUESTIONS.length,
         sourceOptions: SOURCE_RECORDS.length,
         importRows: IMPORT_RECORDS.length,
+        pendingScoreQuestions: SCORE_MAPPING_INVENTORY.filter(
+          (mapping) => mapping.status === 'pending',
+        ).length,
         backendPreview: {
           canImport: preview.canImport,
           errorCount: preview.errorCount,

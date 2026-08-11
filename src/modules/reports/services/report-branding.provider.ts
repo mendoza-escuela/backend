@@ -1,8 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { existsSync, readFileSync } from 'node:fs';
-import { extname } from 'node:path';
+import { extname, resolve } from 'node:path';
 import type { ReportBranding } from '../report.types';
+
+const DEFAULT_REPORT_LOGOS = {
+  mendoza: resolve(
+    __dirname,
+    '../../../../assets/brand/official/mendoza/marca-gobierno-mendoza.png',
+  ),
+  ops: resolve(__dirname, '../../../../assets/brand/official/ops/oms-ops.jpg'),
+} as const;
 
 @Injectable()
 export class ReportBrandingProvider {
@@ -10,10 +18,13 @@ export class ReportBrandingProvider {
 
   get(): ReportBranding {
     const logoPaths = [
-      this.config.get<string>('REPORT_LOGO_MENDOZA_PATH'),
-      this.config.get<string>('REPORT_LOGO_HEALTH_PATH'),
-      this.config.get<string>('REPORT_LOGO_DGE_PATH'),
-      this.config.get<string>('REPORT_LOGO_OPS_PATH'),
+      this.pathOrDefault(
+        'REPORT_LOGO_MENDOZA_PATH',
+        DEFAULT_REPORT_LOGOS.mendoza,
+      ),
+      this.nullable('REPORT_LOGO_HEALTH_PATH'),
+      this.nullable('REPORT_LOGO_DGE_PATH'),
+      this.pathOrDefault('REPORT_LOGO_OPS_PATH', DEFAULT_REPORT_LOGOS.ops),
     ].filter((value): value is string => Boolean(value));
     return {
       programName:
@@ -21,7 +32,7 @@ export class ReportBrandingProvider {
         'Escuelas Promotoras de Salud',
       organizations:
         this.config.get<string>('REPORT_ORGANIZATIONS') ||
-        'Gobierno de Mendoza',
+        'Gobierno de Mendoza · Salud · Dirección General de Escuelas · OPS/OMS',
       logos: logoPaths.flatMap((path) => {
         const image = this.image(path);
         return image ? [image] : [];
@@ -38,6 +49,10 @@ export class ReportBrandingProvider {
 
   private nullable(key: string) {
     return this.config.get<string>(key)?.trim() || null;
+  }
+
+  private pathOrDefault(key: string, defaultPath: string) {
+    return this.nullable(key) || defaultPath;
   }
 
   private image(path: string | undefined) {

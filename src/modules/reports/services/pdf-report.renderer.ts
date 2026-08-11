@@ -46,6 +46,8 @@ export class PdfReportRenderer {
             {
               width: '45%',
               table: {
+                headerRows: 1,
+                dontBreakRows: true,
                 widths: ['*', 54],
                 body: [
                   ['Dimensión', 'Puntaje'].map((text) =>
@@ -66,34 +68,28 @@ export class PdfReportRenderer {
         },
         { text: 'Alertas y áreas críticas', style: 'sectionTitle' },
         this.alerts(view),
-        {
-          text: 'Respuestas aplicables',
-          style: 'sectionTitle',
-          pageBreak: 'before',
-        },
-        ...answers.map(({ dimension, question }) => ({
-          margin: [0, 0, 0, 7],
-          stack: [
-            { text: `${question.code} · ${dimension.title}`, bold: true },
-            { text: question.prompt },
-            {
-              text: `Respuesta: ${question.answer?.selectedOption?.label ?? JSON.stringify(question.answer?.value ?? '')} · Puntaje: ${question.scoreUsed ?? 's/d'}`,
-              color: REPORT_THEME.muted,
-            },
-          ],
-        })),
-        { text: 'Preguntas excluidas', style: 'sectionTitle' },
-        ...(excluded.length
-          ? excluded.map(({ question }) => ({
-              text: `${question.code}: ${question.prompt} — ${question.applicability.reasonDescription}`,
-              margin: [0, 0, 0, 5],
-            }))
-          : [
+        this.questionTable(
+          'Respuestas aplicables',
+          answers.map(({ dimension, question }) => ({
+            stack: [
+              { text: `${question.code} - ${dimension.title}`, bold: true },
+              { text: question.prompt },
               {
-                text: 'No se registraron exclusiones.',
+                text: `Respuesta: ${question.answer?.selectedOption?.label ?? JSON.stringify(question.answer?.value ?? '')} - Puntaje: ${question.scoreUsed ?? 's/d'}`,
                 color: REPORT_THEME.muted,
               },
-            ]),
+            ],
+          })),
+          'No se registraron respuestas aplicables.',
+          true,
+        ),
+        this.questionTable(
+          'Preguntas excluidas',
+          excluded.map(({ question }) => ({
+            text: `${question.code}: ${question.prompt} - ${question.applicability.reasonDescription}`,
+          })),
+          'No se registraron exclusiones.',
+        ),
         { text: 'Trazabilidad del cálculo', style: 'sectionTitle' },
         {
           text: `Algoritmo ${view.algorithm.version}. Configuración de estrellas: ${view.result.stars.configuration?.versionCode ?? view.result.stars.ruleVersion ?? 'sin versión informada'}. Calculado el ${this.date(view.algorithm.calculatedAt)}.`,
@@ -119,7 +115,7 @@ export class PdfReportRenderer {
           ['Campaña', view.campaign.name],
           [
             'Versión',
-            `v${view.survey.version.number} · ${view.survey.version.title}`,
+            `v${view.survey.version.number} - ${view.survey.version.title}`,
           ],
           ['Fecha de envío', this.date(view.submission.submittedAt)],
           [
@@ -170,6 +166,15 @@ export class PdfReportRenderer {
           margin: [0, 18, 0, 8] as [number, number, number, number],
         },
       },
+      header: (currentPage: number) =>
+        currentPage === 1
+          ? { text: '' }
+          : {
+              text: `${view.branding.programName} - ${view.campaign.name}`,
+              margin: [46, 20, 46, 0],
+              fontSize: 8,
+              color: REPORT_THEME.mutedSoft,
+            },
       footer: (current: number, total: number) => ({
         columns: [
           { text: view.branding.programName, margin: [46, 0, 0, 0] },
@@ -186,26 +191,40 @@ export class PdfReportRenderer {
   }
 
   private header(view: IndividualReportViewModel, title: string): Content[] {
+    const logoWidth = Math.min(
+      180,
+      Math.floor(470 / Math.max(view.branding.logos.length, 1)) - 10,
+    );
     const logos: Content = view.branding.logos.length
       ? {
           columns: view.branding.logos.map((image) => ({
             image,
-            fit: [95, 45] as [number, number],
+            fit: [logoWidth, 50] as [number, number],
             margin: [0, 0, 10, 0] as [number, number, number, number],
           })),
-          margin: [0, 0, 0, 12],
+          margin: [0, 0, 0, 6],
         }
       : {
-          text: `${view.branding.organizations} · ${view.branding.programName}`,
+          text: `${view.branding.organizations} - ${view.branding.programName}`,
           bold: true,
           color: REPORT_THEME.primary,
           margin: [0, 0, 0, 12],
         };
     return [
       logos,
+      ...(view.branding.logos.length
+        ? [
+            {
+              text: view.branding.organizations,
+              fontSize: 8,
+              color: REPORT_THEME.muted,
+              margin: [0, 0, 0, 12],
+            } as Content,
+          ]
+        : []),
       { text: title, style: 'title' },
       {
-        text: `${view.campaign.name} · ${view.survey.name} v${view.survey.version.number}`,
+        text: `${view.campaign.name} - ${view.survey.name} v${view.survey.version.number}`,
         style: 'subtitle',
         margin: [0, 3, 0, 14],
       },
@@ -218,10 +237,12 @@ export class PdfReportRenderer {
         this.keyValues([
           ['Escuela', view.school.name],
           ['CUE', view.school.cue],
+          ['Director/a', view.school.directorName],
           ['Departamento', view.school.department ?? null],
           ['Localidad', view.school.locality],
           ['Gestión', view.school.managementType ?? null],
           ['Ámbito', view.school.scope],
+          ['Jornada', view.school.shiftCatalog?.label ?? view.school.shift],
           ['Fecha de envío', this.date(view.submission.submittedAt)],
           [
             'Respondente original',
@@ -237,9 +258,14 @@ export class PdfReportRenderer {
               margin: [0, 14, 0, 0],
             },
             {
-              text: `Clasificación\n${view.result.stars.value ? '★'.repeat(view.result.stars.value) : 'Sin clasificación'}`,
+              text: `Clasificación\n${this.stars(view.result.stars.value)}`,
               style: 'lead',
               color: REPORT_THEME.accentText,
+              alignment: 'center',
+              margin: [0, 14, 0, 0],
+            },
+            {
+              text: `Base del cálculo\nNumerador: ${view.result.numerator} - Denominador: ${view.result.denominator}`,
               alignment: 'center',
               margin: [0, 14, 0, 0],
             },
@@ -300,7 +326,56 @@ export class PdfReportRenderer {
         color: REPORT_THEME.mutedSoft,
         margin: [0, 20, 0, 0],
       });
-    return content;
+    return content.length
+      ? [
+          {
+            stack: content,
+            unbreakable: true,
+          },
+        ]
+      : [];
+  }
+
+  private questionTable(
+    title: string,
+    rows: Content[],
+    emptyMessage: string,
+    pageBreakBefore = false,
+  ): Content {
+    return {
+      pageBreak: pageBreakBefore ? 'before' : undefined,
+      table: {
+        headerRows: 1,
+        keepWithHeaderRows: 1,
+        dontBreakRows: true,
+        widths: ['*'],
+        body: [
+          [
+            {
+              text: title,
+              style: 'sectionTitle',
+              margin: [0, 8, 0, 5],
+            },
+          ],
+          ...(rows.length
+            ? rows.map((row) => [
+                {
+                  stack: [row],
+                  margin: [0, 0, 0, 7],
+                },
+              ])
+            : [
+                [
+                  {
+                    text: emptyMessage,
+                    color: REPORT_THEME.muted,
+                  },
+                ],
+              ]),
+        ],
+      },
+      layout: 'noBorders',
+    } as Content;
   }
 
   private tableHeader(text: string): TableCell {
@@ -314,6 +389,11 @@ export class PdfReportRenderer {
 
   private score(value: string) {
     return `${Number(value).toFixed(2)} / 100`;
+  }
+
+  private stars(value: number | null) {
+    if (!value) return 'Sin clasificación';
+    return `${value} ${value === 1 ? 'estrella' : 'estrellas'}`;
   }
 
   private date(value: string | null) {

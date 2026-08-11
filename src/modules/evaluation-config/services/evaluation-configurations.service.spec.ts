@@ -63,4 +63,106 @@ describe('EvaluationConfigurationsService', () => {
     ).rejects.toBeInstanceOf(ConflictException);
     expect(manager.find).not.toHaveBeenCalled();
   });
+
+  it('maps a duplicated version code to a specific 409 response', async () => {
+    const duplicateService = new EvaluationConfigurationsService(
+      {
+        transaction: jest.fn().mockRejectedValue({
+          code: '23505',
+          constraint: 'UQ_evaluation_configurations_version_code',
+        }),
+      } as unknown as DataSource,
+      validator,
+    );
+
+    const promise = duplicateService.create(
+      {
+        versionCode: 'v1.0.0',
+        name: 'Duplicada',
+        mentalHealthCriticalThreshold: 33,
+        mentalHealthMaxStars: 4,
+        starRanges: [],
+      },
+      'actor-id',
+    );
+
+    await expect(promise).rejects.toMatchObject({
+      response: {
+        code: 'EVALUATION_VERSION_CODE_CONFLICT',
+        field: 'versionCode',
+        message: 'Ya existe una configuración con ese código de versión.',
+      },
+      status: 409,
+    });
+  });
+
+  it('maps a duplicated version code when editing a draft', async () => {
+    const duplicateService = new EvaluationConfigurationsService(
+      {
+        transaction: jest.fn().mockRejectedValue({
+          driverError: {
+            code: '23505',
+            constraint: 'UQ_evaluation_configurations_version_code',
+          },
+        }),
+      } as unknown as DataSource,
+      validator,
+    );
+
+    await expect(
+      duplicateService.update(
+        'configuration-id',
+        {
+          versionCode: 'v1.0.0',
+          name: 'Duplicada',
+          mentalHealthCriticalThreshold: 33,
+          mentalHealthMaxStars: 4,
+          starRanges: [],
+        },
+        'actor-id',
+      ),
+    ).rejects.toMatchObject({
+      response: {
+        code: 'EVALUATION_VERSION_CODE_CONFLICT',
+        field: 'versionCode',
+      },
+      status: 409,
+    });
+  });
+
+  it('maps a duplicated version code when cloning', async () => {
+    const duplicateService = new EvaluationConfigurationsService(
+      {
+        transaction: jest.fn().mockRejectedValue({
+          code: '23505',
+          constraint: 'UQ_evaluation_configurations_version_code',
+        }),
+      } as unknown as DataSource,
+      validator,
+    );
+    jest.spyOn(duplicateService, 'get').mockResolvedValue({
+      id: 'source-id',
+      versionCode: 'v1.0.0',
+      name: 'Original',
+      description: null,
+      mentalHealthCriticalThreshold: '33',
+      mentalHealthMaxStars: 4,
+      metadata: {},
+      starRanges: [],
+    } as EvaluationConfiguration);
+
+    await expect(
+      duplicateService.clone(
+        'source-id',
+        { versionCode: 'v1.0.0', name: 'Copia' },
+        'actor-id',
+      ),
+    ).rejects.toMatchObject({
+      response: {
+        code: 'EVALUATION_VERSION_CODE_CONFLICT',
+        field: 'versionCode',
+      },
+      status: 409,
+    });
+  });
 });

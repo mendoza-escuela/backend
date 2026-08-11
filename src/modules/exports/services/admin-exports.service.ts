@@ -3,12 +3,14 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import type { Response } from 'express';
 import ExcelJS from 'exceljs';
 import { once } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { finished, pipeline } from 'node:stream/promises';
 import { DataSource, SelectQueryBuilder } from 'typeorm';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
-import { CampaignParticipationStatus } from '../../campaigns/dto/list-campaign-tracking-query.dto';
 import { CampaignSchool } from '../../campaigns/entities/campaign-school.entity';
 import { Campaign } from '../../campaigns/entities/campaign.entity';
+import { applyDashboardSchoolFilters } from '../../dashboard/dashboard-query-filters';
 import { EvaluationSnapshot } from '../../evaluation/evaluation-snapshot.type';
 import { School } from '../../schools/entities/school.entity';
 import { SubmissionStatus } from '../../submissions/entities/submission-status.enum';
@@ -22,6 +24,7 @@ type ExportRow = {
   department: string;
   locality: string;
   educationLevel: string;
+  educationLevels: string;
   managementType: string;
   scope: string;
   shift: string;
@@ -90,22 +93,29 @@ export class AdminExportsService {
     query: AdminExportQueryDto,
     response: Response,
   ) {
-    const headers = this.headers(kind);
-    response.write(
-      `\uFEFF${headers.map((value) => this.csv(value)).join(',')}\r\n`,
-    );
-    let outputCount = 0;
-    await this.eachRow(query, async (row) => {
-      for (const values of this.exportRows(kind, row)) {
-        const writable = response.write(
-          `${values.map((value) => this.csv(String(spreadsheetSafeCell(value)))).join(',')}\r\n`,
-        );
-        outputCount += 1;
-        if (!writable) await once(response, 'drain');
-      }
-    });
-    response.end();
-    return outputCount;
+    try {
+      const headers = this.headers(kind);
+      response.write(
+        `\uFEFF${headers.map((value) => this.csv(value)).join(',')}\r\n`,
+      );
+      let outputCount = 0;
+      await this.eachRow(query, async (row) => {
+        for (const values of this.exportRows(kind, row)) {
+          const writable = response.write(
+            `${values.map((value) => this.csv(String(spreadsheetSafeCell(value)))).join(',')}\r\n`,
+          );
+          outputCount += 1;
+          if (!writable) await once(response, 'drain');
+        }
+      });
+      const completion = finished(response);
+      response.end();
+      await completion;
+      return outputCount;
+    } catch (error) {
+      response.destroy(this.asError(error));
+      throw error;
+    }
   }
 
   private async writeXlsx(
@@ -113,13 +123,19 @@ export class AdminExportsService {
     query: AdminExportQueryDto,
     response: Response,
   ) {
+    const output = new PassThrough();
+    const delivery = pipeline(output, response).then(
+      () => null,
+      (error: unknown) => error,
+    );
     const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
-      stream: response,
+      stream: output,
       useStyles: true,
       useSharedStrings: false,
     });
     const worksheet = workbook.addWorksheet(
       kind === 'results' ? 'Resultados' : 'Respuestas',
+      { views: [{ state: 'frozen', ySplit: 1 }] },
     );
     const header = worksheet.addRow(this.headers(kind));
     header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -129,18 +145,25 @@ export class AdminExportsService {
       fgColor: { argb: 'FF000F9F' },
     };
     header.commit();
-    worksheet.views = [{ state: 'frozen', ySplit: 1 }];
     let outputCount = 0;
-    await this.eachRow(query, (row) => {
-      for (const values of this.exportRows(kind, row)) {
-        worksheet
-          .addRow(values.map((value) => spreadsheetSafeCell(value)))
-          .commit();
-        outputCount += 1;
-      }
-    });
-    worksheet.commit();
-    await workbook.commit();
+    try {
+      await this.eachRow(query, (row) => {
+        for (const values of this.exportRows(kind, row)) {
+          worksheet
+            .addRow(values.map((value) => spreadsheetSafeCell(value)))
+            .commit();
+          outputCount += 1;
+        }
+      });
+      worksheet.commit();
+      await workbook.commit();
+    } catch (error) {
+      output.destroy(this.asError(error));
+      await delivery;
+      throw error;
+    }
+    const deliveryError = await delivery;
+    if (deliveryError) throw this.asError(deliveryError);
     return outputCount;
   }
 
@@ -158,6 +181,19 @@ export class AdminExportsService {
         .addSelect('school.department', 'department')
         .addSelect('school.locality', 'locality')
         .addSelect('school.educationLevel', 'educationLevel')
+        .addSelect(
+          `COALESCE((
+            SELECT STRING_AGG(
+              education_level.label || ' [' || education_level.code || ']',
+              ', ' ORDER BY school_level."order", education_level.label
+            )
+            FROM school_education_levels school_level
+            INNER JOIN education_level_catalogs education_level
+              ON education_level.id = school_level.level_id
+            WHERE school_level.school_id = school.id
+          ), '')`,
+          'educationLevels',
+        )
         .addSelect('school.managementType', 'managementType')
         .addSelect('school.scope', 'scope')
         .addSelect('school.shift', 'shift')
@@ -212,42 +248,7 @@ export class AdminExportsService {
         '(LOWER(school.name) LIKE :search OR LOWER(school.cue) LIKE :search)',
         { search: `%${query.search.toLowerCase()}%` },
       );
-    if (query.schoolId)
-      builder.andWhere('school.id = :schoolId', { schoolId: query.schoolId });
-    for (const [property, column] of [
-      ['department', 'department'],
-      ['locality', 'locality'],
-      ['educationLevel', 'education_level'],
-      ['managementType', 'management_type'],
-      ['scope', 'scope'],
-      ['shift', 'shift'],
-    ] as const)
-      if (query[property])
-        builder.andWhere(`school.${column} = :${property}`, {
-          [property]: query[property],
-        });
-    if (query.status === CampaignParticipationStatus.NotStarted)
-      builder.andWhere('submission.id IS NULL');
-    if (query.status === CampaignParticipationStatus.Draft)
-      builder.andWhere('submission.status = :status', {
-        status: SubmissionStatus.Draft,
-      });
-    if (query.status === CampaignParticipationStatus.Submitted)
-      builder.andWhere('submission.status = :status', {
-        status: SubmissionStatus.Submitted,
-      });
-    if (query.stars)
-      builder.andWhere('evaluation.stars = :stars', { stars: query.stars });
-    if (query.criticalArea)
-      builder.andWhere(
-        `EXISTS (
-          SELECT 1 FROM evaluation_dimension_results critical_dimension
-          WHERE critical_dimension.result_id = evaluation.id
-            AND critical_dimension.dimension_code = :criticalArea
-            AND critical_dimension.is_critical = true
-        )`,
-        { criticalArea: query.criticalArea },
-      );
+    applyDashboardSchoolFilters(builder, query);
   }
 
   private exportRows(kind: ExportKind, row: ExportRow): unknown[][] {
@@ -275,6 +276,7 @@ export class AdminExportsService {
       row.department,
       row.locality,
       row.educationLevel,
+      row.educationLevels,
       row.managementType,
       row.scope,
       row.shift,
@@ -283,6 +285,8 @@ export class AdminExportsService {
       this.participationStatus(row.submissionStatus),
       this.iso(row.submittedAt),
       this.decimal(row.generalScore),
+      this.decimal(snapshot?.result.numerator),
+      this.decimal(snapshot?.result.denominator),
       this.decimal(row.stars),
       ...dimensions.map((score) => this.decimal(score)),
       JSON.stringify(snapshot?.result.stars.alerts ?? []),
@@ -341,7 +345,8 @@ export class AdminExportsService {
       'Escuela',
       'Departamento',
       'Localidad',
-      'Nivel',
+      'Tipo de educación',
+      'Niveles educativos',
       'Gestión',
       'Ámbito',
       'Jornada',
@@ -350,6 +355,8 @@ export class AdminExportsService {
       'Estado',
       'Fecha de envío',
       'Puntaje general',
+      'Numerador general',
+      'Denominador general',
       'Estrellas',
       'Dimensión 1',
       'Dimensión 2',
@@ -399,6 +406,12 @@ export class AdminExportsService {
     const { format: _format, ...filters } = query;
     void _format;
     return filters;
+  }
+
+  private asError(error: unknown) {
+    return error instanceof Error
+      ? error
+      : new Error('Falló la escritura del archivo XLSX.');
   }
 
   private async completeAudit(

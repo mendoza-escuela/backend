@@ -21,6 +21,18 @@ describe('BulkSchoolImportService', () => {
 
   beforeEach(() => jest.clearAllMocks());
 
+  it('can parse and validate the exact downloaded template', async () => {
+    const preview = await service.preview(
+      file('plantilla-colegios.csv', service.template()),
+    );
+
+    expect(preview).toMatchObject({
+      totalRows: 1,
+      validCount: 1,
+      errorCount: 0,
+    });
+  });
+
   it('previews CSV rows and reports validation errors without saving', async () => {
     const csv = [
       headers(),

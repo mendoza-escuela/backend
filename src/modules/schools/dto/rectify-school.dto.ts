@@ -1,8 +1,11 @@
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
+  ArrayMinSize,
+  ArrayUnique,
   IsArray,
   IsBoolean,
+  IsIn,
   IsISO8601,
   IsInt,
   IsOptional,
@@ -14,6 +17,10 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import {
+  OFFICIAL_SCHOOL_RECTIFICATION_CATALOGS,
+  OfficialSchoolCharacteristics,
+} from '../school-rectification.catalogs';
 import { SchoolContactDto } from './school-contact.dto';
 
 const trim = ({ value }: { value: unknown }) =>
@@ -35,6 +42,16 @@ export class RectificationEducationLevelDto {
     message: 'La matrícula por nivel supera el máximo permitido.',
   })
   enrollment?: number | null;
+}
+
+export class RectificationCharacteristicsDto implements OfficialSchoolCharacteristics {
+  @IsOptional()
+  @IsBoolean()
+  isMultigrade?: boolean | null;
+
+  @IsOptional()
+  @IsBoolean()
+  isInterculturalBilingual?: boolean | null;
 }
 
 export class RectifySchoolDto {
@@ -69,46 +86,72 @@ export class RectifySchoolDto {
   @Transform(trim)
   @IsString()
   @Length(2, 120)
+  department: string;
+
+  @Transform(trim)
+  @IsString()
+  @Length(2, 120)
+  @IsIn(
+    OFFICIAL_SCHOOL_RECTIFICATION_CATALOGS.scopes.map(({ label }) => label),
+    { message: 'El ámbito no pertenece al catálogo oficial.' },
+  )
   scope: string;
 
   /**
-   * Campos textuales heredados. Se mantienen opcionales para clientes
-   * anteriores; los nuevos datos estructurados usan catálogos.
+   * La columna heredada educationLevel conserva el tipo de educación. Los
+   * niveles ofrecidos por la escuela se registran en educationLevels.
    */
+  @Transform(trim)
+  @IsString()
+  @Length(2, 120)
+  @IsIn(
+    OFFICIAL_SCHOOL_RECTIFICATION_CATALOGS.educationTypes.map(
+      ({ label }) => label,
+    ),
+    { message: 'El tipo de educación no pertenece al catálogo oficial.' },
+  )
+  educationLevel: string;
+
   @Transform(trim)
   @IsOptional()
   @IsString()
   @Length(2, 120)
-  educationLevel?: string;
+  @IsIn(
+    OFFICIAL_SCHOOL_RECTIFICATION_CATALOGS.managementTypes.map(
+      ({ label }) => label,
+    ),
+    { message: 'El sector/gestión no pertenece al catálogo oficial.' },
+  )
+  managementType?: string;
 
+  /** Campo textual de jornada conservado sólo para clientes históricos. */
   @Transform(trim)
   @IsOptional()
   @IsString()
   @Length(2, 120)
   shift?: string;
 
-  @IsOptional()
   @IsBoolean()
-  hasKiosk?: boolean | null;
+  hasKiosk: boolean;
 
-  @IsOptional()
   @IsBoolean()
-  hasFoodService?: boolean | null;
+  hasFoodService: boolean;
 
   @IsOptional()
   @IsBoolean()
   isBoarding?: boolean | null;
 
-  @IsOptional()
   @IsUUID()
-  shiftCatalogId?: string | null;
+  shiftCatalogId: string;
 
-  @IsOptional()
   @IsArray()
+  @ArrayMinSize(1, {
+    message: 'Debe seleccionarse al menos un nivel educativo.',
+  })
   @ArrayMaxSize(30)
   @ValidateNested({ each: true })
   @Type(() => RectificationEducationLevelDto)
-  educationLevels?: RectificationEducationLevelDto[];
+  educationLevels: RectificationEducationLevelDto[];
 
   @Transform(nullableNumber)
   @IsOptional()
@@ -126,7 +169,15 @@ export class RectifySchoolDto {
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(2)
+  @ArrayUnique((contact: SchoolContactDto) => contact.type, {
+    message: 'Debe informarse un único referente de cada tipo.',
+  })
   @ValidateNested({ each: true })
   @Type(() => SchoolContactDto)
   contacts?: SchoolContactDto[];
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => RectificationCharacteristicsDto)
+  characteristics?: RectificationCharacteristicsDto;
 }

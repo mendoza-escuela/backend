@@ -70,26 +70,38 @@ describe('ParticipationDashboardService', () => {
   });
 
   it.each([
-    ['schoolId', 'school.id'],
-    ['department', 'school.department'],
-    ['locality', 'school.locality'],
-    ['educationLevel', 'school.education_level'],
-    ['managementType', 'school.management_type'],
-    ['scope', 'school.scope'],
-    ['shift', 'school.shift'],
+    ['schoolIds', 'school.id'],
+    ['departments', 'school.department'],
+    ['localities', 'school.locality'],
+    ['educationTypes', 'school.education_level'],
+    ['managementTypes', 'school.management_type'],
+    ['scopes', 'school.scope'],
+    ['shifts', 'school.shift'],
   ] as const)(
     'applies the %s filter in PostgreSQL',
     async (property, column) => {
       await service.metrics({
         campaignId: campaign.id,
-        [property]: 'selected-value',
+        [property]: ['first-value', 'second-value'],
       });
       expect(queryBuilder.andWhere).toHaveBeenCalledWith(
-        `${column} = :${property}`,
-        { [property]: 'selected-value' },
+        `${column} IN (:...${property})`,
+        { [property]: ['first-value', 'second-value'] },
       );
     },
   );
+
+  it('filters structured education levels without multiplying metrics', async () => {
+    await service.metrics({
+      campaignId: campaign.id,
+      educationLevels: ['primario', 'secundario'],
+    });
+
+    expect(queryBuilder.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('school_education_levels'),
+      { educationLevels: ['primario', 'secundario'] },
+    );
+  });
 
   it('combines filters without changing the aggregate source', async () => {
     await service.metrics({
@@ -120,4 +132,102 @@ describe('ParticipationDashboardService', () => {
       service.metrics({ campaignId: campaign.id }),
     ).rejects.toBeInstanceOf(ConflictException);
   });
+
+  it('devuelve niveles estructurados y acota opciones por múltiples territorios', async () => {
+    const campaignBuilder = optionsBuilder();
+    campaignBuilder.getMany.mockResolvedValue([campaign]);
+    const educationBuilder = optionsBuilder();
+    educationBuilder.getRawMany.mockResolvedValue([
+      { value: 'primario', label: 'Primario' },
+      { value: 'secundario', label: 'Secundario' },
+    ]);
+    const attributesBuilder = optionsBuilder();
+    attributesBuilder.getRawMany.mockResolvedValue([
+      {
+        educationLevel: 'Educación común',
+        managementType: 'Estatal',
+        scope: 'Urbano',
+        shift: 'Simple',
+      },
+    ]);
+    const schoolsBuilder = optionsBuilder();
+    schoolsBuilder.getRawMany.mockResolvedValue([
+      { id: 'school-1', cue: '50001', name: 'Escuela Uno' },
+    ]);
+    const schoolBuilder = optionsBuilder();
+    schoolBuilder.clone
+      .mockReturnValueOnce(educationBuilder)
+      .mockReturnValueOnce(attributesBuilder)
+      .mockReturnValueOnce(schoolsBuilder);
+    const departmentsBuilder = optionsBuilder();
+    departmentsBuilder.getRawMany.mockResolvedValue([
+      { value: 'Capital' },
+      { value: 'Lavalle' },
+    ]);
+    const localitiesBuilder = optionsBuilder();
+    localitiesBuilder.getRawMany.mockResolvedValue([
+      { value: 'Ciudad' },
+      { value: 'Costa de Araujo' },
+    ]);
+    const assignmentRepository = {
+      createQueryBuilder: jest
+        .fn()
+        .mockReturnValueOnce(schoolBuilder)
+        .mockReturnValueOnce(departmentsBuilder)
+        .mockReturnValueOnce(localitiesBuilder),
+    };
+    const optionsDataSource = {
+      getRepository: jest.fn((entity) =>
+        entity === Campaign
+          ? { createQueryBuilder: jest.fn(() => campaignBuilder) }
+          : assignmentRepository,
+      ),
+    } as unknown as DataSource;
+    const optionsService = new ParticipationDashboardService(optionsDataSource);
+
+    const response = await optionsService.filterOptions({
+      campaignId: campaign.id,
+      departments: ['Capital', 'Lavalle'],
+      localities: ['Ciudad', 'Costa de Araujo'],
+    });
+
+    expect(schoolBuilder.andWhere).toHaveBeenCalledWith(
+      'school.department IN (:...departments)',
+      { departments: ['Capital', 'Lavalle'] },
+    );
+    expect(schoolBuilder.andWhere).toHaveBeenCalledWith(
+      'school.locality IN (:...localities)',
+      { localities: ['Ciudad', 'Costa de Araujo'] },
+    );
+    expect(localitiesBuilder.andWhere).toHaveBeenCalledWith(
+      'school.department IN (:...departments)',
+      { departments: ['Capital', 'Lavalle'] },
+    );
+    expect(response.educationLevelOptions).toEqual([
+      { value: 'primario', label: 'Primario' },
+      { value: 'secundario', label: 'Secundario' },
+    ]);
+    expect(response.educationLevels).toEqual(['Educación común']);
+    expect(response.educationTypes).toEqual(['Educación común']);
+    expect(response.criticalAreas).toHaveLength(6);
+  });
 });
+
+function optionsBuilder() {
+  const builder: Record<string, jest.Mock> = {};
+  for (const method of [
+    'innerJoin',
+    'leftJoin',
+    'select',
+    'addSelect',
+    'where',
+    'andWhere',
+    'orderBy',
+    'addOrderBy',
+  ])
+    builder[method] = jest.fn(() => builder);
+  builder.clone = jest.fn(() => builder);
+  builder.getMany = jest.fn().mockResolvedValue([]);
+  builder.getRawMany = jest.fn().mockResolvedValue([]);
+  return builder;
+}

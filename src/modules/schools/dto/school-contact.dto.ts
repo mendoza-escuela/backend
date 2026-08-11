@@ -16,7 +16,7 @@ const optionalTrim = ({ value }: { value: unknown }) => {
   return normalized === '' ? undefined : normalized;
 };
 
-export class SchoolContactDto {
+abstract class SchoolContactIdentityDto {
   @IsEnum(SchoolContactType)
   type: SchoolContactType;
 
@@ -29,7 +29,9 @@ export class SchoolContactDto {
   @IsString()
   @Length(2, 100)
   lastName: string;
+}
 
+export class SchoolContactDto extends SchoolContactIdentityDto {
   @Transform(optionalTrim)
   @IsOptional()
   @IsString()

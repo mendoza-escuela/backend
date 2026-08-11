@@ -16,6 +16,7 @@ import { IndividualReportService } from './services/individual-report.service';
 import { PdfReportRenderer } from './services/pdf-report.renderer';
 import { RadarSvgService } from './services/radar-svg.service';
 import { ReportBrandingProvider } from './services/report-branding.provider';
+import { XlsxReportRenderer } from './services/xlsx-report.renderer';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { ReportBrandingProvider } from './services/report-branding.provider';
     PdfReportRenderer,
     RadarSvgService,
     ReportBrandingProvider,
+    XlsxReportRenderer,
   ],
 })
 export class ReportsModule {}

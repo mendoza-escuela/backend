@@ -2,7 +2,6 @@ import {
   Body,
   Controller,
   Get,
-  Header,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -11,6 +10,7 @@ import {
   Query,
   Req,
   Res,
+  StreamableFile,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -24,11 +24,11 @@ import { AuthenticatedUser } from '../../../common/types/authenticated-user.type
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { AssignSchoolUserDto } from '../dto/assign-school-user.dto';
+import { AdminRectifySchoolDto } from '../dto/admin-rectify-school.dto';
 import { CreateSchoolDto } from '../dto/create-school.dto';
 import { ListAssignableUsersQueryDto } from '../dto/list-assignable-users-query.dto';
 import { ListSchoolsQueryDto } from '../dto/list-schools-query.dto';
 import { SetSchoolStatusDto } from '../dto/set-school-status.dto';
-import { RectifySchoolDto } from '../dto/rectify-school.dto';
 import { UpdateSchoolDto } from '../dto/update-school.dto';
 import { BulkSchoolImportService } from '../services/bulk-school-import.service';
 import { SchoolsService } from '../services/schools.service';
@@ -51,13 +51,11 @@ export class AdminSchoolsController {
     return this.schoolsService.rectificationCatalogs();
   }
   @Get('import/template')
-  @Header('Content-Type', 'text/csv; charset=utf-8')
-  template(@Res({ passthrough: true }) response: Response) {
-    response.setHeader(
-      'Content-Disposition',
-      'attachment; filename="plantilla-colegios.csv"',
-    );
-    return this.bulkImport.template();
+  template() {
+    return new StreamableFile(this.bulkImport.template(), {
+      type: 'text/csv; charset=utf-8',
+      disposition: 'attachment; filename="plantilla-colegios.csv"',
+    });
   }
   @Post('import/preview')
   @UseInterceptors(
@@ -139,9 +137,9 @@ export class AdminSchoolsController {
   @Put(':id/rectification')
   rectify(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: RectifySchoolDto,
+    @Body() dto: AdminRectifySchoolDto,
     @Req() request: Request & { user: AuthenticatedUser },
   ) {
-    return this.schoolsService.rectify(id, dto, request.user);
+    return this.schoolsService.rectifyAsAdmin(id, dto, request.user);
   }
 }

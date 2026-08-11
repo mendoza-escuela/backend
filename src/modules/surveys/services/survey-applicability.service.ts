@@ -27,7 +27,8 @@ export type QuestionApplicabilityResolution = {
     | 'MATCHED_EXCLUSION_RULE'
     | 'DEFAULT_SHOW'
     | 'DEFAULT_EXCLUSION'
-    | 'MISSING_SCHOOL_DATA';
+    | 'MISSING_SCHOOL_DATA'
+    | 'DATA_CORRECTION_KIOSK_NOT_APPLICABLE';
   reasonDescription: string;
   missingFeatures: string[];
   relevantSchoolFacts: SchoolApplicabilityFacts;

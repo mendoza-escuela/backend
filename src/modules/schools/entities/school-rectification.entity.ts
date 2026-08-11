@@ -43,6 +43,7 @@ export type SchoolRectificationSnapshot = {
   hasKiosk?: boolean | null;
   hasFoodService?: boolean | null;
   isBoarding?: boolean | null;
+  characteristics?: Record<string, string | number | boolean | null>;
   shiftCatalog?: SchoolCatalogSnapshot | null;
   educationLevels?: SchoolEducationLevelSnapshot[];
   enrollmentTotal?: number | null;
