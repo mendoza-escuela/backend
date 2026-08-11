@@ -397,6 +397,17 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
       result: { generalScore: 100, numerator: 600, denominator: 6 },
     });
 
+    const participationFilters = await admin
+      .get('/api/admin/dashboard/participation/filters')
+      .query({ campaignId })
+      .expect(200);
+    expect(participationFilters.body).toMatchObject({
+      defaultCampaignId: campaignId,
+      educationLevelOptions: [
+        { value: 'primario', label: 'Primario' },
+      ],
+    });
+
     const repeatedMultiFilterQuery =
       `campaignId=${encodeURIComponent(campaignId)}` +
       '&departments=Capital' +

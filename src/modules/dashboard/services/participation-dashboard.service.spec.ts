@@ -203,6 +203,11 @@ describe('ParticipationDashboardService', () => {
       'school.department IN (:...departments)',
       { departments: ['Capital', 'Lavalle'] },
     );
+    expect(educationBuilder.distinct).toHaveBeenCalledWith(true);
+    expect(educationBuilder.select).toHaveBeenCalledWith(
+      'education_level_option.code',
+      'value',
+    );
     expect(response.educationLevelOptions).toEqual([
       { value: 'primario', label: 'Primario' },
       { value: 'secundario', label: 'Secundario' },
@@ -220,6 +225,7 @@ function optionsBuilder() {
     'leftJoin',
     'select',
     'addSelect',
+    'distinct',
     'where',
     'andWhere',
     'orderBy',

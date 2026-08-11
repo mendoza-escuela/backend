@@ -196,8 +196,9 @@ export class ParticipationDashboardService {
           'education_level_option',
           'education_level_option.id = school_level_option.level_id',
         )
-        .select('DISTINCT education_level_option.code', 'value')
+        .select('education_level_option.code', 'value')
         .addSelect('education_level_option.label', 'label')
+        .distinct(true)
         .andWhere('education_level_option.id IS NOT NULL')
         .orderBy('education_level_option.label', 'ASC')
         .addOrderBy('education_level_option.code', 'ASC')
