@@ -1,6 +1,7 @@
 import { DataSource } from 'typeorm';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
+import { MailService } from '../../mail/services/mail.service';
 import { School } from '../../schools/entities/school.entity';
 import { UserRole } from '../entities/user-role.enum';
 import { User } from '../entities/user.entity';
@@ -154,7 +155,12 @@ describe('AdminUsersService', () => {
         findOne: jest.fn().mockResolvedValue(persistedUser),
       })),
     } as unknown as DataSource;
-    const service = new AdminUsersService(dataSource);
+    const sendAccountWelcome = jest.fn().mockResolvedValue(undefined);
+    const mailService = {
+      isConfigured: jest.fn().mockReturnValue(true),
+      sendAccountWelcome,
+    } as unknown as MailService;
+    const service = new AdminUsersService(dataSource, mailService);
 
     const created = await service.create(
       {
@@ -179,6 +185,13 @@ describe('AdminUsersService', () => {
     });
     expect(JSON.stringify(auditSave?.[1])).not.toContain('Temporal!Clave2026');
     expect(created.email).toBe('ana@mendoza.gov.ar');
+    expect(created.invitationEmailSent).toBe(true);
+    expect(sendAccountWelcome).toHaveBeenCalledWith({
+      firstName: 'Ana',
+      lastName: 'Pérez',
+      email: 'ana@mendoza.gov.ar',
+      temporaryPassword: 'Temporal!Clave2026',
+    });
   });
 
   it('returns a structured email conflict for a concurrent unique violation', async () => {

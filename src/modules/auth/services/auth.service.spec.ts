@@ -10,7 +10,7 @@ import { UsersService } from '../../users/services/users.service';
 import { AuthSession } from '../entities/auth-session.entity';
 import { PasswordResetToken } from '../entities/password-reset-token.entity';
 import { AuthService } from './auth.service';
-import { MailService } from './mail.service';
+import { MailService } from '../../mail/services/mail.service';
 
 describe('AuthService', () => {
   const usersService = {

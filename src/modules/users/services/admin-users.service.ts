@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -12,6 +13,7 @@ import { AuthenticatedUser } from '../../../common/types/authenticated-user.type
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { AuthSession } from '../../auth/entities/auth-session.entity';
 import { assertStrongPassword } from '../../auth/utils/password-policy';
+import { MailService } from '../../mail/services/mail.service';
 import { School } from '../../schools/entities/school.entity';
 import { SchoolUserAssignmentHistory } from '../../schools/entities/school-user-assignment-history.entity';
 import { CreateUserDto } from '../dto/create-user.dto';
@@ -24,7 +26,12 @@ import { User } from '../entities/user.entity';
 
 @Injectable()
 export class AdminUsersService {
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  private readonly logger = new Logger(AdminUsersService.name);
+
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly mailService?: MailService,
+  ) {}
 
   async list(query: ListUsersQueryDto) {
     const builder = this.dataSource
@@ -190,7 +197,14 @@ export class AdminUsersService {
       }
       throw error;
     }
-    return this.findOne(userId);
+    const user = await this.findOne(userId);
+    const invitationEmailSent = await this.sendWelcomeEmail(userId, {
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      temporaryPassword: dto.temporaryPassword,
+    });
+    return { ...user, invitationEmailSent };
   }
 
   async update(id: string, dto: UpdateUserDto, actor: AuthenticatedUser) {
@@ -341,6 +355,28 @@ export class AdminUsersService {
         sessionsRevoked: true,
       });
     });
+  }
+
+  /**
+   * Intenta entregar las credenciales una vez confirmada la transacción de
+   * alta. Un problema de SMTP no revierte la cuenta ya creada ni expone la
+   * contraseña temporal en logs; el estado se devuelve al administrador.
+   */
+  private async sendWelcomeEmail(
+    userId: string,
+    account: Parameters<MailService['sendAccountWelcome']>[0],
+  ): Promise<boolean> {
+    if (!this.mailService?.isConfigured()) return false;
+
+    try {
+      await this.mailService.sendAccountWelcome(account);
+      return true;
+    } catch {
+      this.logger.error(
+        `Account welcome email could not be sent for user ${userId}.`,
+      );
+      return false;
+    }
   }
 
   private async loadUser(id: string): Promise<User | null> {

@@ -25,7 +25,7 @@ import { School } from '../../schools/entities/school.entity';
 import { AuthSession } from '../entities/auth-session.entity';
 import { PasswordResetToken } from '../entities/password-reset-token.entity';
 import { assertStrongPassword } from '../utils/password-policy';
-import { MailService } from './mail.service';
+import { MailService } from '../../mail/services/mail.service';
 
 type SessionUser = AuthenticatedUser & {
   mustChangePassword: boolean;

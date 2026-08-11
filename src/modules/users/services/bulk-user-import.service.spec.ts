@@ -108,6 +108,7 @@ describe('BulkUserImportService', () => {
     createUser.mockResolvedValue({
       id: 'created-id',
       email: 'ana@mendoza.gov.ar',
+      invitationEmailSent: true,
     });
 
     const result = await service.import(
@@ -117,6 +118,8 @@ describe('BulkUserImportService', () => {
 
     expect(result.importedCount).toBe(1);
     expect(result.errorCount).toBe(1);
+    expect(result.invitationEmailSentCount).toBe(1);
+    expect(result.invitationEmailPendingCount).toBe(0);
     expect(createUser).toHaveBeenCalledTimes(1);
   });
 });

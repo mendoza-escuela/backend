@@ -62,6 +62,7 @@ function validateNumericEnvironment(config: Environment) {
     'LOGIN_LOCK_MINUTES',
     'PASSWORD_RESET_TOKEN_EXPIRES_MINUTES',
     'TRUST_PROXY_HOPS',
+    'SMTP_PORT',
   ]) {
     const value = Number(config[variableName]);
     const allowsZero = variableName === 'TRUST_PROXY_HOPS';
@@ -76,13 +77,7 @@ function validateNumericEnvironment(config: Environment) {
     }
   }
 
-  const smtpValues = [
-    'SMTP_HOST',
-    'SMTP_PORT',
-    'SMTP_USER',
-    'SMTP_PASSWORD',
-    'SMTP_FROM',
-  ];
+  const smtpValues = ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_FROM'];
   const configuredSmtpValues = smtpValues.filter((name) => config[name]);
   if (
     configuredSmtpValues.length > 0 &&

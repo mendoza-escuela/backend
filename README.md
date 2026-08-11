@@ -39,7 +39,11 @@ El seed del administrador no forma parte del arranque automático: debe ejecutar
 
 ## SMTP
 
-El flujo queda implementado, pero el envío real solo es operativo si `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` y `SMTP_FROM` están configurados. Nunca se debe versionar `.env` ni registrar tokens o credenciales.
+El flujo queda implementado, pero el envío real solo es operativo si `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD` y `SMTP_FROM` están configurados; `SMTP_PORT` usa 587 por defecto. Nunca se debe versionar `.env` ni registrar tokens o credenciales.
+
+Al crear una cuenta, el sistema intenta enviar un correo HTML responsive con el usuario, la contraseña temporal, la URL de acceso y los pasos del primer ingreso. La contraseña se utiliza únicamente para construir ese mensaje y en la base de datos se conserva solo su hash. La cuenta exige cambiarla durante el primer acceso.
+
+El envío ocurre después de confirmar el alta. Si SMTP no está configurado o el proveedor rechaza el mensaje, la cuenta permanece creada y la API devuelve `invitationEmailSent: false`; el panel administrativo advierte que las credenciales deben entregarse por otro canal seguro. La importación masiva informa también cuántos correos fueron enviados y cuántos quedaron pendientes.
 
 ## Administración de usuarios
 

@@ -50,7 +50,12 @@ export class BulkUserImportService {
 
   async import(file: Express.Multer.File, actor: AuthenticatedUser) {
     const validated = await this.readAndValidate(file);
-    const imported: Array<{ line: number; id: string; email: string }> = [];
+    const imported: Array<{
+      line: number;
+      id: string;
+      email: string;
+      invitationEmailSent: boolean;
+    }> = [];
     const errors = validated
       .filter((row) => row.errors.length > 0)
       .map((row) => ({ line: row.line, email: row.email, errors: row.errors }));
@@ -71,7 +76,12 @@ export class BulkUserImportService {
           },
           actor,
         );
-        imported.push({ line: row.line, id: user.id, email: user.email });
+        imported.push({
+          line: row.line,
+          id: user.id,
+          email: user.email,
+          invitationEmailSent: user.invitationEmailSent,
+        });
       } catch (error) {
         errors.push({
           line: row.line,
@@ -85,6 +95,12 @@ export class BulkUserImportService {
       totalRows: validated.length,
       importedCount: imported.length,
       errorCount: errors.length,
+      invitationEmailSentCount: imported.filter(
+        (user) => user.invitationEmailSent,
+      ).length,
+      invitationEmailPendingCount: imported.filter(
+        (user) => !user.invitationEmailSent,
+      ).length,
       imported,
       errors: errors.sort((a, b) => a.line - b.line),
     };
