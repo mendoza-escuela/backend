@@ -84,12 +84,15 @@ describe('Política de publicación del cuestionario oficial', () => {
       expect.arrayContaining([
         expect.stringContaining('p038'),
         expect.stringContaining('alternativa intermedia'),
-        expect.stringContaining('nueve preguntas'),
         expect.stringContaining('Comedor/jornada'),
         expect.stringContaining('p041'),
         expect.stringContaining('p051'),
         expect.stringContaining('p059'),
       ]),
+    );
+    expect(errors.some((error) => error.includes('Kiosco'))).toBe(false);
+    expect(errors.some((error) => error.includes('nueve preguntas'))).toBe(
+      false,
     );
     expect(errors).not.toEqual(
       expect.arrayContaining([

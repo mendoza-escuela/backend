@@ -30,6 +30,7 @@ describe('CampaignSchoolsService', () => {
   const manager = {
     queryRunner: {},
     findOne: jest.fn(),
+    findOneBy: jest.fn(),
     find: jest.fn(),
     getRepository: jest.fn(),
     create: jest.fn(
@@ -51,6 +52,18 @@ describe('CampaignSchoolsService', () => {
     andWhere: jest.fn().mockReturnThis(),
     select: jest.fn().mockReturnThis(),
     getRawMany: jest.fn(),
+  };
+  const assignedBuilder = {
+    innerJoinAndSelect: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    orderBy: jest.fn().mockReturnThis(),
+    addOrderBy: jest.fn().mockReturnThis(),
+    select: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
+    skip: jest.fn().mockReturnThis(),
+    take: jest.fn().mockReturnThis(),
+    getManyAndCount: jest.fn(),
   };
   const repositories = {
     campaignSchools: {
@@ -91,6 +104,7 @@ describe('CampaignSchoolsService', () => {
     manager.getRepository.mockImplementation((entity: unknown) =>
       entity === School ? repositories.schools : repositories.campaignSchools,
     );
+    manager.findOneBy.mockResolvedValue({ id: campaignId });
     manager.findOne.mockResolvedValue({
       id: campaignId,
       status: CampaignStatus.Draft,
@@ -98,6 +112,48 @@ describe('CampaignSchoolsService', () => {
     });
     manager.find.mockResolvedValue([]);
     service = new CampaignSchoolsService(dataSource as unknown as DataSource);
+  });
+
+  it('compone la paginación con un alias seleccionable para el orden por nombre', async () => {
+    const assignments = [
+      {
+        id: '40000000-0000-4000-8000-000000000001',
+        assignedAt: new Date('2026-08-01T12:00:00.000Z'),
+        assignmentSource: CampaignSchoolAssignmentSource.Manual,
+        school: { id: schoolIds[0], cue: '100', name: 'Álamo' },
+      },
+    ];
+    repositories.campaignSchools.createQueryBuilder.mockReturnValueOnce(
+      assignedBuilder,
+    );
+    assignedBuilder.getManyAndCount.mockResolvedValueOnce([assignments, 21]);
+
+    const response = await service.list(campaignId, {
+      page: 2,
+      limit: 20,
+    });
+
+    expect(assignedBuilder.addSelect).toHaveBeenCalledWith(
+      'LOWER(school.name)',
+      'school_name_sort',
+    );
+    expect(assignedBuilder.select.mock.invocationCallOrder[0]).toBeLessThan(
+      assignedBuilder.addSelect.mock.invocationCallOrder[0],
+    );
+    expect(assignedBuilder.orderBy).toHaveBeenCalledWith(
+      'school_name_sort',
+      'ASC',
+    );
+    expect(assignedBuilder.addOrderBy.mock.calls).toEqual([
+      ['school.cue', 'ASC'],
+      ['school.id', 'ASC'],
+    ]);
+    expect(assignedBuilder.skip).toHaveBeenCalledWith(20);
+    expect(assignedBuilder.take).toHaveBeenCalledWith(20);
+    expect(response).toEqual({
+      items: assignments,
+      pagination: { page: 2, limit: 20, total: 21, totalPages: 2 },
+    });
   });
 
   it('asigna manualmente, en una transacción, y registra auditoría', async () => {

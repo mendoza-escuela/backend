@@ -10,7 +10,23 @@ import { SchoolEducationLevel } from '../entities/school-education-level.entity'
 import { SchoolRectificationEducationLevel } from '../entities/school-rectification-education-level.entity';
 import { SchoolShiftCatalog } from '../entities/school-shift-catalog.entity';
 import { SchoolContactType } from '../entities/school-contact.entity';
+import { SchoolUserAssignmentHistory } from '../entities/school-user-assignment-history.entity';
+import { CampaignSchool } from '../../campaigns/entities/campaign-school.entity';
 import { SchoolsService } from './schools.service';
+
+function campaignParticipationBuilder(rows: Array<Record<string, unknown>>) {
+  return {
+    innerJoin: jest.fn().mockReturnThis(),
+    leftJoin: jest.fn().mockReturnThis(),
+    select: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    orderBy: jest.fn().mockReturnThis(),
+    addOrderBy: jest.fn().mockReturnThis(),
+    getRawMany: jest.fn().mockResolvedValue(rows),
+  };
+}
 
 describe('SchoolsService pagination', () => {
   it('pagina el padrón en base de datos y devuelve sólo campos del listado', async () => {
@@ -21,11 +37,10 @@ describe('SchoolsService pagination', () => {
       take: jest.fn().mockReturnThis(),
       getManyAndCount: jest.fn().mockResolvedValue([[], 45]),
     };
-    const dataSource = {
-      getRepository: jest.fn(() => ({
-        createQueryBuilder: jest.fn(() => builder),
-      })),
-    } as unknown as DataSource;
+    const getRepository = jest.fn(() => ({
+      createQueryBuilder: jest.fn(() => builder),
+    }));
+    const dataSource = { getRepository } as unknown as DataSource;
 
     const response = await new SchoolsService(dataSource).list({
       page: 2,
@@ -87,6 +102,242 @@ describe('SchoolsService pagination', () => {
     expect(builder.skip).toHaveBeenCalledWith(20);
     expect(builder.take).toHaveBeenCalledWith(20);
     expect(response.pagination.totalPages).toBe(2);
+  });
+});
+
+describe('SchoolsService administrative detail readiness', () => {
+  it('no habilita iniciar una evaluación si la confirmación requiere actualización', async () => {
+    const school = {
+      id: 'school-id',
+      cue: '500012300',
+      name: 'Escuela Uno',
+      isActive: true,
+      shiftCatalog: null,
+      structuredEducationLevels: [],
+      contacts: [],
+    } as unknown as School;
+    const rectification = {
+      id: 'rectification-id',
+      periodYear: Number(
+        new Intl.DateTimeFormat('en', {
+          timeZone: 'America/Argentina/Mendoza',
+          year: 'numeric',
+        }).format(new Date()),
+      ),
+      rectifiedAt: new Date('2026-08-10T12:00:00.000Z'),
+      actorUser: null,
+      snapshot: {
+        name: 'Escuela Uno',
+        cue: '500012300',
+        directorName: 'Ana Pérez',
+        department: 'Capital',
+        address: 'Calle 1',
+        locality: 'Mendoza',
+        scope: 'Urbano',
+        educationLevel: 'Educación común',
+        shift: 'Simple',
+        shiftCatalog: { id: 'shift-id', code: 'simple', label: 'Simple' },
+        educationLevels: [
+          {
+            id: 'level-id',
+            code: 'primario',
+            label: 'Primario',
+            enrollment: null,
+          },
+        ],
+        hasKiosk: null,
+        hasFoodService: true,
+      },
+    } as SchoolRectification;
+    const userBuilder = {
+      innerJoin: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+    const participationBuilder = campaignParticipationBuilder([]);
+    const dataSource = {
+      getRepository: jest.fn((entity) => {
+        if (entity === School)
+          return { findOne: jest.fn().mockResolvedValue(school) };
+        if (entity === User)
+          return { createQueryBuilder: jest.fn(() => userBuilder) };
+        if (entity === SchoolRectification)
+          return { find: jest.fn().mockResolvedValue([rectification]) };
+        if (entity === CampaignSchool)
+          return {
+            createQueryBuilder: jest.fn(() => participationBuilder),
+          };
+        if (entity === SchoolUserAssignmentHistory || entity === AuditLog)
+          return { find: jest.fn().mockResolvedValue([]) };
+        throw new Error('Repositorio inesperado');
+      }),
+    } as unknown as DataSource;
+
+    const detail = await new SchoolsService(dataSource).findOne(school.id);
+
+    expect(detail.rectification).toMatchObject({
+      isConfirmed: true,
+      isEvaluationReady: false,
+      isRectified: false,
+      rectifiedAt: rectification.rectifiedAt,
+      missingFields: [{ code: 'hasKiosk', label: 'Kiosco' }],
+    });
+    expect(detail.actions.canStartEvaluation).toBe(false);
+    expect(detail.campaigns).toEqual({
+      available: true,
+      items: [],
+      message: 'El colegio no tiene asignaciones de campaña vigentes.',
+    });
+    expect(detail.evaluations).toEqual({
+      available: true,
+      items: [],
+      message: 'No hay resultados de evaluación disponibles.',
+    });
+  });
+
+  it('integra campañas, presentaciones y resultados sin consultas por fila', async () => {
+    const rows = [
+      {
+        assignmentId: 'assignment-submitted',
+        assignmentSource: 'manual',
+        assignedAt: new Date('2026-08-02T12:00:00.000Z'),
+        campaignId: 'campaign-submitted',
+        campaignName: 'Campaña enviada',
+        campaignType: 'annual',
+        campaignStatus: 'closed',
+        campaignStartsAt: new Date('2026-08-01T03:00:00.000Z'),
+        campaignEndsAt: new Date('2026-08-31T02:59:59.999Z'),
+        submissionId: 'submission-submitted',
+        submissionStatus: 'submitted',
+        submissionStartedAt: new Date('2026-08-03T10:00:00.000Z'),
+        submissionLastSavedAt: new Date('2026-08-10T10:00:00.000Z'),
+        submissionSubmittedAt: new Date('2026-08-10T11:00:00.000Z'),
+        resultId: 'result-id',
+        resultCalculatedAt: new Date('2026-08-10T11:01:00.000Z'),
+        resultGeneralScore: '87.50000000',
+        resultStars: '4',
+      },
+      {
+        assignmentId: 'assignment-draft',
+        assignmentSource: 'filter',
+        assignedAt: '2025-08-02T12:00:00.000Z',
+        campaignId: 'campaign-draft',
+        campaignName: 'Campaña en borrador',
+        campaignType: 'annual',
+        campaignStatus: 'active',
+        campaignStartsAt: '2025-08-01T03:00:00.000Z',
+        campaignEndsAt: '2025-08-31T02:59:59.999Z',
+        submissionId: 'submission-draft',
+        submissionStatus: 'draft',
+        submissionStartedAt: '2025-08-03T10:00:00.000Z',
+        submissionLastSavedAt: null,
+        submissionSubmittedAt: null,
+        resultId: null,
+        resultCalculatedAt: null,
+        resultGeneralScore: null,
+        resultStars: null,
+      },
+      {
+        assignmentId: 'assignment-not-started',
+        assignmentSource: 'bulk',
+        assignedAt: '2024-08-02T12:00:00.000Z',
+        campaignId: 'campaign-not-started',
+        campaignName: 'Campaña no iniciada',
+        campaignType: 'annual',
+        campaignStatus: 'archived',
+        campaignStartsAt: '2024-08-01T03:00:00.000Z',
+        campaignEndsAt: '2024-08-31T02:59:59.999Z',
+        submissionId: null,
+        submissionStatus: null,
+        submissionStartedAt: null,
+        submissionLastSavedAt: null,
+        submissionSubmittedAt: null,
+        resultId: null,
+        resultCalculatedAt: null,
+        resultGeneralScore: null,
+        resultStars: null,
+      },
+    ];
+    const builder = campaignParticipationBuilder(rows);
+    const getRepository = jest.fn(() => ({
+      createQueryBuilder: jest.fn(() => builder),
+    }));
+    const dataSource = { getRepository } as unknown as DataSource;
+    const service = new SchoolsService(dataSource);
+
+    const participation = await (
+      service as unknown as {
+        schoolCampaignParticipation: (schoolId: string) => Promise<{
+          campaigns: {
+            available: boolean;
+            message: string;
+            items: Array<Record<string, unknown>>;
+          };
+          evaluations: {
+            available: boolean;
+            message: string;
+            items: Array<Record<string, unknown>>;
+          };
+        }>;
+      }
+    ).schoolCampaignParticipation('school-id');
+
+    expect(builder.andWhere).toHaveBeenCalledWith(
+      'assignment.removedAt IS NULL',
+    );
+    expect(builder.orderBy).toHaveBeenCalledWith('campaign.startsAt', 'DESC');
+    expect(participation.campaigns).toMatchObject({
+      available: true,
+      message: '',
+      items: [
+        {
+          assignment: {
+            id: 'assignment-submitted',
+            source: 'manual',
+            assignedAt: '2026-08-02T12:00:00.000Z',
+          },
+          campaign: {
+            id: 'campaign-submitted',
+            name: 'Campaña enviada',
+            startsAt: '2026-08-01T03:00:00.000Z',
+          },
+          participationStatus: 'submitted',
+          submission: {
+            id: 'submission-submitted',
+            status: 'submitted',
+            submittedAt: '2026-08-10T11:00:00.000Z',
+          },
+          result: {
+            available: true,
+            id: 'result-id',
+            calculatedAt: '2026-08-10T11:01:00.000Z',
+          },
+        },
+        expect.objectContaining({
+          participationStatus: 'draft',
+          result: { available: false, id: null, calculatedAt: null },
+        }),
+        expect.objectContaining({
+          participationStatus: 'not_started',
+          submission: null,
+        }),
+      ],
+    });
+    expect(participation.evaluations).toEqual({
+      available: true,
+      message: '',
+      items: [
+        {
+          id: 'result-id',
+          campaignId: 'campaign-submitted',
+          submissionId: 'submission-submitted',
+          calculatedAt: '2026-08-10T11:01:00.000Z',
+          generalScore: 87.5,
+          stars: 4,
+        },
+      ],
+    });
+    expect(getRepository).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -978,7 +1229,15 @@ describe('SchoolsService evaluation rectification gate', () => {
 
     expect(context.rectification).toMatchObject({
       id: 'latest-id',
+      isConfirmed: true,
+      isEvaluationReady: false,
       isRectified: false,
+      missingFields: [
+        {
+          code: 'hasFoodService',
+          label: 'Comedor o servicio alimentario',
+        },
+      ],
     });
     expect(rectificationOptions).toMatchObject({
       order: { rectifiedAt: 'DESC' },
@@ -1004,6 +1263,36 @@ describe('SchoolsService evaluation rectification gate', () => {
       {} as DataSource,
     ).evaluationContextForUser('user-id', manager);
 
-    expect(context.rectification.isRectified).toBe(true);
+    expect(context.rectification).toMatchObject({
+      isConfirmed: true,
+      isEvaluationReady: true,
+      isRectified: true,
+      missingFields: [],
+    });
+  });
+
+  it('distingue la ausencia de confirmación de una confirmación incompleta', async () => {
+    const manager = {
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce({
+          schoolId: 'school-id',
+          school: { id: 'school-id', isActive: true },
+        })
+        .mockResolvedValueOnce(null),
+    } as unknown as EntityManager;
+
+    const context = await new SchoolsService(
+      {} as DataSource,
+    ).evaluationContextForUser('user-id', manager);
+
+    expect(context.rectification).toMatchObject({
+      id: null,
+      isConfirmed: false,
+      isEvaluationReady: false,
+      isRectified: false,
+      missingFields: [],
+      rectifiedAt: null,
+    });
   });
 });

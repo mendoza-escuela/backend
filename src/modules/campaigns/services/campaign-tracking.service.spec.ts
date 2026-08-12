@@ -155,6 +155,110 @@ describe('CampaignTrackingService', () => {
     });
   });
 
+  it('counts as answered only responses with a persisted applicable decision', async () => {
+    const countBuilder = queryBuilder();
+    const idsBuilder = queryBuilder();
+    const dataBuilder = queryBuilder();
+    countBuilder.getCount.mockResolvedValue(1);
+    idsBuilder.getRawMany.mockResolvedValue([{ schoolId: 'school-draft' }]);
+    dataBuilder.getRawMany.mockResolvedValue([
+      trackingRow({
+        schoolId: 'school-draft',
+        submissionId: 'submission-draft',
+        submissionStatus: SubmissionStatus.Draft,
+        answeredCount: '3',
+        applicableCount: '6',
+      }),
+    ]);
+    schoolRepository.createQueryBuilder
+      .mockReturnValueOnce(countBuilder)
+      .mockReturnValueOnce(idsBuilder)
+      .mockReturnValueOnce(dataBuilder);
+
+    const response = await service.list(
+      campaign.id,
+      new ListCampaignTrackingQueryDto(),
+    );
+
+    const addSelectCalls = dataBuilder.addSelect.mock.calls as Array<
+      [selection: unknown, alias: string]
+    >;
+    const answeredCountSql = addSelectCalls.find(
+      ([, alias]) => alias === 'answeredCount',
+    )?.[0];
+    expect(typeof answeredCountSql).toBe('string');
+    if (typeof answeredCountSql !== 'string') {
+      throw new Error(
+        'No se configuró el conteo de respuestas del seguimiento.',
+      );
+    }
+    expect(answeredCountSql).toContain(
+      'INNER JOIN "submission_question_applicability" "answer_decision"',
+    );
+    expect(answeredCountSql).toContain(
+      'WHEN EXISTS (\n            SELECT 1\n            FROM "submission_question_applicability" "persisted_decision"',
+    );
+    expect(answeredCountSql).toContain(
+      '"answer_decision"."question_id" = "answer"."question_id"',
+    );
+    expect(answeredCountSql).toContain(
+      '"answer_decision"."status" = \'applicable\'',
+    );
+    expect(response.items[0].progress).toEqual({
+      answered: 3,
+      applicable: 6,
+      percentage: 50,
+    });
+  });
+
+  it('keeps counting all answers for a legacy submission without persisted decisions', async () => {
+    const countBuilder = queryBuilder();
+    const idsBuilder = queryBuilder();
+    const dataBuilder = queryBuilder();
+    countBuilder.getCount.mockResolvedValue(1);
+    idsBuilder.getRawMany.mockResolvedValue([{ schoolId: 'school-legacy' }]);
+    dataBuilder.getRawMany.mockResolvedValue([
+      trackingRow({
+        schoolId: 'school-legacy',
+        submissionId: 'submission-legacy',
+        submissionStatus: SubmissionStatus.Draft,
+        answeredCount: '4',
+        applicableCount: '0',
+      }),
+    ]);
+    schoolRepository.createQueryBuilder
+      .mockReturnValueOnce(countBuilder)
+      .mockReturnValueOnce(idsBuilder)
+      .mockReturnValueOnce(dataBuilder);
+
+    const response = await service.list(
+      campaign.id,
+      new ListCampaignTrackingQueryDto(),
+    );
+
+    const addSelectCalls = dataBuilder.addSelect.mock.calls as Array<
+      [selection: unknown, alias: string]
+    >;
+    const answeredCountSql = addSelectCalls.find(
+      ([, alias]) => alias === 'answeredCount',
+    )?.[0];
+    expect(typeof answeredCountSql).toBe('string');
+    if (typeof answeredCountSql !== 'string') {
+      throw new Error(
+        'No se configuró el conteo de respuestas del seguimiento.',
+      );
+    }
+    expect(answeredCountSql).toContain('FROM "survey_answers" "legacy_answer"');
+    expect(answeredCountSql).toContain(
+      '"legacy_answer"."submission_id" = "submission"."id"',
+    );
+    expect(response.items[0].progress).toEqual({
+      answered: 4,
+      applicable: 0,
+      percentage: 0,
+    });
+  });
+
   it('applies status, CUE/name search, pagination and ordering in backend', async () => {
     const countBuilder = queryBuilder();
     const idsBuilder = queryBuilder();

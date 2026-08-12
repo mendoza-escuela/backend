@@ -2,6 +2,7 @@ import { ConflictException, Injectable } from '@nestjs/common';
 import { SchoolRectificationSnapshot } from '../../schools/entities/school-rectification.entity';
 import { SurveyQuestion } from '../entities/survey-question.entity';
 import { SurveyVersion } from '../entities/survey-version.entity';
+import { inspectOfficialKioskApplicabilityForFacts } from '../policies/official-survey-applicability.policy';
 import {
   ApplicabilityEngine,
   SchoolApplicabilityFacts,
@@ -55,6 +56,29 @@ export type SurveyApplicabilityResult = {
 @Injectable()
 export class SurveyApplicabilityService {
   constructor(private readonly engine: ApplicabilityEngine) {}
+
+  /**
+   * Impide operar un borrador del cuestionario oficial cuando una versión
+   * histórica no produce la aplicabilidad aprobada para p021-p027. La
+   * validación observa el comportamiento y no modifica una versión publicada.
+   */
+  assertVersionApplicabilitySafe(
+    version: SurveyVersion,
+    snapshot: SchoolRectificationSnapshot | null,
+  ): void {
+    const errors = inspectOfficialKioskApplicabilityForFacts(
+      version.dimensions,
+      this.engine,
+      schoolApplicabilityFactsFromSnapshot(snapshot),
+    );
+    if (!errors.length) return;
+
+    throw new ConflictException({
+      code: 'SURVEY_VERSION_APPLICABILITY_NOT_READY',
+      message:
+        'La campaña utiliza una versión del cuestionario que debe ser corregida por administración antes de recibir el envío.',
+    });
+  }
 
   evaluate(
     version: SurveyVersion,

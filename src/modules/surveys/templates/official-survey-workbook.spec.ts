@@ -180,8 +180,12 @@ describe('Planilla consolidada del cuestionario institucional', () => {
     expect(pendingSheetText).toContain(
       'todas sus celdas de puntaje permanecen vacías',
     );
-    expect(pendingSheetText.toLowerCase()).not.toContain('provisional');
-    expect(pendingSheetText.toLowerCase()).not.toContain('provisori');
+    const normalizedPendingText = pendingSheetText.toLowerCase();
+    expect(normalizedPendingText).not.toContain('provisional');
+    expect(normalizedPendingText).not.toContain('provisori');
+    expect(normalizedPendingText).not.toContain('condición por kiosco');
+    expect(normalizedPendingText).not.toContain('nueve preguntas');
+    expect(normalizedPendingText).not.toContain('9 preguntas');
   });
 });
 

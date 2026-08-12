@@ -31,6 +31,9 @@ import {
 } from '../entities/campaign-school.entity';
 import { Campaign } from '../entities/campaign.entity';
 
+// TypeORM debe propagar este valor por su subconsulta DISTINCT al paginar joins.
+const SCHOOL_NAME_SORT_ALIAS = 'school_name_sort';
+
 @Injectable()
 export class CampaignSchoolsService {
   private readonly logger = new Logger(CampaignSchoolsService.name);
@@ -55,6 +58,7 @@ export class CampaignSchoolsService {
         'school.shift',
         'school.isActive',
       ])
+      .addSelect('LOWER(school.name)', SCHOOL_NAME_SORT_ALIAS)
       .skip((query.page - 1) * query.limit)
       .take(query.limit);
     const [items, total] = await builder.getManyAndCount();
@@ -335,7 +339,7 @@ export class CampaignSchoolsService {
       .innerJoinAndSelect('assignment.school', 'school')
       .where('assignment.campaignId = :campaignId', { campaignId })
       .andWhere('assignment.removedAt IS NULL')
-      .orderBy('LOWER(school.name)', 'ASC')
+      .orderBy(SCHOOL_NAME_SORT_ALIAS, 'ASC')
       .addOrderBy('school.cue', 'ASC')
       .addOrderBy('school.id', 'ASC');
     this.applySchoolFilters(builder, query);

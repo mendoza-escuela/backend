@@ -184,8 +184,26 @@ export class CampaignTrackingService {
       .addSelect('respondent.email', 'respondentEmail')
       .addSelect('respondent.isActive', 'respondentIsActive')
       .addSelect(
-        `(SELECT COUNT(*) FROM "survey_answers" "answer"
-          WHERE "answer"."submission_id" = "submission"."id")`,
+        `(CASE
+          WHEN EXISTS (
+            SELECT 1
+            FROM "submission_question_applicability" "persisted_decision"
+            WHERE "persisted_decision"."submission_id" = "submission"."id"
+          ) THEN (
+            SELECT COUNT(*)
+            FROM "survey_answers" "answer"
+            INNER JOIN "submission_question_applicability" "answer_decision"
+              ON "answer_decision"."submission_id" = "answer"."submission_id"
+              AND "answer_decision"."question_id" = "answer"."question_id"
+              AND "answer_decision"."status" = 'applicable'
+            WHERE "answer"."submission_id" = "submission"."id"
+          )
+          ELSE (
+            SELECT COUNT(*)
+            FROM "survey_answers" "legacy_answer"
+            WHERE "legacy_answer"."submission_id" = "submission"."id"
+          )
+        END)`,
         'answeredCount',
       )
       .addSelect(

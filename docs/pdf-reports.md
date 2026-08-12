@@ -7,6 +7,15 @@ histórico de evaluación. El frontend no envía HTML, imágenes ni capturas del
 radar. `IndividualReportService` construye un ViewModel independiente y
 `PdfReportRenderer` se limita a representarlo.
 
+El snapshot de evaluación continúa siendo la autoridad del reporte. Para
+resultados históricos que no conservaron `department` o `managementType`, el
+ViewModel completa únicamente el campo ausente: primero desde
+`survey_submissions.school_profile_snapshot` y, si tampoco está allí, desde la
+rectificación histórica vinculada. Esta última sólo se acepta cuando su
+identificador y escuela coinciden con la presentación y no contradice el
+identificador guardado en el resultado. La resolución no consulta la ficha
+escolar vigente, no modifica los snapshots originales y no persiste datos.
+
 ## Dependencia elegida
 
 Se incorporó `pdfmake` como única dependencia directa específica para PDF.
