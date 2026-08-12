@@ -94,6 +94,14 @@ type StarDecision = {
   >;
 };
 
+type EvaluationCalculationOptions = {
+  /**
+   * Configuración histórica que debe reutilizar un recálculo. Los cálculos
+   * iniciales omiten esta opción y continúan usando la configuración activa.
+   */
+  configuration?: EvaluationConfiguration;
+};
+
 @Injectable()
 export class EvaluationResultsService {
   constructor(
@@ -117,6 +125,7 @@ export class EvaluationResultsService {
     applicability: SurveyApplicabilityResult,
     actorUserId: string | null,
     source: EvaluationCalculationSource,
+    options: EvaluationCalculationOptions = {},
   ): Promise<EvaluationResult> {
     const lockedSubmission = await manager.findOne(SurveySubmission, {
       where: { id: submission.id },
@@ -127,7 +136,8 @@ export class EvaluationResultsService {
       throw new NotFoundException('La presentación indicada no existe.');
     }
 
-    const configuration = await this.configurations.active(manager);
+    const configuration =
+      options.configuration ?? (await this.configurations.active(manager));
     const calculation = this.prepareCalculation(
       submission,
       surveyVersion,
@@ -318,6 +328,65 @@ export class EvaluationResultsService {
       );
     }
 
+    const previousResult = await manager.findOne(EvaluationResult, {
+      where: { submissionId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!previousResult) {
+      throw new ConflictException({
+        code: 'EVALUATION_RECALCULATION_RESULT_REQUIRED',
+        message:
+          'La presentación no posee un resultado histórico que pueda recalcularse de forma segura.',
+      });
+    }
+    if (previousResult.algorithmVersion !== EVALUATION_ALGORITHM_VERSION) {
+      throw new ConflictException({
+        code: 'EVALUATION_RECALCULATION_ALGORITHM_DRIFT',
+        message:
+          'El resultado fue generado con otra versión del algoritmo y requiere una migración específica.',
+        storedAlgorithmVersion: previousResult.algorithmVersion,
+        currentAlgorithmVersion: EVALUATION_ALGORITHM_VERSION,
+      });
+    }
+    if (!previousResult.evaluationConfigurationId) {
+      throw new ConflictException({
+        code: 'EVALUATION_RECALCULATION_CONFIGURATION_REQUIRED',
+        message:
+          'El resultado no identifica la configuración histórica necesaria para recalcularlo.',
+      });
+    }
+
+    let historicalConfiguration: EvaluationConfiguration;
+    try {
+      historicalConfiguration = await this.configurations.get(
+        previousResult.evaluationConfigurationId,
+        manager,
+      );
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw new ConflictException({
+          code: 'EVALUATION_RECALCULATION_CONFIGURATION_REQUIRED',
+          message:
+            'La configuración histórica del resultado ya no está disponible.',
+        });
+      }
+      throw error;
+    }
+    if (
+      previousResult.evaluationConfigurationVersion &&
+      previousResult.evaluationConfigurationVersion !==
+        historicalConfiguration.versionCode
+    ) {
+      throw new ConflictException({
+        code: 'EVALUATION_RECALCULATION_CONFIGURATION_DRIFT',
+        message:
+          'La configuración histórica no coincide con la versión registrada en el resultado.',
+        storedConfigurationVersion:
+          previousResult.evaluationConfigurationVersion,
+        resolvedConfigurationVersion: historicalConfiguration.versionCode,
+      });
+    }
+
     return this.calculateAndPersist(
       manager,
       submission,
@@ -325,6 +394,7 @@ export class EvaluationResultsService {
       this.applicabilityFromStoredDecisions(submission),
       actorUserId,
       source,
+      { configuration: historicalConfiguration },
     );
   }
 

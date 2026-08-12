@@ -13,6 +13,7 @@ import { SubmissionStatus } from '../../submissions/entities/submission-status.e
 import { SurveySubmission } from '../../submissions/entities/survey-submission.entity';
 import { OFFICIAL_KIOSK_QUESTION_CODES } from '../../surveys/policies/official-survey-applicability.policy';
 import { EvaluationResult } from '../entities/evaluation-result.entity';
+import { EVALUATION_ALGORITHM_VERSION } from '../evaluation.constants';
 import { EvaluationResultsService } from './evaluation-results.service';
 
 type AffectedSubmissionRow = {
@@ -27,11 +28,23 @@ type AffectedSubmissionRow = {
   generalNumerator: string | null;
   generalDenominator: number | string | null;
   calculatedAt: Date | string | null;
+  resultId: string | null;
+  algorithmVersion: string | null;
+  evaluationConfigurationId: string | null;
+  evaluationConfigurationVersion: string | null;
+  resolvedEvaluationConfigurationVersion: string | null;
 };
+
+export type KioskApplicabilityRepairBlocker =
+  | 'EVALUATION_RECALCULATION_RESULT_REQUIRED'
+  | 'EVALUATION_RECALCULATION_ALGORITHM_DRIFT'
+  | 'EVALUATION_RECALCULATION_CONFIGURATION_REQUIRED'
+  | 'EVALUATION_RECALCULATION_CONFIGURATION_DRIFT';
 
 export type KioskApplicabilityAudit = {
   affectedSubmissionCount: number;
   affectedQuestionDecisionCount: number;
+  repairable: boolean;
   fingerprint: string;
   submissions: Array<{
     submissionId: string;
@@ -45,12 +58,17 @@ export type KioskApplicabilityAudit = {
       generalNumerator: string | null;
       generalDenominator: number | null;
       calculatedAt: string | null;
+      algorithmVersion: string | null;
+      evaluationConfigurationId: string | null;
+      evaluationConfigurationVersion: string | null;
     };
+    recalculationBlockers: KioskApplicabilityRepairBlocker[];
   }>;
 };
 
 const CORRECTION_REASON =
   'Corrección auditada: la pregunta de kiosco no corresponde porque la ficha histórica indica que la escuela no posee kiosco.';
+const MAX_REPAIR_BATCH_SIZE = 500;
 
 @Injectable()
 export class KioskApplicabilityDataRepairService {
@@ -68,6 +86,30 @@ export class KioskApplicabilityDataRepairService {
   }
 
   /**
+   * Genera la huella del lote exacto que luego se enviará a reparación.
+   * El GET general se conserva para descubrimiento, pero su huella no debe
+   * reutilizarse al reparar un subconjunto.
+   */
+  async preview(submissionIds: string[]): Promise<KioskApplicabilityAudit> {
+    const normalizedSubmissionIds = this.normalizeSubmissionIds(submissionIds);
+    const preview = await this.auditTargets(null, normalizedSubmissionIds);
+    if (preview.affectedSubmissionCount !== normalizedSubmissionIds.length) {
+      const affectedIds = new Set(
+        preview.submissions.map(({ submissionId }) => submissionId),
+      );
+      throw new ConflictException({
+        code: 'DATA_REPAIR_SELECTION_NOT_ELIGIBLE',
+        message:
+          'Una o más presentaciones no existen o ya no requieren esta reparación.',
+        ineligibleSubmissionIds: normalizedSubmissionIds.filter(
+          (submissionId) => !affectedIds.has(submissionId),
+        ),
+      });
+    }
+    return preview;
+  }
+
+  /**
    * Corrige exclusivamente el conjunto validado en la vista previa. La huella
    * evita aplicar una decisión sobre datos que cambiaron después de auditarse.
    */
@@ -77,19 +119,13 @@ export class KioskApplicabilityDataRepairService {
     confirm: boolean,
     actorUserId: string,
   ) {
-    const uniqueSubmissionIds = [...new Set(submissionIds)].sort();
     if (!confirm) {
       throw new BadRequestException({
         code: 'DATA_REPAIR_CONFIRMATION_REQUIRED',
         message: 'La reparación histórica requiere confirmación explícita.',
       });
     }
-    if (uniqueSubmissionIds.length !== submissionIds.length) {
-      throw new BadRequestException({
-        code: 'DATA_REPAIR_DUPLICATE_TARGET',
-        message: 'La lista contiene presentaciones repetidas.',
-      });
-    }
+    const uniqueSubmissionIds = this.normalizeSubmissionIds(submissionIds);
 
     return this.dataSource.transaction(async (manager) => {
       const locked = await manager.find(SurveySubmission, {
@@ -117,6 +153,7 @@ export class KioskApplicabilityDataRepairService {
             'Los datos cambiaron o la selección no coincide con la auditoría. Generá una nueva vista previa.',
         });
       }
+      this.assertRecalculationIsSafe(preview);
 
       await manager.query(
         `SELECT set_config('ops.allow_kiosk_applicability_repair', 'on', true)`,
@@ -161,7 +198,12 @@ export class KioskApplicabilityDataRepairService {
           result.general_score AS "generalScore",
           result.general_numerator AS "generalNumerator",
           result.general_denominator AS "generalDenominator",
-          result.calculated_at AS "calculatedAt"
+          result.calculated_at AS "calculatedAt",
+          result.id AS "resultId",
+          result.algorithm_version AS "algorithmVersion",
+          result.evaluation_configuration_id AS "evaluationConfigurationId",
+          result.evaluation_configuration_version AS "evaluationConfigurationVersion",
+          historical_configuration.version_code AS "resolvedEvaluationConfigurationVersion"
         FROM survey_submissions submission
         INNER JOIN submission_question_applicability applicability
           ON applicability.submission_id = submission.id
@@ -169,6 +211,8 @@ export class KioskApplicabilityDataRepairService {
           ON question.id = applicability.question_id
         LEFT JOIN evaluation_results result
           ON result.submission_id = submission.id
+        LEFT JOIN evaluation_configurations historical_configuration
+          ON historical_configuration.id = result.evaluation_configuration_id
         WHERE submission.status = 'submitted'
           AND submission.school_profile_snapshot @> '{"hasKiosk": false}'::jsonb
           AND LOWER(question.code) = ANY($1::text[])
@@ -180,37 +224,55 @@ export class KioskApplicabilityDataRepairService {
           result.general_score,
           result.general_numerator,
           result.general_denominator,
-          result.calculated_at
+          result.calculated_at,
+          result.id,
+          result.algorithm_version,
+          result.evaluation_configuration_id,
+          result.evaluation_configuration_version,
+          historical_configuration.version_code
         ORDER BY submission.id ASC
       `,
       [OFFICIAL_KIOSK_QUESTION_CODES, campaignId, submissionIds],
     );
 
-    const normalized = rows.map((row) => ({
-      submissionId: row.submissionId,
-      campaignId: row.campaignId,
-      schoolId: row.schoolId,
-      submittedAt: new Date(row.submittedAt).toISOString(),
-      questionCodes: [...row.questionCodes],
-      affectedQuestionCount: Number(row.affectedQuestionCount),
-      previousResult: {
-        generalScore: row.generalScore,
-        generalNumerator: row.generalNumerator,
-        generalDenominator:
-          row.generalDenominator === null
-            ? null
-            : Number(row.generalDenominator),
-        calculatedAt: row.calculatedAt
-          ? new Date(row.calculatedAt).toISOString()
-          : null,
-      },
-      fingerprintState: {
-        lastDecisionAt: new Date(row.lastDecisionAt).toISOString(),
-        calculatedAt: row.calculatedAt
-          ? new Date(row.calculatedAt).toISOString()
-          : null,
-      },
-    }));
+    const normalized = rows.map((row) => {
+      const recalculationBlockers = this.recalculationBlockers(row);
+      return {
+        submissionId: row.submissionId,
+        campaignId: row.campaignId,
+        schoolId: row.schoolId,
+        submittedAt: new Date(row.submittedAt).toISOString(),
+        questionCodes: [...row.questionCodes],
+        affectedQuestionCount: Number(row.affectedQuestionCount),
+        previousResult: {
+          generalScore: row.generalScore,
+          generalNumerator: row.generalNumerator,
+          generalDenominator:
+            row.generalDenominator === null
+              ? null
+              : Number(row.generalDenominator),
+          calculatedAt: row.calculatedAt
+            ? new Date(row.calculatedAt).toISOString()
+            : null,
+          algorithmVersion: row.algorithmVersion,
+          evaluationConfigurationId: row.evaluationConfigurationId,
+          evaluationConfigurationVersion: row.evaluationConfigurationVersion,
+        },
+        recalculationBlockers,
+        fingerprintState: {
+          lastDecisionAt: new Date(row.lastDecisionAt).toISOString(),
+          calculatedAt: row.calculatedAt
+            ? new Date(row.calculatedAt).toISOString()
+            : null,
+          resultId: row.resultId,
+          algorithmVersion: row.algorithmVersion,
+          evaluationConfigurationId: row.evaluationConfigurationId,
+          evaluationConfigurationVersion: row.evaluationConfigurationVersion,
+          resolvedEvaluationConfigurationVersion:
+            row.resolvedEvaluationConfigurationVersion,
+        },
+      };
+    });
     const fingerprint = createHash('sha256')
       .update(
         JSON.stringify(
@@ -230,12 +292,75 @@ export class KioskApplicabilityDataRepairService {
         (total, row) => total + row.affectedQuestionCount,
         0,
       ),
+      repairable: normalized.every(
+        ({ recalculationBlockers }) => !recalculationBlockers.length,
+      ),
       fingerprint,
       submissions: normalized.map(({ fingerprintState, ...row }) => {
         void fingerprintState;
         return row;
       }),
     };
+  }
+
+  private normalizeSubmissionIds(submissionIds: string[]): string[] {
+    if (
+      submissionIds.length < 1 ||
+      submissionIds.length > MAX_REPAIR_BATCH_SIZE
+    ) {
+      throw new BadRequestException({
+        code: 'DATA_REPAIR_TARGET_LIMIT',
+        message: `La reparación requiere entre 1 y ${MAX_REPAIR_BATCH_SIZE} presentaciones.`,
+      });
+    }
+    const uniqueSubmissionIds = [...new Set(submissionIds)].sort();
+    if (uniqueSubmissionIds.length !== submissionIds.length) {
+      throw new BadRequestException({
+        code: 'DATA_REPAIR_DUPLICATE_TARGET',
+        message: 'La lista contiene presentaciones repetidas.',
+      });
+    }
+    return uniqueSubmissionIds;
+  }
+
+  private recalculationBlockers(
+    row: AffectedSubmissionRow,
+  ): KioskApplicabilityRepairBlocker[] {
+    if (!row.resultId) return ['EVALUATION_RECALCULATION_RESULT_REQUIRED'];
+
+    const blockers: KioskApplicabilityRepairBlocker[] = [];
+    if (row.algorithmVersion !== EVALUATION_ALGORITHM_VERSION) {
+      blockers.push('EVALUATION_RECALCULATION_ALGORITHM_DRIFT');
+    }
+    if (
+      !row.evaluationConfigurationId ||
+      !row.resolvedEvaluationConfigurationVersion
+    ) {
+      blockers.push('EVALUATION_RECALCULATION_CONFIGURATION_REQUIRED');
+    } else if (
+      row.evaluationConfigurationVersion &&
+      row.evaluationConfigurationVersion !==
+        row.resolvedEvaluationConfigurationVersion
+    ) {
+      blockers.push('EVALUATION_RECALCULATION_CONFIGURATION_DRIFT');
+    }
+    return blockers;
+  }
+
+  private assertRecalculationIsSafe(preview: KioskApplicabilityAudit): void {
+    if (preview.repairable) return;
+    const blockedSubmissions = preview.submissions
+      .filter(({ recalculationBlockers }) => recalculationBlockers.length)
+      .map(({ submissionId, recalculationBlockers }) => ({
+        submissionId,
+        blockers: recalculationBlockers,
+      }));
+    throw new ConflictException({
+      code: blockedSubmissions[0].blockers[0],
+      message:
+        'El lote contiene resultados que no pueden recalcularse de forma históricamente segura.',
+      blockedSubmissions,
+    });
   }
 
   private async repairSubmission(
@@ -283,6 +408,10 @@ export class KioskApplicabilityDataRepairService {
           generalNumerator: previousResult.generalNumerator,
           generalDenominator: previousResult.generalDenominator,
           calculatedAt: previousResult.calculatedAt.toISOString(),
+          algorithmVersion: previousResult.algorithmVersion,
+          evaluationConfigurationId: previousResult.evaluationConfigurationId,
+          evaluationConfigurationVersion:
+            previousResult.evaluationConfigurationVersion,
         }
       : null;
     const before = affected.map((decision) => ({
@@ -336,6 +465,10 @@ export class KioskApplicabilityDataRepairService {
             generalNumerator: recalculated.generalNumerator,
             generalDenominator: recalculated.generalDenominator,
             calculatedAt: recalculated.calculatedAt.toISOString(),
+            algorithmVersion: recalculated.algorithmVersion,
+            evaluationConfigurationId: recalculated.evaluationConfigurationId,
+            evaluationConfigurationVersion:
+              recalculated.evaluationConfigurationVersion,
           },
         },
       }),

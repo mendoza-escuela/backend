@@ -17,6 +17,11 @@ reinterpretar datos antiguos de forma ambigua:
 - La provincia es Mendoza por definición del programa; no se duplica como un
   valor editable en cada establecimiento.
 
+Los registros históricos pueden conservar en `educationLevel` un nivel como
+`Primario`, anterior a esta separación. Ese valor se muestra como dato legado,
+pero no se convierte en `Educación común` ni se usa para inferir niveles
+estructurados. La regularización masiva requiere un mapeo oficial por CUE.
+
 El endpoint de catálogos devuelve `shifts` y `educationLevels` con su estructura
 persistida, y además `managementTypes`, `scopes`, `educationTypes` y
 `characteristics` como opciones `{ code, label }`. No se inventan catálogos de
@@ -33,15 +38,37 @@ evaluación por ausencia de una definición funcional que los declare
 obligatorios.
 
 El bloqueo por kiosco y servicio alimentario evita calcular la aplicabilidad
-con un dato desconocido. Debe ratificarse funcionalmente antes de producción,
-porque esos dos campos no aparecen en la lista literal de ocho obligatorios de
-la respuesta final del cliente.
+con un dato desconocido. Ambos campos fueron ratificados como obligatorios y
+continúan formando parte del control previo a una evaluación.
 
 La jornada textual se sincroniza con la etiqueta seleccionada. El snapshot de
 rectificación incorpora jornada, niveles, banderas, contactos y características
 sin modificar snapshots históricos. Para habilitar una evaluación se revisa
 únicamente la última rectificación del año; una fotografía incompleta no se
 salta en favor de otra anterior.
+
+### Estado de confirmación y aptitud para evaluar
+
+Los contratos de detalle de escuela y de campañas disponibles separan dos
+conceptos que antes estaban combinados en `isRectified`:
+
+- `isConfirmed`: existe al menos una confirmación para el año en curso.
+- `isEvaluationReady`: el snapshot de la última confirmación contiene todos los
+  datos que exige el control de evaluación.
+- `missingFields`: lista estable `{ code, label }` de los datos que faltan en
+  ese snapshot. Si todavía no existe una confirmación se devuelve vacía, ya
+  que no corresponde inferir faltantes desde la ficha vigente.
+- `rectifiedAt`: fecha de la última confirmación anual, aunque esa confirmación
+  requiera una actualización.
+
+`isRectified` se conserva temporalmente por compatibilidad y replica el valor
+de `isEvaluationReady`; los clientes nuevos no deben usarlo para determinar si
+existía una confirmación. Una confirmación histórica incompleta se representa,
+por ejemplo, como `isConfirmed: true`, `isEvaluationReady: false` y conserva
+su `rectifiedAt`. El backend bloquea el inicio de una presentación nueva con
+esa ficha. Un borrador existente sólo adopta una confirmación posterior cuando
+está lista para evaluar; su envío final continúa validando el snapshot histórico
+vinculado y su aplicabilidad.
 
 ### Cierre desde administración
 
@@ -71,4 +98,6 @@ El CSV histórico mantiene por compatibilidad una única columna `nivel` y una
 matrícula total. No se reinterpretan esos datos como la nueva selección de uno
 o más niveles porque el cliente todavía no definió cómo representar múltiples
 niveles y sus matrículas en CSV/XLSX. Una escuela importada debe completar la
-rectificación estructurada antes de iniciar una evaluación.
+rectificación estructurada antes de iniciar una evaluación. Hasta contar con el
+mapeo oficial por CUE, este flujo no regulariza ni sobrescribe automáticamente
+los valores históricos.

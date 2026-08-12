@@ -877,13 +877,6 @@ const PENDING_ITEMS = [
   },
   {
     priority: 'Bloqueante para publicación',
-    questions: '21 a 27',
-    topic: 'Condición por kiosco',
-    detail:
-      'La respuesta funcional enumera p021–p027, pero más adelante dice que el filtro anula 9 preguntas sin identificar las dos adicionales. El backend aplica la definición enumerada de 7; falta resolver la contradicción antes de publicar.',
-  },
-  {
-    priority: 'Bloqueante para publicación',
     questions: '28 a 32',
     topic: 'Condición por comedor',
     detail:
@@ -994,10 +987,7 @@ function scoreMappingForQuestion(question) {
 
 const SCORE_MAPPING_INVENTORY = QUESTIONS.map(scoreMappingForQuestion);
 const SCORE_MAPPING_BY_QUESTION = new Map(
-  SCORE_MAPPING_INVENTORY.map((mapping) => [
-    mapping.questionNumber,
-    mapping,
-  ]),
+  SCORE_MAPPING_INVENTORY.map((mapping) => [mapping.questionNumber, mapping]),
 );
 
 function recordsForQuestion(question, includeExcluded) {
@@ -1158,7 +1148,7 @@ function addInstructionsSheet(workbook) {
     ],
     [
       'Opciones no aplicables',
-      'Las respuestas manuales por inexistencia de kiosco, comedor o jornada/albergue no se incluyeron en la hoja importable. Deben reemplazarse por exclusiones automáticas cuando se implemente y confirme la condicionalidad.',
+      'Las respuestas manuales por inexistencia de infraestructura no se incluyen en la hoja importable. p021-p027 se excluyen automáticamente cuando la ficha indica que la escuela no posee kiosco; la correspondencia exacta de comedor y jornada/albergue continúa pendiente de definición.',
     ],
     [
       'Fuente consolidada',

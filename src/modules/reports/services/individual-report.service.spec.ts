@@ -4,28 +4,187 @@ import { CampaignSchool } from '../../campaigns/entities/campaign-school.entity'
 import { Campaign } from '../../campaigns/entities/campaign.entity';
 import type { EvaluationSnapshot } from '../../evaluation/evaluation-snapshot.type';
 import { EvaluationResult } from '../../evaluation/entities/evaluation-result.entity';
-import { School } from '../../schools/entities/school.entity';
 import { SurveySubmission } from '../../submissions/entities/survey-submission.entity';
+import { SubmissionStatus } from '../../submissions/entities/submission-status.enum';
 import { IndividualReportService } from './individual-report.service';
 import { RadarSvgService } from './radar-svg.service';
 import { ReportBrandingProvider } from './report-branding.provider';
 
-describe('IndividualReportService', () => {
-  const campaignId = '10000000-0000-4000-8000-000000000001';
-  const schoolId = '20000000-0000-4000-8000-000000000001';
+const campaignId = '10000000-0000-4000-8000-000000000001';
+const schoolId = '20000000-0000-4000-8000-000000000001';
 
-  it('usa exclusivamente la ficha histórica y no completa campos con la escuela vigente', async () => {
-    const { service } = fixture({
-      currentSchool: {
-        id: schoolId,
-        department: 'Departamento actual',
-        managementType: 'Gestión actual',
+describe('IndividualReportService', () => {
+  it('completa campos antiguos desde el snapshot de la presentación sin mutar los snapshots', async () => {
+    const evaluationSnapshot = historicalSnapshot();
+    const submissionSnapshot = {
+      ...evaluationSnapshot.school,
+      department: '  Departamento de la presentación ',
+      managementType: ' Gestión de la presentación  ',
+    };
+    const { service, repositories } = fixture({
+      evaluationSnapshot,
+      submission: {
+        id: 'submission-id',
+        schoolProfileSnapshot: submissionSnapshot,
+        schoolRectification: {
+          id: 'rectification-id',
+          schoolId,
+          snapshot: {
+            ...submissionSnapshot,
+            department: 'Departamento de la rectificación',
+            managementType: 'Gestión de la rectificación',
+          },
+        },
       },
     });
 
     const view = await service.get(campaignId, schoolId);
 
     expect(view.school.name).toBe('Escuela histórica');
+    expect(view.school.department).toBe('Departamento de la presentación');
+    expect(view.school.managementType).toBe('Gestión de la presentación');
+    expect(evaluationSnapshot.school.department).toBeUndefined();
+    expect(evaluationSnapshot.school.managementType).toBeUndefined();
+    expect(submissionSnapshot.department).toBe(
+      '  Departamento de la presentación ',
+    );
+    expect(submissionSnapshot.managementType).toBe(
+      ' Gestión de la presentación  ',
+    );
+    expect(repositories.submission.findOne).toHaveBeenCalledWith({
+      where: {
+        campaignId,
+        schoolId,
+        status: SubmissionStatus.Submitted,
+      },
+      relations: { schoolRectification: true },
+    });
+  });
+
+  it('usa la rectificación histórica vinculada si el snapshot de la presentación no tiene los campos', async () => {
+    const evaluationSnapshot = historicalSnapshot();
+    delete (
+      evaluationSnapshot.submission as Partial<EvaluationSnapshot['submission']>
+    ).schoolRectificationId;
+    const { service } = fixture({
+      evaluationSnapshot,
+      submission: {
+        id: 'submission-id',
+        schoolProfileSnapshot: {
+          ...historicalSnapshot().school,
+          department: '   ',
+        },
+        schoolRectification: {
+          id: 'rectification-id',
+          schoolId,
+          snapshot: {
+            ...historicalSnapshot().school,
+            department: 'Departamento rectificado',
+            managementType: 'Gestión rectificada',
+          },
+        },
+      },
+    });
+
+    const view = await service.get(campaignId, schoolId);
+
+    expect(view.school.department).toBe('Departamento rectificado');
+    expect(view.school.managementType).toBe('Gestión rectificada');
+  });
+
+  it('conserva los valores del resultado y no los reemplaza con otras fuentes históricas', async () => {
+    const evaluationSnapshot = historicalSnapshot();
+    evaluationSnapshot.school.department = 'Departamento del resultado';
+    evaluationSnapshot.school.managementType = 'Gestión del resultado';
+    const { service } = fixture({
+      evaluationSnapshot,
+      submission: {
+        id: 'submission-id',
+        schoolProfileSnapshot: {
+          ...historicalSnapshot().school,
+          department: 'Departamento de la presentación',
+          managementType: 'Gestión de la presentación',
+        },
+        schoolRectification: {
+          id: 'rectification-id',
+          schoolId,
+          snapshot: {
+            ...historicalSnapshot().school,
+            department: 'Departamento rectificado',
+            managementType: 'Gestión rectificada',
+          },
+        },
+      },
+    });
+
+    const view = await service.get(campaignId, schoolId);
+
+    expect(view.school.department).toBe('Departamento del resultado');
+    expect(view.school.managementType).toBe('Gestión del resultado');
+  });
+
+  it('deja los campos vacíos si no existe ninguna fuente histórica confiable', async () => {
+    const { service } = fixture({
+      submission: {
+        id: 'submission-id',
+        schoolProfileSnapshot: historicalSnapshot().school,
+        schoolRectification: null,
+      },
+    });
+
+    const view = await service.get(campaignId, schoolId);
+
+    expect(view.school.department).toBeUndefined();
+    expect(view.school.managementType).toBeUndefined();
+  });
+
+  it.each([
+    {
+      caseName: 'la relación referencia otra rectificación',
+      relationId: 'otra-rectificacion',
+      relationSchoolId: schoolId,
+      submissionRectificationId: 'rectification-id',
+      evaluationRectificationId: 'rectification-id',
+    },
+    {
+      caseName: 'la rectificación pertenece a otra escuela',
+      relationId: 'rectification-id',
+      relationSchoolId: 'otra-escuela',
+      submissionRectificationId: 'rectification-id',
+      evaluationRectificationId: 'rectification-id',
+    },
+    {
+      caseName: 'el resultado referencia otra rectificación',
+      relationId: 'rectification-id',
+      relationSchoolId: schoolId,
+      submissionRectificationId: 'rectification-id',
+      evaluationRectificationId: 'otra-rectificacion',
+    },
+  ])('no usa el fallback cuando $caseName', async (testCase) => {
+    const evaluationSnapshot = historicalSnapshot();
+    evaluationSnapshot.submission.schoolRectificationId =
+      testCase.evaluationRectificationId;
+    const { service } = fixture({
+      evaluationSnapshot,
+      submission: {
+        id: 'submission-id',
+        schoolId,
+        schoolRectificationId: testCase.submissionRectificationId,
+        schoolProfileSnapshot: historicalSnapshot().school,
+        schoolRectification: {
+          id: testCase.relationId,
+          schoolId: testCase.relationSchoolId,
+          snapshot: {
+            ...historicalSnapshot().school,
+            department: 'Departamento no confiable',
+            managementType: 'Gestión no confiable',
+          },
+        },
+      },
+    });
+
+    const view = await service.get(campaignId, schoolId);
+
     expect(view.school.department).toBeUndefined();
     expect(view.school.managementType).toBeUndefined();
   });
@@ -59,7 +218,6 @@ describe('IndividualReportService', () => {
 
 function fixture(overrides?: {
   assignment?: Record<string, unknown> | null;
-  currentSchool?: Record<string, unknown> | null;
   submission?: Record<string, unknown> | null;
   evaluationSnapshot?: EvaluationSnapshot | null;
 }) {
@@ -67,6 +225,19 @@ function fixture(overrides?: {
     overrides && 'evaluationSnapshot' in overrides
       ? overrides.evaluationSnapshot
       : historicalSnapshot();
+  const defaultSubmission = {
+    id: 'submission-id',
+    schoolId,
+    schoolRectificationId: 'rectification-id',
+    schoolProfileSnapshot: historicalSnapshot().school,
+    schoolRectification: null,
+  };
+  const submission =
+    overrides && 'submission' in overrides
+      ? overrides.submission === null
+        ? null
+        : { ...defaultSubmission, ...overrides.submission }
+      : defaultSubmission;
   const repositories = {
     assignment: {
       findOne: jest
@@ -85,23 +256,8 @@ function fixture(overrides?: {
         endsAt: new Date('2026-09-01T02:59:59.999Z'),
       }),
     },
-    school: {
-      findOneBy: jest
-        .fn()
-        .mockResolvedValue(
-          overrides && 'currentSchool' in overrides
-            ? overrides.currentSchool
-            : { id: 'school-id' },
-        ),
-    },
     submission: {
-      findOne: jest
-        .fn()
-        .mockResolvedValue(
-          overrides && 'submission' in overrides
-            ? overrides.submission
-            : { id: 'submission-id' },
-        ),
+      findOne: jest.fn().mockResolvedValue(submission),
     },
     evaluation: {
       findOneBy: jest.fn().mockResolvedValue({ snapshot }),
@@ -111,7 +267,6 @@ function fixture(overrides?: {
     getRepository: jest.fn((entity: unknown) => {
       if (entity === CampaignSchool) return repositories.assignment;
       if (entity === Campaign) return repositories.campaign;
-      if (entity === School) return repositories.school;
       if (entity === SurveySubmission) return repositories.submission;
       if (entity === EvaluationResult) return repositories.evaluation;
       throw new Error('Repositorio inesperado.');

@@ -23,10 +23,15 @@ La generación valida la planilla con el mismo importador que usa la API. La est
 - No se incluyen respuestas genéricas “Otro” ni “No aplica”.
 - p010 usa 10 minutos para desayuno/merienda y 30 minutos para almuerzo tanto en el enunciado como en la opción óptima.
 - p020 conserva en la hoja `Fuente` la nueva alternativa “El establecimiento no cuenta con Comedor”. No se presenta como respuesta puntuable mientras no se defina su tratamiento de exclusión.
+- La condición de kiosco quedó cerrada: exactamente `p021-p027` dependen de `hasKiosk`; con kiosco aplican, sin kiosco se excluyen y sin el dato la evaluación queda incompleta.
 - p032 usa el texto y las frecuencias de consumo definidos en la respuesta funcional final.
 - p046 usa “No se abordan estos temas.” como tercera opción y ya no contiene alternativas duplicadas.
 - La escala general confirmada es `100/50/0` y la escala de Salud Mental es `100/66/33/0`.
 - Los puntajes se obtienen de la misma política central que usa la validación de publicación; el generador no conserva una copia independiente de las escalas o la matriz.
+
+El generador y la planilla binaria versionada ya no incluyen kiosco en la hoja
+`Pendientes`. Los demás bloqueantes de contenido y puntuación permanecen
+identificados hasta que reciban una definición funcional.
 
 La hoja `Fuente` conserva 197 alternativas para trazabilidad. La hoja `Cuestionario` excluye las respuestas de infraestructura que deben resolverse mediante aplicabilidad y contiene las 179 opciones que el backend podrá importar una vez completados los puntajes pendientes.
 
@@ -34,13 +39,13 @@ La hoja `Fuente` conserva 197 alternativas para trazabilidad. La hoja `Cuestiona
 
 La hoja `Mapeo de puntajes` contiene una fila por pregunta y muestra la escala oficial, la secuencia aplicada según el orden actual de las opciones, el estado y la definición faltante. La matriz vigente es:
 
-| Preguntas | Tipo | Mapeo según orden de opciones | Estado |
-| --- | --- | --- | --- |
-| p001–p021, p024, p026–p037, p039–p040 y p044–p046 | General, tres opciones | `100/50/0` | Confirmado |
-| p022, p023 y p025 | General, dos opciones | `100/0` | Confirmado |
-| p038 | General, cuatro opciones | Sin puntajes | Pendiente |
-| p052 | Salud Mental, cuatro opciones ordenadas de menor a mayor desarrollo | `0/33/66/100` | Confirmado |
-| p041–p043, p047–p051 y p053–p060 | Salud Mental, tres opciones | Sin puntajes | Pendiente |
+| Preguntas                                         | Tipo                                                                | Mapeo según orden de opciones | Estado     |
+| ------------------------------------------------- | ------------------------------------------------------------------- | ----------------------------- | ---------- |
+| p001–p021, p024, p026–p037, p039–p040 y p044–p046 | General, tres opciones                                              | `100/50/0`                    | Confirmado |
+| p022, p023 y p025                                 | General, dos opciones                                               | `100/0`                       | Confirmado |
+| p038                                              | General, cuatro opciones                                            | Sin puntajes                  | Pendiente  |
+| p052                                              | Salud Mental, cuatro opciones ordenadas de menor a mayor desarrollo | `0/33/66/100`                 | Confirmado |
+| p041–p043, p047–p051 y p053–p060                  | Salud Mental, tres opciones                                         | Sin puntajes                  | Pendiente  |
 
 Las celdas pendientes permanecen vacías y resaltadas. No se asignan secuencias como `100/50/0/0` o `100/66/0`, porque repetir u omitir un nivel de la escala sería una regla de negocio no aprobada.
 
@@ -50,11 +55,10 @@ La planilla no puede importarse ni publicarse hasta que el cliente cierre estas 
 
 1. **p038:** asignar un puntaje exacto a sus cuatro respuestas. La escala general definida es `100/50/0`, pero la pregunta posee cuatro niveles.
 2. **Preguntas de Salud Mental con tres respuestas:** definir si la alternativa intermedia vale `66`, `33` u otro valor aprobado. La escala funcional enumera `100/66/33/0`, pero no indica cómo aplicarla a tres alternativas.
-3. **Kiosco:** resolver la contradicción interna de `Respuestas Funcionales Final`: primero identifica p021–p027 (siete preguntas) y luego indica que el filtro excluye nueve, sin nombrar las dos restantes.
-4. **Comedor/jornada:** enumerar exactamente qué preguntas se excluyen y la expresión aplicable. La respuesta funcional describe el criterio, pero no aporta una correspondencia completa pregunta–condición.
-5. **p041:** confirmar si “Se trabaja de forma limpia, transversal y sostenida” es el texto intencional.
-6. **p051:** confirmar la primera alternativa, actualmente referida a adultos designados y horas programáticas aunque la pregunta trata sobre participación familiar.
-7. **p059:** confirmar la redacción “Incluido de forma con implementación específica activa y sostenida”.
+3. **Comedor/jornada:** enumerar exactamente qué preguntas se excluyen y la expresión aplicable. La respuesta funcional describe el criterio, pero no aporta una correspondencia completa pregunta–condición.
+4. **p041:** confirmar si “Se trabaja de forma limpia, transversal y sostenida” es el texto intencional.
+5. **p051:** confirmar la primera alternativa, actualmente referida a adultos designados y horas programáticas aunque la pregunta trata sobre participación familiar.
+6. **p059:** confirmar la redacción “Incluido de forma con implementación específica activa y sostenida”.
 
 Hasta recibir estas definiciones se conservan los datos de la fuente y se identifican como pendientes; no se inventan textos, puntajes ni reglas de exclusión. Una vez aprobados los dos mapeos faltantes, deben incorporarse primero a la política central y luego regenerarse la planilla.
 

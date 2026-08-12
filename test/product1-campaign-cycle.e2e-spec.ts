@@ -11,6 +11,7 @@ import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { spanishValidationException } from '../src/common/validation/spanish-validation-errors';
 import { parseFrontendOrigin } from '../src/config/frontend-origins';
+import { OFFICIAL_KIOSK_QUESTION_CODES } from '../src/modules/surveys/policies/official-survey-applicability.policy';
 import { OFFICIAL_SURVEY_DIMENSIONS } from '../src/modules/surveys/templates/official-survey-dimensions.template';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -27,6 +28,7 @@ type AvailableCampaignsBody = {
 };
 type SubmissionWorkspaceBody = {
   submission: {
+    id: string;
     status: string;
     progress: { answered: number; total: number; percentage: number };
   };
@@ -80,7 +82,26 @@ type DataQualityAuditBody = {
   fingerprint: string;
   affectedSubmissionCount: number;
   affectedQuestionDecisionCount: number;
-  submissions: Array<{ submissionId: string }>;
+  repairable: boolean;
+  submissions: Array<{
+    submissionId: string;
+    questionCodes: string[];
+    previousResult: {
+      generalScore: string | null;
+      generalNumerator: string | null;
+      generalDenominator: number | null;
+      calculatedAt: string | null;
+      algorithmVersion: string | null;
+      evaluationConfigurationId: string | null;
+      evaluationConfigurationVersion: string | null;
+    };
+    recalculationBlockers: string[];
+  }>;
+};
+type CampaignTrackingBody = {
+  items: Array<{
+    progress: { answered: number; applicable: number; percentage: number };
+  }>;
 };
 type ImportSummaryBody = {
   totalRows: number;
@@ -331,9 +352,10 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
       .post(`/api/school/campaigns/${campaignId}/submission`)
       .expect(201);
     const startedBody = started.body as SubmissionWorkspaceBody;
+    const submissionId = startedBody.submission.id;
     expect(startedBody.submission).toMatchObject({
       status: 'draft',
-      progress: { total: 6 },
+      progress: { total: 53 },
     });
     expect(startedBody.applicability.excluded).toHaveLength(7);
     expect(
@@ -348,7 +370,21 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
       .expect(200);
     expect(
       (draft.body as SubmissionWorkspaceBody).submission.progress,
-    ).toMatchObject({ answered: 6, total: 6, percentage: 100 });
+    ).toMatchObject({ answered: 53, total: 53, percentage: 100 });
+
+    // Conserva el escenario histórico real: el envío puede tener respuestas
+    // residuales para las siete preguntas que luego quedaron excluidas.
+    await dataSource.query(
+      `INSERT INTO survey_answers (submission_id, question_id, option_id)
+       SELECT $1, question.id, option.id
+       FROM survey_questions question
+       INNER JOIN survey_sections section ON section.id = question.section_id
+       INNER JOIN survey_dimensions dimension ON dimension.id = section.dimension_id
+       INNER JOIN survey_options option ON option.question_id = question.id
+       WHERE dimension.version_id = $2
+         AND LOWER(question.code) = ANY($3::text[])`,
+      [submissionId, surveyVersionId, OFFICIAL_KIOSK_QUESTION_CODES],
+    );
     const submitted = await school
       .post(`/api/school/campaigns/${campaignId}/submission/submit`)
       .expect(201);
@@ -356,36 +392,45 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
       'submitted',
     );
 
-    const [{ submissionId, generalScore, numerator, denominator }] =
-      await dataSource.query<
-        Array<{
-          submissionId: string;
-          generalScore: string;
-          numerator: string;
-          denominator: number;
-        }>
-      >(
-        `SELECT
+    const [historicalResult] = await dataSource.query<
+      Array<{
+        submissionId: string;
+        generalScore: string;
+        numerator: string;
+        denominator: number;
+        algorithmVersion: string;
+        evaluationConfigurationId: string;
+        evaluationConfigurationVersion: string;
+        calculatedAt: Date;
+      }>
+    >(
+      `SELECT
            result.submission_id AS "submissionId",
            result.general_score AS "generalScore",
            result.general_numerator AS numerator,
-           result.general_denominator AS denominator
+           result.general_denominator AS denominator,
+           result.algorithm_version AS "algorithmVersion",
+           result.evaluation_configuration_id AS "evaluationConfigurationId",
+           result.evaluation_configuration_version AS "evaluationConfigurationVersion",
+           result.calculated_at AS "calculatedAt"
          FROM evaluation_results result
          WHERE result.campaign_id = $1 AND result.school_id = $2`,
-        [campaignId, primarySchoolId],
-      );
-    expect({ generalScore, numerator, denominator }).toEqual({
+      [campaignId, primarySchoolId],
+    );
+    expect(historicalResult.submissionId).toBe(submissionId);
+    expect(historicalResult).toMatchObject({
       generalScore: '100.00000000',
-      numerator: '600.00000000',
-      denominator: 6,
+      numerator: '5300.00000000',
+      denominator: 53,
     });
     const decisions = await dataSource.query<Array<{ status: string }>>(
       `SELECT applicability.status
        FROM submission_question_applicability applicability
        INNER JOIN survey_questions question ON question.id = applicability.question_id
-       WHERE applicability.submission_id = $1 AND question.code LIKE 'p02%'
+       WHERE applicability.submission_id = $1
+         AND LOWER(question.code) = ANY($2::text[])
        ORDER BY question.code`,
-      [submissionId],
+      [submissionId, OFFICIAL_KIOSK_QUESTION_CODES],
     );
     expect(decisions).toHaveLength(7);
     expect(decisions.every(({ status }) => status === 'excluded')).toBe(true);
@@ -394,7 +439,7 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
       .get(`/api/school/campaigns/${campaignId}/submission/result`)
       .expect(200);
     expect(result.body).toMatchObject({
-      result: { generalScore: 100, numerator: 600, denominator: 6 },
+      result: { generalScore: 100, numerator: 5300, denominator: 53 },
     });
 
     const participationFilters = await admin
@@ -403,9 +448,7 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
       .expect(200);
     expect(participationFilters.body).toMatchObject({
       defaultCampaignId: campaignId,
-      educationLevelOptions: [
-        { value: 'primario', label: 'Primario' },
-      ],
+      educationLevelOptions: [{ value: 'primario', label: 'Primario' }],
     });
 
     const repeatedMultiFilterQuery =
@@ -759,6 +802,27 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
       submissions: [],
     });
 
+    const replacementConfiguration = await admin
+      .post('/api/admin/evaluation-configurations')
+      .send(
+        evaluationConfigurationInput(
+          'v-e2e-active-after-submission',
+          'Configuración activa posterior al envío E2E',
+        ),
+      )
+      .expect(201);
+    const replacementConfigurationId = (
+      replacementConfiguration.body as { id: string }
+    ).id;
+    await admin
+      .post(
+        `/api/admin/evaluation-configurations/${replacementConfigurationId}/activate`,
+      )
+      .expect(201);
+    expect(replacementConfigurationId).not.toBe(
+      historicalResult.evaluationConfigurationId,
+    );
+
     const introduceSyntheticHistoricalDefect = `
       UPDATE submission_question_applicability applicability
       SET status = 'applicable', reason_code = 'DEFAULT_SHOW',
@@ -767,9 +831,12 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
       FROM survey_questions question
       WHERE applicability.question_id = question.id
         AND applicability.submission_id = $1
-        AND question.code = 'p021'`;
+        AND LOWER(question.code) = ANY($2::text[])`;
     await expect(
-      dataSource.query(introduceSyntheticHistoricalDefect, [submissionId]),
+      dataSource.query(introduceSyntheticHistoricalDefect, [
+        submissionId,
+        OFFICIAL_KIOSK_QUESTION_CODES,
+      ]),
     ).rejects.toThrow(
       'La aplicabilidad de una presentación enviada es inmutable',
     );
@@ -777,8 +844,29 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
       await manager.query(
         `SELECT set_config('ops.allow_kiosk_applicability_repair', 'on', true)`,
       );
-      await manager.query(introduceSyntheticHistoricalDefect, [submissionId]);
+      await manager.query(introduceSyntheticHistoricalDefect, [
+        submissionId,
+        OFFICIAL_KIOSK_QUESTION_CODES,
+      ]);
+      await manager.query(
+        `UPDATE evaluation_results
+         SET general_numerator = 6000, general_denominator = 60,
+             general_score = 100
+         WHERE submission_id = $1`,
+        [submissionId],
+      );
     });
+
+    const trackingBeforeRepair = await admin
+      .get(`/api/admin/campaigns/${campaignId}/tracking`)
+      .query({ page: 1, limit: 20, search: 'E2E-0001' })
+      .expect(200);
+    expect((trackingBeforeRepair.body as CampaignTrackingBody).items).toEqual([
+      expect.objectContaining({
+        progress: { answered: 60, applicable: 60, percentage: 100 },
+      }),
+    ]);
+
     const affectedAudit = await admin
       .get('/api/admin/evaluation/data-quality/kiosk-applicability')
       .query({ campaignId })
@@ -786,12 +874,51 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
     const affectedAuditBody = affectedAudit.body as DataQualityAuditBody;
     expect(affectedAuditBody).toMatchObject({
       affectedSubmissionCount: 1,
-      affectedQuestionDecisionCount: 1,
-      submissions: [expect.objectContaining({ submissionId })],
+      affectedQuestionDecisionCount: 7,
+      repairable: true,
+    });
+    expect(affectedAuditBody.submissions).toHaveLength(1);
+    expect(affectedAuditBody.submissions[0]).toMatchObject({
+      submissionId,
+      questionCodes: ['p021', 'p022', 'p023', 'p024', 'p025', 'p026', 'p027'],
+      recalculationBlockers: [],
+    });
+    expect(affectedAuditBody.submissions[0].previousResult).toMatchObject({
+      generalNumerator: '6000.00000000',
+      generalDenominator: 60,
+      algorithmVersion: historicalResult.algorithmVersion,
+      evaluationConfigurationId: historicalResult.evaluationConfigurationId,
+      evaluationConfigurationVersion:
+        historicalResult.evaluationConfigurationVersion,
+    });
+    const exactPreview = await admin
+      .post('/api/admin/evaluation/data-quality/kiosk-applicability/preview')
+      .send({ submissionIds: [submissionId] })
+      .expect(201);
+    const exactPreviewBody = exactPreview.body as DataQualityAuditBody;
+    expect(exactPreviewBody).toMatchObject({
+      affectedSubmissionCount: 1,
+      affectedQuestionDecisionCount: 7,
+      repairable: true,
+      submissions: [
+        expect.objectContaining({
+          submissionId,
+          questionCodes: [
+            'p021',
+            'p022',
+            'p023',
+            'p024',
+            'p025',
+            'p026',
+            'p027',
+          ],
+          recalculationBlockers: [],
+        }),
+      ],
     });
     const repairPayload = {
       targets: [{ submissionId }],
-      previewFingerprint: affectedAuditBody.fingerprint,
+      previewFingerprint: exactPreviewBody.fingerprint,
     };
     await admin
       .post('/api/admin/evaluation/data-quality/kiosk-applicability/repair')
@@ -803,21 +930,82 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
       .expect(201);
     expect(repaired.body).toMatchObject({
       correctedSubmissionCount: 1,
-      correctedQuestionDecisionCount: 1,
+      correctedQuestionDecisionCount: 7,
     });
-    const [correctedDecision] = await dataSource.query<
-      Array<{ status: string; reasonCode: string }>
+    const correctedDecisions = await dataSource.query<
+      Array<{ questionCode: string; status: string; reasonCode: string }>
     >(
-      `SELECT applicability.status, applicability.reason_code AS "reasonCode"
+      `SELECT LOWER(question.code) AS "questionCode", applicability.status,
+              applicability.reason_code AS "reasonCode"
        FROM submission_question_applicability applicability
        INNER JOIN survey_questions question ON question.id = applicability.question_id
-       WHERE applicability.submission_id = $1 AND question.code = 'p021'`,
+       WHERE applicability.submission_id = $1
+         AND LOWER(question.code) = ANY($2::text[])
+       ORDER BY LOWER(question.code)`,
+      [submissionId, OFFICIAL_KIOSK_QUESTION_CODES],
+    );
+    expect(correctedDecisions).toEqual(
+      OFFICIAL_KIOSK_QUESTION_CODES.map((questionCode) => ({
+        questionCode,
+        status: 'excluded',
+        reasonCode: 'DATA_CORRECTION_KIOSK_NOT_APPLICABLE',
+      })),
+    );
+    const [recalculatedResult] = await dataSource.query<
+      Array<{
+        generalNumerator: string;
+        generalDenominator: number;
+        algorithmVersion: string;
+        evaluationConfigurationId: string;
+        evaluationConfigurationVersion: string;
+        calculatedAt: Date;
+      }>
+    >(
+      `SELECT general_numerator AS "generalNumerator",
+              general_denominator AS "generalDenominator",
+              algorithm_version AS "algorithmVersion",
+              evaluation_configuration_id AS "evaluationConfigurationId",
+              evaluation_configuration_version AS "evaluationConfigurationVersion",
+              calculated_at AS "calculatedAt"
+       FROM evaluation_results
+       WHERE submission_id = $1`,
       [submissionId],
     );
-    expect(correctedDecision).toEqual({
-      status: 'excluded',
-      reasonCode: 'DATA_CORRECTION_KIOSK_NOT_APPLICABLE',
+    expect(recalculatedResult).toMatchObject({
+      generalNumerator: '5300.00000000',
+      generalDenominator: 53,
+      algorithmVersion: historicalResult.algorithmVersion,
+      evaluationConfigurationId: historicalResult.evaluationConfigurationId,
+      evaluationConfigurationVersion:
+        historicalResult.evaluationConfigurationVersion,
     });
+    expect(recalculatedResult.evaluationConfigurationId).not.toBe(
+      replacementConfigurationId,
+    );
+    expect(recalculatedResult.calculatedAt.getTime()).toBeGreaterThan(
+      historicalResult.calculatedAt.getTime(),
+    );
+
+    const trackingAfterRepair = await admin
+      .get(`/api/admin/campaigns/${campaignId}/tracking`)
+      .query({ page: 1, limit: 20, search: 'E2E-0001' })
+      .expect(200);
+    expect((trackingAfterRepair.body as CampaignTrackingBody).items).toEqual([
+      expect.objectContaining({
+        progress: { answered: 53, applicable: 53, percentage: 100 },
+      }),
+    ]);
+    const [{ residualKioskAnswers }] = await dataSource.query<
+      Array<{ residualKioskAnswers: number }>
+    >(
+      `SELECT COUNT(*)::integer AS "residualKioskAnswers"
+       FROM survey_answers answer
+       INNER JOIN survey_questions question ON question.id = answer.question_id
+       WHERE answer.submission_id = $1
+         AND LOWER(question.code) = ANY($2::text[])`,
+      [submissionId, OFFICIAL_KIOSK_QUESTION_CODES],
+    );
+    expect(residualKioskAnswers).toBe(7);
     const [{ correctionAudits }] = await dataSource.query<
       Array<{ correctionAudits: number }>
     >(
@@ -849,7 +1037,7 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
       .expect(201);
     expect(
       (incorporatedSubmission.body as SubmissionWorkspaceBody).submission,
-    ).toMatchObject({ status: 'draft', progress: { total: 6 } });
+    ).toMatchObject({ status: 'draft', progress: { total: 53 } });
   }, 60_000);
 
   it('regresses imports, duplicates, configuration and rectification history', async () => {
@@ -1198,16 +1386,21 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
           `Sección ${dimension.order}`,
         ],
       );
-      const baseCode = `base-${dimension.order}`;
-      baseAnswers.push(await insertQuestion(sectionId, baseCode, 1, false));
-      if (String(dimension.code) === 'entorno_alimentario') {
-        for (let question = 21; question <= 27; question += 1)
-          await insertQuestion(
-            sectionId,
-            `p${String(question).padStart(3, '0')}`,
-            question - 19,
-            true,
-          );
+      const firstQuestionNumber = (dimension.order - 1) * 10 + 1;
+      for (
+        let questionNumber = firstQuestionNumber;
+        questionNumber < firstQuestionNumber + 10;
+        questionNumber += 1
+      ) {
+        const questionCode = `p${String(questionNumber).padStart(3, '0')}`;
+        const kioskConditional = questionNumber >= 21 && questionNumber <= 27;
+        const answer = await insertQuestion(
+          sectionId,
+          questionCode,
+          questionNumber - firstQuestionNumber + 1,
+          kioskConditional,
+        );
+        if (!kioskConditional) baseAnswers.push(answer);
       }
     }
 

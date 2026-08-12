@@ -5,6 +5,7 @@ import { SubmissionQuestionApplicability } from '../../submissions/entities/subm
 import { SubmissionStatus } from '../../submissions/entities/submission-status.enum';
 import { SurveySubmission } from '../../submissions/entities/survey-submission.entity';
 import { EvaluationResult } from '../entities/evaluation-result.entity';
+import { EVALUATION_ALGORITHM_VERSION } from '../evaluation.constants';
 import { EvaluationResultsService } from './evaluation-results.service';
 import { KioskApplicabilityDataRepairService } from './kiosk-applicability-data-repair.service';
 
@@ -21,6 +22,11 @@ describe('KioskApplicabilityDataRepairService', () => {
     generalNumerator: '333',
     generalDenominator: 6,
     calculatedAt: new Date('2026-08-01T12:06:00.000Z'),
+    resultId: 'result-id',
+    algorithmVersion: EVALUATION_ALGORITHM_VERSION,
+    evaluationConfigurationId: 'configuration-id',
+    evaluationConfigurationVersion: 'configuration-v1',
+    resolvedEvaluationConfigurationVersion: 'configuration-v1',
   };
   const query =
     jest.fn<(sql: string, parameters?: unknown[]) => Promise<unknown[]>>();
@@ -49,6 +55,7 @@ describe('KioskApplicabilityDataRepairService', () => {
     expect(first).toMatchObject({
       affectedSubmissionCount: 1,
       affectedQuestionDecisionCount: 2,
+      repairable: true,
       submissions: [
         {
           submissionId: 'submission-id',
@@ -68,6 +75,74 @@ describe('KioskApplicabilityDataRepairService', () => {
       'campaign-id',
       null,
     ]);
+  });
+
+  it('produces the fingerprint for the exact selected batch', async () => {
+    query.mockResolvedValue([auditRow]);
+
+    const preview = await service.preview(['submission-id']);
+
+    expect(preview).toMatchObject({
+      affectedSubmissionCount: 1,
+      repairable: true,
+      submissions: [
+        {
+          submissionId: 'submission-id',
+          recalculationBlockers: [],
+        },
+      ],
+    });
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('SELECT'), [
+      ['p021', 'p022', 'p023', 'p024', 'p025', 'p026', 'p027'],
+      null,
+      ['submission-id'],
+    ]);
+  });
+
+  it('rejects an oversized batch even when called outside the controller', async () => {
+    await expect(
+      service.preview(
+        Array.from({ length: 501 }, (_, index) => `submission-${index}`),
+      ),
+    ).rejects.toMatchObject({
+      response: { code: 'DATA_REPAIR_TARGET_LIMIT' },
+    });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('reports algorithm drift and blocks the repair before changing data', async () => {
+    const driftedRow = {
+      ...auditRow,
+      algorithmVersion: 'question-average-legacy-v0',
+    };
+    query.mockResolvedValue([driftedRow]);
+    const preview = await service.preview(['submission-id']);
+    const save = jest.fn();
+    const manager = {
+      find: jest.fn().mockResolvedValue([{ id: 'submission-id' }]),
+      query: jest.fn().mockResolvedValue([driftedRow]),
+      save,
+    } as unknown as EntityManager;
+    transaction.mockImplementation(
+      (callback: (entityManager: EntityManager) => Promise<unknown>) =>
+        callback(manager),
+    );
+
+    expect(preview).toMatchObject({
+      repairable: false,
+      submissions: [
+        {
+          recalculationBlockers: ['EVALUATION_RECALCULATION_ALGORITHM_DRIFT'],
+        },
+      ],
+    });
+    await expect(
+      service.repair(['submission-id'], preview.fingerprint, true, 'actor-id'),
+    ).rejects.toMatchObject({
+      response: { code: 'EVALUATION_RECALCULATION_ALGORITHM_DRIFT' },
+    });
+    expect(save).not.toHaveBeenCalled();
+    expect(recalculateSubmissionWithManager).not.toHaveBeenCalled();
   });
 
   it('rejects repair if selection or audited state no longer matches', async () => {

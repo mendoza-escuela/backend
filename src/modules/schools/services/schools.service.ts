@@ -20,6 +20,16 @@ import {
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { AuthSession } from '../../auth/entities/auth-session.entity';
+import { Campaign } from '../../campaigns/entities/campaign.entity';
+import {
+  CampaignSchool,
+  CampaignSchoolAssignmentSource,
+} from '../../campaigns/entities/campaign-school.entity';
+import { CampaignStatus } from '../../campaigns/entities/campaign-status.enum';
+import { CampaignType } from '../../campaigns/entities/campaign-type.enum';
+import { EvaluationResult } from '../../evaluation/entities/evaluation-result.entity';
+import { SubmissionStatus } from '../../submissions/entities/submission-status.enum';
+import { SurveySubmission } from '../../submissions/entities/survey-submission.entity';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { AdminUsersService } from '../../users/services/admin-users.service';
 import { UserSchool } from '../../users/entities/user-school.entity';
@@ -50,10 +60,32 @@ import {
   isOfficialCatalogLabel,
   OFFICIAL_SCHOOL_RECTIFICATION_CATALOGS,
 } from '../school-rectification.catalogs';
+import { schoolRectificationReadiness } from '../school-rectification-readiness';
 
 type SelectedEducationLevel = {
   level: EducationLevelCatalog;
   enrollment: number | null;
+};
+
+type SchoolCampaignRow = {
+  assignmentId: string;
+  assignmentSource: CampaignSchoolAssignmentSource;
+  assignedAt: Date | string;
+  campaignId: string;
+  campaignName: string;
+  campaignType: CampaignType;
+  campaignStatus: CampaignStatus;
+  campaignStartsAt: Date | string;
+  campaignEndsAt: Date | string;
+  submissionId: string | null;
+  submissionStatus: SubmissionStatus | null;
+  submissionStartedAt: Date | string | null;
+  submissionLastSavedAt: Date | string | null;
+  submissionSubmittedAt: Date | string | null;
+  resultId: string | null;
+  resultCalculatedAt: Date | string | null;
+  resultGeneralScore: string | number | null;
+  resultStars: string | number | null;
 };
 
 @Injectable()
@@ -246,9 +278,11 @@ export class SchoolsService {
       take: 50,
     });
     const rectifications = await this.rectificationHistory(id);
+    const rectificationStatus = this.rectificationStatus(rectifications);
+    const participation = await this.schoolCampaignParticipation(id);
     return {
       ...this.serializeSchool(school),
-      rectification: this.rectificationStatus(rectifications),
+      rectification: rectificationStatus,
       rectifications: rectifications.map((rectification) => ({
         id: rectification.id,
         periodYear: rectification.periodYear,
@@ -275,22 +309,14 @@ export class SchoolsService {
         actorUser: this.userSummary(history.actorUser),
       })),
       audits,
-      campaigns: {
-        available: false,
-        items: [],
-        message:
-          'El seguimiento administrativo de campañas por colegio se incorporará en el módulo de presentaciones.',
-      },
-      evaluations: {
-        available: false,
-        items: [],
-        message: 'El módulo de evaluaciones aún no está implementado.',
-      },
+      campaigns: participation.campaigns,
+      evaluations: participation.evaluations,
       actions: {
         canEdit: true,
         canChangeStatus: true,
         canReplaceUser: true,
-        canStartEvaluation: school.isActive,
+        canStartEvaluation:
+          school.isActive && rectificationStatus.isEvaluationReady,
       },
     };
   }
@@ -405,16 +431,17 @@ export class SchoolsService {
       },
       order: { rectifiedAt: 'DESC' },
     });
-    const isRectified = Boolean(
-      rectification &&
-      this.isCompleteRectificationSnapshot(rectification.snapshot),
-    );
+    const readiness = schoolRectificationReadiness(rectification?.snapshot);
     return {
       school: association.school,
       rectification: {
         id: rectification?.id ?? null,
         periodYear,
-        isRectified,
+        isConfirmed: Boolean(rectification),
+        isEvaluationReady: readiness.isEvaluationReady,
+        missingFields: readiness.missingFields,
+        /** @deprecated Usar isEvaluationReady. */
+        isRectified: readiness.isEvaluationReady,
         rectifiedAt: rectification?.rectifiedAt ?? null,
         snapshot: rectification?.snapshot ?? null,
       },
@@ -1656,34 +1683,6 @@ export class SchoolsService {
     }
   }
 
-  /** Una rectificación histórica incompleta no habilita una evaluación. */
-  private isCompleteRectificationSnapshot(
-    snapshot: SchoolRectificationSnapshot,
-  ) {
-    const hasText = (value: unknown) =>
-      typeof value === 'string' && value.trim().length >= 2;
-    return (
-      [
-        snapshot.name,
-        snapshot.cue,
-        snapshot.directorName,
-        snapshot.department,
-        snapshot.address,
-        snapshot.locality,
-      ].every(hasText) &&
-      hasText(snapshot.scope) &&
-      hasText(snapshot.educationLevel) &&
-      Boolean(
-        snapshot.shiftCatalog?.id &&
-        snapshot.shiftCatalog.code &&
-        snapshot.shiftCatalog.label,
-      ) &&
-      Boolean(snapshot.educationLevels?.length) &&
-      typeof snapshot.hasKiosk === 'boolean' &&
-      typeof snapshot.hasFoodService === 'boolean'
-    );
-  }
-
   private assertExpectedUpdate(school: School, expected?: string) {
     if (!expected) return;
     const expectedTime = new Date(expected).getTime();
@@ -1713,16 +1712,153 @@ export class SchoolsService {
     });
   }
 
+  /**
+   * Recupera las asignaciones vigentes y su estado operativo en una única
+   * consulta. Los IDs devueltos permiten enlazar al seguimiento y al detalle
+   * histórico sin acoplar el backend a las rutas del frontend.
+   */
+  private async schoolCampaignParticipation(schoolId: string) {
+    const rows = await this.dataSource
+      .getRepository(CampaignSchool)
+      .createQueryBuilder('assignment')
+      .innerJoin(Campaign, 'campaign', 'campaign.id = assignment.campaignId')
+      .leftJoin(
+        SurveySubmission,
+        'submission',
+        'submission.campaignId = campaign.id AND submission.schoolId = assignment.schoolId',
+      )
+      .leftJoin(
+        EvaluationResult,
+        'result',
+        'result.submissionId = submission.id',
+      )
+      .select('assignment.id', 'assignmentId')
+      .addSelect('assignment.assignmentSource', 'assignmentSource')
+      .addSelect('assignment.assignedAt', 'assignedAt')
+      .addSelect('campaign.id', 'campaignId')
+      .addSelect('campaign.name', 'campaignName')
+      .addSelect('campaign.type', 'campaignType')
+      .addSelect('campaign.status', 'campaignStatus')
+      .addSelect('campaign.startsAt', 'campaignStartsAt')
+      .addSelect('campaign.endsAt', 'campaignEndsAt')
+      .addSelect('submission.id', 'submissionId')
+      .addSelect('submission.status', 'submissionStatus')
+      .addSelect('submission.startedAt', 'submissionStartedAt')
+      .addSelect('submission.lastSavedAt', 'submissionLastSavedAt')
+      .addSelect('submission.submittedAt', 'submissionSubmittedAt')
+      .addSelect('result.id', 'resultId')
+      .addSelect('result.calculatedAt', 'resultCalculatedAt')
+      .addSelect('result.generalScore', 'resultGeneralScore')
+      .addSelect('result.stars', 'resultStars')
+      .where('assignment.schoolId = :schoolId', { schoolId })
+      .andWhere('assignment.removedAt IS NULL')
+      .orderBy('campaign.startsAt', 'DESC')
+      .addOrderBy('assignment.assignedAt', 'DESC')
+      .addOrderBy('campaign.id', 'ASC')
+      .getRawMany<SchoolCampaignRow>();
+
+    const items = rows.map((row) => ({
+      assignment: {
+        id: row.assignmentId,
+        source: row.assignmentSource,
+        assignedAt: this.isoDate(row.assignedAt),
+      },
+      campaign: {
+        id: row.campaignId,
+        name: row.campaignName,
+        type: row.campaignType,
+        status: row.campaignStatus,
+        startsAt: this.isoDate(row.campaignStartsAt),
+        endsAt: this.isoDate(row.campaignEndsAt),
+      },
+      participationStatus: this.schoolParticipationStatus(row),
+      submission: row.submissionId
+        ? {
+            id: row.submissionId,
+            status: row.submissionStatus as SubmissionStatus,
+            startedAt: this.isoDate(row.submissionStartedAt),
+            lastSavedAt: this.isoDate(row.submissionLastSavedAt),
+            submittedAt: this.isoDate(row.submissionSubmittedAt),
+          }
+        : null,
+      result: {
+        available: Boolean(row.resultId),
+        id: row.resultId,
+        calculatedAt: this.isoDate(row.resultCalculatedAt),
+      },
+    }));
+    const evaluations = rows.flatMap((row) =>
+      row.resultId && row.submissionId
+        ? [
+            {
+              id: row.resultId,
+              campaignId: row.campaignId,
+              submissionId: row.submissionId,
+              calculatedAt: this.isoDate(row.resultCalculatedAt),
+              generalScore: this.number(row.resultGeneralScore),
+              stars: this.integer(row.resultStars),
+            },
+          ]
+        : [],
+    );
+
+    return {
+      campaigns: {
+        available: true,
+        items,
+        message: items.length
+          ? ''
+          : 'El colegio no tiene asignaciones de campaña vigentes.',
+      },
+      evaluations: {
+        available: true,
+        items: evaluations,
+        message: evaluations.length
+          ? ''
+          : 'No hay resultados de evaluación disponibles.',
+      },
+    };
+  }
+
+  private schoolParticipationStatus(
+    row: Pick<SchoolCampaignRow, 'submissionId' | 'submissionStatus'>,
+  ): 'not_started' | 'draft' | 'submitted' {
+    if (!row.submissionId) return 'not_started';
+    return row.submissionStatus === SubmissionStatus.Submitted
+      ? 'submitted'
+      : 'draft';
+  }
+
+  private number(value: string | number | null): number | null {
+    if (value === null) return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private integer(value: string | number | null): number | null {
+    const parsed = this.number(value);
+    return parsed !== null && Number.isSafeInteger(parsed) ? parsed : null;
+  }
+
+  private isoDate(value: Date | string | null): string | null {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  }
+
   private rectificationStatus(rectifications: SchoolRectification[]) {
     const periodYear = this.currentPeriodYear();
     const latest = rectifications.find(
       (rectification) => rectification.periodYear === periodYear,
     );
+    const readiness = schoolRectificationReadiness(latest?.snapshot);
     return {
       periodYear,
-      isRectified: Boolean(
-        latest && this.isCompleteRectificationSnapshot(latest.snapshot),
-      ),
+      isConfirmed: Boolean(latest),
+      isEvaluationReady: readiness.isEvaluationReady,
+      missingFields: readiness.missingFields,
+      /** @deprecated Usar isEvaluationReady. */
+      isRectified: readiness.isEvaluationReady,
       rectifiedAt: latest?.rectifiedAt ?? null,
       rectifiedBy: this.userSummary(latest?.actorUser ?? null),
     };

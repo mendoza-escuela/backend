@@ -17,6 +17,7 @@ import { UserRole } from '../../users/entities/user-role.enum';
 import {
   KioskApplicabilityAuditQueryDto,
   KioskApplicabilityDataRepairDto,
+  KioskApplicabilityDataRepairPreviewDto,
 } from '../dto/kiosk-applicability-data-repair.dto';
 import { KioskApplicabilityDataRepairService } from '../services/kiosk-applicability-data-repair.service';
 
@@ -31,6 +32,11 @@ export class AdminEvaluationDataQualityController {
   @Get()
   audit(@Query() query: KioskApplicabilityAuditQueryDto) {
     return this.dataRepair.audit(query.campaignId);
+  }
+
+  @Post('preview')
+  preview(@Body() dto: KioskApplicabilityDataRepairPreviewDto) {
+    return this.dataRepair.preview(dto.submissionIds);
   }
 
   @Post('repair')

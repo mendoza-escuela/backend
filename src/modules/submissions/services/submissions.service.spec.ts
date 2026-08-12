@@ -60,8 +60,13 @@ describe('SubmissionsService', () => {
     delete: jest.fn(),
     update: jest.fn(),
   };
+  const submissionRepository = {
+    find: jest.fn(),
+    findOneBy: jest.fn(),
+  };
   const dataSource = {
     manager: manager as unknown as EntityManager,
+    getRepository: jest.fn(() => submissionRepository),
     transaction: jest.fn(
       (callback: (entityManager: EntityManager) => Promise<unknown>) =>
         callback(manager as unknown as EntityManager),
@@ -79,6 +84,7 @@ describe('SubmissionsService', () => {
     assertActiveForEvaluation: jest.fn(),
   };
   const surveyApplicability = {
+    assertVersionApplicabilitySafe: jest.fn(),
     evaluate: jest.fn(),
     result: jest.fn(),
   };
@@ -91,6 +97,8 @@ describe('SubmissionsService', () => {
     jest.clearAllMocks();
     manager.findOne.mockReset();
     manager.find.mockReset();
+    submissionRepository.find.mockReset();
+    submissionRepository.findOneBy.mockReset();
     service = new SubmissionsService(
       dataSource as unknown as DataSource,
       campaignsService as unknown as CampaignsService,
@@ -107,6 +115,9 @@ describe('SubmissionsService', () => {
       rectification: {
         id: null,
         periodYear: 2026,
+        isConfirmed: false,
+        isEvaluationReady: false,
+        missingFields: [],
         isRectified: false,
         rectifiedAt: null,
         snapshot: null,
@@ -119,6 +130,164 @@ describe('SubmissionsService', () => {
       ConflictException,
     );
     expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('explica que una ficha confirmada incompleta requiere actualización', async () => {
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school,
+      rectification: {
+        id: 'rectification-id',
+        periodYear: 2026,
+        isConfirmed: true,
+        isEvaluationReady: false,
+        missingFields: [
+          { code: 'hasKiosk', label: 'Kiosco' },
+          {
+            code: 'hasFoodService',
+            label: 'Comedor o servicio alimentario',
+          },
+        ],
+        isRectified: false,
+        rectifiedAt: new Date('2026-08-10T12:00:00.000Z'),
+        snapshot: schoolSnapshot(),
+      },
+    });
+    campaignsService.assertOperational.mockResolvedValue(campaign);
+    manager.findOne.mockResolvedValue(null);
+
+    await expect(service.startOrGet(campaign.id, actor)).rejects.toThrow(
+      'La ficha escolar fue confirmada para 2026, pero requiere actualización antes de comenzar. Datos pendientes: Kiosco, Comedor o servicio alimentario.',
+    );
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      isConfirmed: false,
+      isEvaluationReady: false,
+      expected:
+        'Debés confirmar la ficha institucional anual antes de comenzar.',
+    },
+    {
+      isConfirmed: true,
+      isEvaluationReady: false,
+      expected:
+        'La ficha anual está confirmada, pero requiere actualización antes de comenzar.',
+    },
+    {
+      isConfirmed: true,
+      isEvaluationReady: true,
+      expected: null,
+    },
+  ])(
+    'informa el bloqueo correcto con confirmación=$isConfirmed y aptitud=$isEvaluationReady',
+    ({ isConfirmed, isEvaluationReady, expected }) => {
+      const blockingReason = (
+        service as unknown as {
+          blockingReason: (
+            active: boolean,
+            confirmed: boolean,
+            ready: boolean,
+          ) => string | null;
+        }
+      ).blockingReason(true, isConfirmed, isEvaluationReady);
+
+      expect(blockingReason).toBe(expected);
+    },
+  );
+
+  it('lists expired drafts separately, including drafts whose assignment was removed', async () => {
+    const expiredVersion = workspaceVersion();
+    const expiredDraft = workspaceSubmission(
+      expiredVersion,
+      schoolSnapshot(),
+      'draft',
+      [],
+    );
+    Object.assign(expiredDraft.campaign, {
+      status: CampaignStatus.Closed,
+      startsAt: new Date('2025-01-01T00:00:00.000Z'),
+      endsAt: new Date('2025-12-31T23:59:59.999Z'),
+    });
+    expiredDraft.answers = [
+      {
+        submissionId: expiredDraft.id,
+        questionId: expiredVersion.dimensions[0].sections[0].questions[0].id,
+      } as SurveyAnswer,
+    ];
+
+    const futureDraft = workspaceSubmission(
+      expiredVersion,
+      schoolSnapshot(),
+      'draft',
+      [],
+    );
+    Object.assign(futureDraft.campaign, {
+      id: 'future-campaign-id',
+      status: CampaignStatus.Closed,
+      startsAt: new Date('2098-01-01T00:00:00.000Z'),
+      endsAt: new Date('2099-01-01T00:00:00.000Z'),
+    });
+    const submitted = workspaceSubmission(
+      expiredVersion,
+      schoolSnapshot(),
+      'submitted',
+      [],
+    );
+    Object.assign(submitted.campaign, {
+      id: 'submitted-campaign-id',
+      status: CampaignStatus.Archived,
+      startsAt: new Date('2024-01-01T00:00:00.000Z'),
+      endsAt: new Date('2024-12-31T23:59:59.999Z'),
+    });
+
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school,
+      rectification: {
+        isConfirmed: true,
+        isEvaluationReady: true,
+      },
+    });
+    campaignsService.operationalCampaigns.mockResolvedValue([campaign]);
+    submissionRepository.find
+      .mockResolvedValueOnce([expiredDraft, futureDraft, submitted])
+      .mockResolvedValueOnce([]);
+    manager.find
+      .mockResolvedValueOnce(expiredDraft.answers)
+      .mockResolvedValueOnce([]);
+    const internals = service as unknown as {
+      questionCounts: (versionIds: string[]) => Promise<Map<string, number>>;
+    };
+    jest
+      .spyOn(internals, 'questionCounts')
+      .mockResolvedValue(new Map([[expiredVersion.id, 1]]));
+
+    const response = await service.availableCampaigns(actor);
+
+    expect(submissionRepository.find).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        where: { schoolId: school.id, status: 'draft' },
+        relations: {
+          campaign: { surveyVersion: { survey: true } },
+        },
+      }),
+    );
+    expect(manager.find).toHaveBeenCalledTimes(2);
+    expect(response.expiredDrafts).toHaveLength(1);
+    const [historicalSummary] = response.expiredDrafts;
+    expect(historicalSummary.id).toBe(expiredDraft.campaignId);
+    expect(historicalSummary.status).toBe(CampaignStatus.Closed);
+    expect(historicalSummary.canStart).toBe(false);
+    expect(historicalSummary.readOnly).toBe(true);
+    expect(historicalSummary.blockingReason).toContain('sólo lectura');
+    expect(historicalSummary.submission.id).toBe(expiredDraft.id);
+    expect(historicalSummary.submission.status).toBe('draft');
+    expect(historicalSummary.submission.progress).toEqual({
+      answered: 1,
+      total: 1,
+      percentage: 100,
+    });
   });
 
   it('creates one school-owned draft and preserves the original respondent', async () => {
@@ -138,13 +307,18 @@ describe('SubmissionsService', () => {
       rectification: {
         id: 'rectification-id',
         periodYear: 2026,
+        isConfirmed: true,
+        isEvaluationReady: true,
+        missingFields: [],
         isRectified: true,
         rectifiedAt: new Date(),
         snapshot: schoolSnapshot,
       },
     });
     campaignsService.assertOperational.mockResolvedValue(campaign);
-    manager.findOne.mockResolvedValue(null);
+    manager.findOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(publishedVersion());
     manager.save.mockImplementation(
       (entity: unknown, attributes: Record<string, unknown>) =>
         entity === SurveySubmission
@@ -178,6 +352,49 @@ describe('SubmissionsService', () => {
         },
       }),
     );
+    expect(
+      surveyApplicability.assertVersionApplicabilitySafe,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ id: campaign.surveyVersionId }),
+      schoolSnapshot,
+    );
+  });
+
+  it('does not create a draft when the official version would apply kiosk questions incorrectly', async () => {
+    const snapshot = schoolSnapshot();
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school,
+      rectification: {
+        id: 'rectification-id',
+        periodYear: 2026,
+        isConfirmed: true,
+        isEvaluationReady: true,
+        missingFields: [],
+        isRectified: true,
+        rectifiedAt: new Date(),
+        snapshot,
+      },
+    });
+    campaignsService.assertOperational.mockResolvedValue(campaign);
+    manager.findOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(publishedVersion());
+    surveyApplicability.assertVersionApplicabilitySafe.mockImplementationOnce(
+      () => {
+        throw new ConflictException({
+          code: 'SURVEY_VERSION_APPLICABILITY_NOT_READY',
+          message: 'La versión requiere una corrección administrativa.',
+        });
+      },
+    );
+
+    await expect(service.startOrGet(campaign.id, actor)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+
+    expect(manager.save).not.toHaveBeenCalled();
+    expect(manager.update).not.toHaveBeenCalled();
+    expect(manager.delete).not.toHaveBeenCalled();
   });
 
   it('replaces only applicable answers with validated option references', async () => {
@@ -195,6 +412,9 @@ describe('SubmissionsService', () => {
       rectification: {
         id: 'rectification-id',
         periodYear: 2026,
+        isConfirmed: true,
+        isEvaluationReady: true,
+        missingFields: [],
         isRectified: true,
         rectifiedAt: new Date(),
         snapshot: {
@@ -469,6 +689,9 @@ describe('SubmissionsService', () => {
       school,
       rectification: {
         id: 'new-rectification-id',
+        isConfirmed: true,
+        isEvaluationReady: true,
+        missingFields: [],
         isRectified: true,
         snapshot: updatedSnapshot,
       },
@@ -498,6 +721,10 @@ describe('SubmissionsService', () => {
     expect(submission.schoolRectificationId).toBe('new-rectification-id');
     expect(submission.schoolProfileSnapshot).toEqual(updatedSnapshot);
     expect(manager.delete).toHaveBeenCalledTimes(1);
+    expect(manager.findOne).toHaveBeenCalledWith(
+      SurveySubmission,
+      expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
+    );
   });
 
   it('does not rewrite unchanged applicability decisions while opening a draft', async () => {
@@ -565,6 +792,174 @@ describe('SubmissionsService', () => {
 
     expect(surveyApplicability.result).toHaveBeenCalled();
     expect(surveyApplicability.evaluate).not.toHaveBeenCalled();
+    expect(
+      surveyApplicability.assertVersionApplicabilitySafe,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('opens an expired draft from stored applicability without mutating historical data', async () => {
+    const version = workspaceVersion();
+    const storedDecision = applicabilityFor([
+      version.dimensions[0].sections[0].questions[0].id,
+    ]).decisions[0];
+    const submission = workspaceSubmission(version, schoolSnapshot(), 'draft', [
+      storedDecision,
+    ]);
+    Object.assign(submission.campaign, {
+      status: CampaignStatus.Closed,
+      endsAt: new Date('2025-12-31T23:59:59.999Z'),
+    });
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school,
+      rectification: {
+        id: 'new-rectification-id',
+        isConfirmed: true,
+        isEvaluationReady: true,
+        snapshot: { ...schoolSnapshot(), hasKiosk: true },
+      },
+    });
+    manager.findOne.mockResolvedValue(submission);
+    manager.find.mockImplementation((entity: unknown) =>
+      Promise.resolve(
+        entity === SubmissionQuestionApplicability ? [storedDecision] : [],
+      ),
+    );
+    surveyApplicability.result.mockReturnValue(
+      applicabilityFor([version.dimensions[0].sections[0].questions[0].id]),
+    );
+
+    const response = await service.workspace(campaign.id, actor);
+
+    expect(response.submission.editable).toBe(false);
+    expect(response.submission.blockingReason).toContain(
+      'ya no se encuentra abierta',
+    );
+    expect(surveyApplicability.result).toHaveBeenCalled();
+    expect(surveyApplicability.evaluate).not.toHaveBeenCalled();
+    expect(
+      surveyApplicability.assertVersionApplicabilitySafe,
+    ).not.toHaveBeenCalled();
+    const writeLockCalls = manager.findOne.mock.calls.filter(
+      ([entity, options]: [unknown, { lock?: unknown }]) =>
+        entity === SurveySubmission && Boolean(options.lock),
+    );
+    expect(writeLockCalls).toHaveLength(0);
+    expect(manager.update).not.toHaveBeenCalled();
+    expect(manager.delete).not.toHaveBeenCalled();
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('reconstructs an expired draft in memory when it has no stored applicability', async () => {
+    const version = workspaceVersion();
+    const submission = workspaceSubmission(
+      version,
+      schoolSnapshot(),
+      'draft',
+      [],
+    );
+    Object.assign(submission.campaign, {
+      status: CampaignStatus.Archived,
+      endsAt: new Date('2025-12-31T23:59:59.999Z'),
+    });
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school,
+      rectification: {
+        id: 'new-rectification-id',
+        isConfirmed: true,
+        isEvaluationReady: true,
+        snapshot: { ...schoolSnapshot(), hasKiosk: true },
+      },
+    });
+    manager.findOne.mockResolvedValue(submission);
+    manager.find.mockResolvedValue([]);
+    surveyApplicability.evaluate.mockReturnValue(
+      applicabilityFor([version.dimensions[0].sections[0].questions[0].id]),
+    );
+
+    const response = await service.workspace(campaign.id, actor);
+
+    expect(surveyApplicability.evaluate).toHaveBeenCalledWith(
+      version,
+      submission.schoolProfileSnapshot,
+    );
+    expect(response.applicability.source).toBe('reconstructed');
+    expect(response.submission.schoolRectificationId).toBe('rectification-id');
+    expect(manager.update).not.toHaveBeenCalled();
+    expect(manager.delete).not.toHaveBeenCalled();
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('blocks opening an affected draft before recalculating its applicability', async () => {
+    const version = workspaceVersion();
+    const submission = workspaceSubmission(
+      version,
+      schoolSnapshot(),
+      'draft',
+      [],
+    );
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school,
+      rectification: {
+        id: submission.schoolRectificationId,
+        isRectified: true,
+        snapshot: submission.schoolProfileSnapshot,
+      },
+    });
+    manager.findOne.mockResolvedValue(submission);
+    surveyApplicability.assertVersionApplicabilitySafe.mockImplementationOnce(
+      () => {
+        throw new ConflictException({
+          code: 'SURVEY_VERSION_APPLICABILITY_NOT_READY',
+          message: 'La versión requiere una corrección administrativa.',
+        });
+      },
+    );
+
+    await expect(service.workspace(campaign.id, actor)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+
+    expect(surveyApplicability.evaluate).not.toHaveBeenCalled();
+    expect(manager.update).not.toHaveBeenCalled();
+    expect(manager.delete).not.toHaveBeenCalled();
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('blocks saving an affected draft before replacing answers', async () => {
+    const version = workspaceVersion();
+    const submission = workspaceSubmission(
+      version,
+      schoolSnapshot(),
+      'draft',
+      [],
+    );
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school,
+      rectification: {
+        id: submission.schoolRectificationId,
+        isRectified: true,
+        snapshot: submission.schoolProfileSnapshot,
+      },
+    });
+    campaignsService.assertOperational.mockResolvedValue(campaign);
+    manager.findOne.mockResolvedValue(submission);
+    surveyApplicability.assertVersionApplicabilitySafe.mockImplementationOnce(
+      () => {
+        throw new ConflictException({
+          code: 'SURVEY_VERSION_APPLICABILITY_NOT_READY',
+          message: 'La versión requiere una corrección administrativa.',
+        });
+      },
+    );
+
+    await expect(
+      service.saveDraft(campaign.id, { answers: [] }, actor),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(surveyApplicability.evaluate).not.toHaveBeenCalled();
+    expect(manager.update).not.toHaveBeenCalled();
+    expect(manager.delete).not.toHaveBeenCalled();
+    expect(manager.save).not.toHaveBeenCalled();
   });
 
   it('blocks final submission while applicability has missing school data', async () => {
@@ -599,6 +994,52 @@ describe('SubmissionsService', () => {
 
     await expect(service.submit(campaign.id, actor)).rejects.toThrow(
       'Tiene kiosco',
+    );
+    expect(evaluationResults.calculateAndPersist).not.toHaveBeenCalled();
+  });
+
+  it('blocks final submission when the published official version lacks the kiosk rules', async () => {
+    const version = publishedVersion();
+    const submission = workspaceSubmission(
+      version,
+      schoolSnapshot(),
+      'draft',
+      [],
+    );
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school,
+      rectification: {
+        id: submission.schoolRectificationId,
+        isRectified: true,
+        snapshot: submission.schoolProfileSnapshot,
+      },
+    });
+    campaignsService.assertOperational.mockResolvedValue(campaign);
+    manager.findOne
+      .mockResolvedValueOnce(submission)
+      .mockResolvedValueOnce(submission)
+      .mockResolvedValueOnce(version);
+    surveyApplicability.assertVersionApplicabilitySafe.mockImplementationOnce(
+      () => {
+        throw new ConflictException({
+          code: 'SURVEY_VERSION_APPLICABILITY_NOT_READY',
+          message: 'La versión requiere una corrección administrativa.',
+        });
+      },
+    );
+
+    await expect(service.submit(campaign.id, actor)).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+
+    expect(
+      surveyApplicability.assertVersionApplicabilitySafe,
+    ).toHaveBeenCalledWith(version, submission.schoolProfileSnapshot);
+    expect(surveyApplicability.evaluate).not.toHaveBeenCalled();
+    expect(manager.update).not.toHaveBeenCalledWith(
+      SurveySubmission,
+      submission.id,
+      expect.objectContaining({ status: 'submitted' }),
     );
     expect(evaluationResults.calculateAndPersist).not.toHaveBeenCalled();
   });
@@ -850,6 +1291,38 @@ describe('SubmissionsService', () => {
 
       await expect(service.submit(campaign.id, actor)).rejects.toBe(error);
       expect(committedStatus).toBe('draft');
+    },
+  );
+
+  it.each(['saveDraft', 'submit'] as const)(
+    'keeps %s blocked after the campaign expires',
+    async (operation) => {
+      schoolsService.evaluationContextForUser.mockResolvedValue({
+        school,
+        rectification: {
+          id: 'rectification-id',
+          isConfirmed: true,
+          isEvaluationReady: true,
+          snapshot: schoolSnapshot(),
+        },
+      });
+      campaignsService.assertOperational.mockRejectedValueOnce(
+        new ConflictException(
+          'La campaña no se encuentra abierta para recibir respuestas.',
+        ),
+      );
+
+      const request =
+        operation === 'saveDraft'
+          ? service.saveDraft(campaign.id, { answers: [] }, actor)
+          : service.submit(campaign.id, actor);
+
+      await expect(request).rejects.toBeInstanceOf(ConflictException);
+      expect(manager.findOne).not.toHaveBeenCalled();
+      expect(manager.update).not.toHaveBeenCalled();
+      expect(manager.delete).not.toHaveBeenCalled();
+      expect(manager.save).not.toHaveBeenCalled();
+      expect(surveyApplicability.evaluate).not.toHaveBeenCalled();
     },
   );
 });

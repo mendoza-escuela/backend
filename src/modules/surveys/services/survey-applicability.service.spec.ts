@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { SchoolRectificationSnapshot } from '../../schools/entities/school-rectification.entity';
 import {
   ApplicabilityAction,
@@ -5,6 +6,10 @@ import {
 } from '../entities/survey-applicability-rule.entity';
 import { SurveyQuestion } from '../entities/survey-question.entity';
 import { SurveyVersion } from '../entities/survey-version.entity';
+import {
+  createOfficialKioskApplicabilityRule,
+  OFFICIAL_KIOSK_QUESTION_CODES,
+} from '../policies/official-survey-applicability.policy';
 import { ApplicabilityEngine } from './applicability-engine.service';
 import { SurveyApplicabilityService } from './survey-applicability.service';
 
@@ -99,6 +104,44 @@ describe('SurveyApplicabilityService', () => {
     expect(result.excludedQuestionIds.size).toBe(0);
     expect(result.applicableQuestionIds.size).toBe(2);
   });
+
+  it('bloquea el envío final de una versión oficial sin reglas de kiosco', () => {
+    expect(() =>
+      service.assertVersionApplicabilitySafe(
+        officialKioskVersion(false),
+        snapshot({ hasKiosk: false }),
+      ),
+    ).toThrow(ConflictException);
+
+    try {
+      service.assertVersionApplicabilitySafe(
+        officialKioskVersion(false),
+        snapshot({ hasKiosk: false }),
+      );
+    } catch (error) {
+      expect((error as ConflictException).getResponse()).toMatchObject({
+        code: 'SURVEY_VERSION_APPLICABILITY_NOT_READY',
+      });
+    }
+  });
+
+  it('permite el envío final cuando p021-p027 cumplen la regla aprobada', () => {
+    expect(() =>
+      service.assertVersionApplicabilitySafe(
+        officialKioskVersion(true),
+        snapshot({ hasKiosk: false }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('no bloquea una escuela con kiosco si la versión histórica omitió las reglas', () => {
+    expect(() =>
+      service.assertVersionApplicabilitySafe(
+        officialKioskVersion(false),
+        snapshot({ hasKiosk: true }),
+      ),
+    ).not.toThrow();
+  });
 });
 
 function question(
@@ -145,6 +188,20 @@ function versionWith(...questions: SurveyQuestion[]) {
       },
     ],
   } as SurveyVersion;
+}
+
+function officialKioskVersion(withRules: boolean) {
+  const version = versionWith(
+    ...OFFICIAL_KIOSK_QUESTION_CODES.map((code) => ({
+      ...question(
+        code,
+        withRules ? [createOfficialKioskApplicabilityRule()] : [],
+      ),
+      code,
+    })),
+  );
+  version.dimensions[0].code = 'entorno_alimentario';
+  return version;
 }
 
 function snapshot(

@@ -8,7 +8,6 @@ import {
 import { inspectOfficialSurveyScoring } from './official-survey-scoring.policy';
 
 const UNRESOLVED_PUBLICATION_DEFINITIONS = Object.freeze([
-  'Kiosco: la respuesta funcional enumera p021–p027, pero también indica que deben excluirse nueve preguntas sin identificar las dos restantes.',
   'Comedor/jornada: falta enumerar exactamente las preguntas excluidas y la condición aplicable a cada una.',
   'p041: falta confirmar si “Se trabaja de forma limpia, transversal y sostenida” es la redacción definitiva.',
   'p051: falta confirmar la primera opción, que actualmente refiere a adultos designados aunque la pregunta trata sobre participación familiar.',

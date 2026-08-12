@@ -110,6 +110,8 @@ describe('XlsxReportRenderer', () => {
     expect(valueByLabel.get('Estrellas finales')).toBe('4');
     expect(valueByLabel.get('Tipo de educación')).toBe('Educación común');
     expect(valueByLabel.get('Director/a')).toBe('Dirección de prueba');
+    expect(valueByLabel.get('Departamento')).toBe('Godoy Cruz');
+    expect(valueByLabel.get('Gestión')).toBe('Estatal');
     expect(valueByLabel.get('Niveles educativos')).toBe(
       'Primario [primario] - matrícula: 125',
     );

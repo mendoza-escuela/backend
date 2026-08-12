@@ -5,7 +5,6 @@ import { AuthModule } from '../auth/auth.module';
 import { CampaignSchool } from '../campaigns/entities/campaign-school.entity';
 import { Campaign } from '../campaigns/entities/campaign.entity';
 import { EvaluationResult } from '../evaluation/entities/evaluation-result.entity';
-import { School } from '../schools/entities/school.entity';
 import { SurveySubmission } from '../submissions/entities/survey-submission.entity';
 import { UserSchool } from '../users/entities/user-school.entity';
 import {
@@ -26,7 +25,6 @@ import { XlsxReportRenderer } from './services/xlsx-report.renderer';
       Campaign,
       CampaignSchool,
       EvaluationResult,
-      School,
       SurveySubmission,
       UserSchool,
     ]),

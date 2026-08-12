@@ -1,10 +1,58 @@
 # Reparación auditada de aplicabilidad de kiosco
 
+## Definición funcional confirmada
+
+El 11/08/2026 se confirmó que las preguntas dependientes de kiosco son
+exactamente `p021`, `p022`, `p023`, `p024`, `p025`, `p026` y `p027`. También se
+autorizó recalcular las presentaciones enviadas afectadas por este defecto.
+
+La autorización funcional no reemplaza los controles operativos: antes de
+escribir en un ambiente compartido siguen siendo obligatorios el backup
+verificado, la vista previa del conjunto exacto y la ejecución inicial en QA.
+
 ## Alcance
 
 Este procedimiento corrige exclusivamente presentaciones enviadas cuyo snapshot histórico declara `hasKiosk=false` y que conservan alguna decisión distinta de `excluded` para `p021` a `p027`.
 
 No modifica la ficha escolar actual, respuestas, versiones publicadas ni snapshots de otras campañas. El resultado se recalcula desde los datos históricos de la presentación dentro de la misma transacción.
+
+## Contención de nuevos borradores y envíos
+
+Antes de crear, abrir, guardar o enviar un borrador, backend comprueba la
+decisión que la versión produciría para la ficha histórica de la escuela:
+
+- con `hasKiosk=false`, `p021-p027` deben quedar excluidas;
+- con `hasKiosk=true`, deben ser aplicables;
+- sin el dato, deben quedar incompletas.
+
+Si una versión oficial no cumple la decisión correspondiente, la operación se
+detiene antes de confirmar escrituras con estado 409 y código
+`SURVEY_VERSION_APPLICABILITY_NOT_READY`. Una escuela con kiosco no queda
+bloqueada por la omisión histórica de la regla cuando las siete preguntas le
+resultan correctamente aplicables. Las presentaciones ya enviadas siguen
+disponibles en modo de sólo lectura y se corrigen únicamente mediante el
+procedimiento auditado de este documento.
+
+Esta defensa es una contención y no modifica la definición publicada. Las
+versiones publicadas continúan siendo inmutables.
+
+## Restablecimiento de una campaña ligada a una versión defectuosa
+
+No se debe insertar reglas directamente en una versión publicada ni desactivar
+sus triggers de protección. Para recuperar el flujo completo:
+
+1. crear o importar una nueva versión oficial que persista la regla aprobada en
+   `p021-p027`;
+2. validar que pase la política de publicación y sus pruebas de aplicabilidad;
+3. publicar la nueva versión;
+4. cerrar la campaña defectuosa y crear una campaña con la versión corregida;
+5. validar escuelas con y sin kiosco antes de habilitar el uso general.
+
+Una campaña conserva su `surveyVersionId`; no se cambia ese vínculo después de
+haber iniciado presentaciones. Los borradores de la campaña anterior tampoco
+se migran automáticamente, porque hacerlo mezclaría dos definiciones del
+cuestionario bajo el mismo histórico. Cerrar y reemplazar una campaña activa es
+una acción operativa que requiere aprobación específica del responsable.
 
 ## Requisitos previos
 
@@ -21,6 +69,25 @@ GET /api/admin/evaluation/data-quality/kiosk-applicability?campaignId=<uuid>
 ```
 
 La respuesta incluye cantidades, cada presentación afectada, preguntas, resultado anterior y una `fingerprint` SHA-256. La consulta no abre una transacción de escritura ni modifica datos.
+
+La huella de este `GET` representa todo el conjunto encontrado. Para reparar un
+subconjunto debe generarse una vista previa específica; no debe reutilizarse la
+huella global:
+
+```http
+POST /api/admin/evaluation/data-quality/kiosk-applicability/preview
+Content-Type: application/json
+
+{
+  "submissionIds": ["<uuid>"]
+}
+```
+
+La selección admite entre 1 y 500 UUIDs únicos. Si alguno ya no requiere la
+corrección, responde `409 DATA_REPAIR_SELECTION_NOT_ELIGIBLE`. La respuesta
+mantiene el formato de auditoría, agrega `repairable` y detalla por presentación
+los `recalculationBlockers`. La `fingerprint` devuelta es la que debe enviarse al
+endpoint de reparación.
 
 ## Confirmación y reparación
 
@@ -47,6 +114,28 @@ Cada reparación:
 - recalcula numerador, denominador, promedio, dimensiones, estrellas y alertas;
 - conserva el antes/después en `audit_logs` bajo `KIOSK_APPLICABILITY_DATA_REPAIRED`;
 - confirma todos los cambios de la selección o revierte toda la transacción.
+
+## Garantías del recálculo histórico
+
+Una reparación no usa la configuración activa del momento. Reutiliza por ID la
+misma configuración persistida en el resultado original. Además, sólo recalcula
+si la versión almacenada del algoritmo coincide con la versión disponible en el
+código desplegado.
+
+El lote se bloquea sin modificar datos cuando aparece alguno de estos códigos:
+
+- `EVALUATION_RECALCULATION_RESULT_REQUIRED`: no existe un resultado previo;
+- `EVALUATION_RECALCULATION_CONFIGURATION_REQUIRED`: el resultado no referencia una configuración histórica disponible;
+- `EVALUATION_RECALCULATION_ALGORITHM_DRIFT`: el algoritmo original es distinto del actual;
+- `EVALUATION_RECALCULATION_CONFIGURATION_DRIFT`: la versión resuelta por ID no coincide con la registrada en el resultado.
+
+Estos casos requieren una migración de datos específica y no deben forzarse con
+este reparador.
+
+Las respuestas que habían sido guardadas para `p021-p027` se conservan como
+evidencia histórica, pero quedan excluidas del numerador, denominador,
+dimensiones, estrellas y alertas. No deben presentarse como respuestas
+aplicables en reportes posteriores.
 
 La excepción de inmutabilidad usa una variable local de PostgreSQL habilitada únicamente dentro de esa transacción. Fuera del procedimiento, las decisiones de una presentación enviada continúan protegidas por el trigger.
 

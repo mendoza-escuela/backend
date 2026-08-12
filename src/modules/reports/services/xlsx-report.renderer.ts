@@ -12,9 +12,11 @@ const XLSX_MIME =
 /**
  * Representa en un único libro el envío inmutable y su resultado histórico.
  *
- * Todos los textos provienen del snapshot de evaluación, no del cuestionario ni
- * de la ficha escolar vigentes. Las preguntas excluidas se separan y nunca
- * exponen una respuesta residual que pudiera existir en datos históricos.
+ * El snapshot de evaluación es la autoridad. Departamento y gestión ausentes
+ * pueden venir completados campo a campo en el ViewModel desde el snapshot de
+ * la presentación o su rectificación histórica exacta y validada; esa
+ * resolución nunca consulta la ficha vigente ni persiste cambios. Las preguntas
+ * excluidas se separan y nunca exponen una respuesta residual histórica.
  */
 @Injectable()
 export class XlsxReportRenderer {

@@ -33,6 +33,8 @@ describe('PdfReportRenderer', () => {
     expect(serialized).toContain('4 estrellas');
     expect(serialized).toContain('Numerador: 80.00 - Denominador: 100');
     expect(serialized).toContain('Dirección de prueba');
+    expect(serialized).toContain('Departamento histórico');
+    expect(serialized).toContain('Gestión histórica');
     expect(serialized).toContain('Mañana');
     expect(serialized).not.toContain('★');
     expect(serialized).toContain('"headerRows":1');
@@ -161,8 +163,10 @@ function reportView(): IndividualReportViewModel {
       name: 'Escuela de prueba',
       cue: '5000000',
       directorName: 'Dirección de prueba',
+      department: 'Departamento histórico',
       address: 'Calle de prueba 1',
       locality: 'Ciudad',
+      managementType: 'Gestión histórica',
       scope: 'Urbano',
       educationLevel: 'Primario',
       shift: 'Mañana',

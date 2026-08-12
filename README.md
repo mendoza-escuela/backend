@@ -65,11 +65,22 @@ Primero debe ejecutarse la vista previa. La importación es parcial: crea las fi
 
 ## Administración de colegios
 
-Las rutas protegidas bajo `/admin/schools` permiten alta, listado paginado, búsqueda por CUE/nombre/número, filtros territoriales e institucionales, detalle, edición, activación y desactivación. El detalle incluye el usuario Colegio, accesos recientes, historial de asociaciones y auditoría. Campañas y evaluaciones se informan explícitamente como no disponibles hasta que existan esos módulos; no se generan datos ficticios.
+Las rutas protegidas bajo `/admin/schools` permiten alta, listado paginado, búsqueda por CUE/nombre/número, filtros territoriales e institucionales, detalle, edición, activación y desactivación. El detalle incluye el usuario Colegio, accesos recientes, historial de asociaciones, auditoría, campañas asignadas y resultados disponibles; no se generan datos ficticios.
 
 Cada colegio admite un único usuario con rol `school`, y cada usuario sólo puede pertenecer a un colegio. Los reemplazos y desvinculaciones conservan un historial independiente. Un colegio inactivo conserva sus datos e historial, bloquea nuevos logins y cargas, y revoca transaccionalmente las sesiones escolares vigentes. La reactivación exige un login nuevo. El diseño, la concurrencia y los datos preservados se documentan en [`docs/school-deactivation.md`](docs/school-deactivation.md).
 
 `GET /api/admin/schools` pagina en PostgreSQL mediante `page` y `limit` y selecciona únicamente las columnas del listado. `GET /api/admin/schools/:id/assignable-users` busca y pagina usuarios disponibles para asociación en backend, evitando descargar cuentas ocupadas y filtrarlas en el navegador.
+
+`GET /api/admin/schools/:id` devuelve en `campaigns.items` sólo las
+asignaciones vigentes, ordenadas por inicio de campaña y fecha de asignación
+descendentes. Cada elemento incluye la campaña, la trazabilidad de asignación,
+el estado excluyente `not_started`, `draft` o `submitted`, la presentación y la
+disponibilidad del resultado. `evaluations.items` resume los resultados
+persistidos con `campaignId`, `submissionId`, puntaje, estrellas y fecha de
+cálculo. Ambos bloques usan `available: true`, incluso cuando no tienen filas;
+los IDs permiten construir enlaces de seguimiento y detalle sin exponer rutas
+del frontend desde la API. La consulta se resuelve con joins y no ejecuta una
+consulta adicional por campaña.
 
 La importación acepta CSV/XLSX de hasta 2 MB y 500 filas, ofrece vista previa y realiza importación parcial. La plantilla se obtiene en `GET /admin/schools/import/template`. El padrón filtrado puede exportarse mediante `GET /admin/schools/export?format=csv` o `format=xlsx`; cada exportación queda auditada.
 
@@ -181,8 +192,19 @@ exportaciones parten siempre de `campaign_schools`.
 
 `GET /api/school/campaigns` lista para el usuario Escuela sólo las campañas
 activas, abiertas y asignadas explícitamente a su establecimiento mediante
-`campaign_schools`. La respuesta informa si la ficha está rectificada para el
-año vigente y el motivo que impide iniciar, cuando corresponda.
+`campaign_schools`. La respuesta distingue si existe confirmación anual
+(`isConfirmed`) de si su snapshot está listo para evaluar
+(`isEvaluationReady`), informa `missingFields` para una confirmación incompleta
+y conserva `isRectified` temporalmente como alias de compatibilidad. El bloque
+`expiredDrafts` mantiene localizables los borradores de campañas finalizadas,
+incluso si la asignación fue retirada, y excluye campañas futuras y
+presentaciones enviadas.
+
+El `GET` del workspace abre esos borradores en modo de sólo lectura: utiliza
+las decisiones de aplicabilidad congeladas o las reconstruye únicamente en
+memoria desde el snapshot histórico. No adopta una rectificación posterior ni
+actualiza respuestas, decisiones o auditoría. Los endpoints de guardado y
+envío continúan rechazando cualquier campaña fuera de su período operativo.
 
 El seguimiento administrativo se expone mediante
 `GET /api/admin/campaigns/:id/tracking/summary` y
@@ -199,7 +221,7 @@ El flujo escolar utiliza:
 - `PUT /api/school/campaigns/:campaignId/submission/draft`: reemplaza atómicamente sólo las respuestas aplicables del borrador. Las respuestas anteriores de preguntas excluidas se conservan sin participar en la validación.
 - `POST /api/school/campaigns/:campaignId/submission/submit`: reevalúa aplicabilidad, bloquea datos escolares faltantes, valida únicamente preguntas aplicables y realiza el envío definitivo.
 
-La escuela se obtiene siempre de la asociación del usuario autenticado. El primer borrador exige establecimiento activo y rectificación anual; posteriores usuarios asociados a la misma escuela recuperan ese borrador porque la unicidad se define por `school_id + campaign_id`. También se conserva un snapshot del usuario que inició la carga.
+La escuela se obtiene siempre de la asociación del usuario autenticado. El primer borrador exige establecimiento activo, confirmación anual y un snapshot listo para evaluar; posteriores usuarios asociados a la misma escuela recuperan ese borrador porque la unicidad se define por `school_id + campaign_id`. También se conserva un snapshot del usuario que inició la carga.
 
 Cada presentación referencia la versión publicada fijada por la campaña. Las respuestas enviadas son inmutables en el servicio y mediante triggers PostgreSQL. La migración `AddSurveySubmissions1720375212000` crea presentaciones, respuestas, índices, relaciones y protecciones de integridad.
 

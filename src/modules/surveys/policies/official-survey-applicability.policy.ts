@@ -5,6 +5,7 @@ import {
 import {
   ApplicabilityEngine,
   ApplicabilityRuleInput,
+  SchoolApplicabilityFacts,
 } from '../services/applicability-engine.service';
 import { isOfficialSurveyStructure } from '../templates/official-survey-dimensions.template';
 
@@ -86,6 +87,47 @@ export function inspectOfficialKioskApplicability(
     )
       errors.push(
         `La pregunta oficial ${questionCode} debe aplicar con kiosco, excluirse sin kiosco y bloquearse cuando el dato sea desconocido.`,
+      );
+  }
+
+  return errors;
+}
+
+/**
+ * Valida la decisión que produciría una versión para una ficha concreta. Esto
+ * permite detener únicamente los envíos que resultarían incorrectos, sin
+ * bloquear escuelas con kiosco cuando una versión histórica sólo omitió la
+ * exclusión para escuelas sin kiosco.
+ */
+export function inspectOfficialKioskApplicabilityForFacts(
+  dimensions: DimensionWithApplicability[],
+  engine: ApplicabilityEngine,
+  facts: SchoolApplicabilityFacts,
+): string[] {
+  if (!isOfficialSurveyStructure(dimensions)) return [];
+
+  const expectedStatus =
+    facts.has_kiosk === true
+      ? 'applicable'
+      : facts.has_kiosk === false
+        ? 'excluded'
+        : 'incomplete';
+  const questions = dimensions.flatMap((dimension) =>
+    dimension.sections.flatMap((section) => section.questions),
+  );
+  const errors: string[] = [];
+
+  for (const questionCode of OFFICIAL_KIOSK_QUESTION_CODES) {
+    const question = questions.find(
+      ({ code }) => code.trim().toLowerCase() === questionCode,
+    );
+    if (
+      !question ||
+      engine.evaluate(question.applicabilityRules ?? [], facts).status !==
+        expectedStatus
+    )
+      errors.push(
+        `La pregunta oficial ${questionCode} no produce la aplicabilidad aprobada para la ficha escolar.`,
       );
   }
 

@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
+  ArrayUnique,
   IsArray,
   IsBoolean,
   IsOptional,
@@ -20,6 +21,15 @@ export class KioskApplicabilityAuditQueryDto {
 export class KioskApplicabilityRepairTargetDto {
   @IsUUID()
   submissionId: string;
+}
+
+export class KioskApplicabilityDataRepairPreviewDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(500)
+  @ArrayUnique()
+  @IsUUID(undefined, { each: true })
+  submissionIds: string[];
 }
 
 export class KioskApplicabilityDataRepairDto {

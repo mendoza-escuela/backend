@@ -172,9 +172,11 @@ describe('AdminSurveysService', () => {
       expect.arrayContaining([
         expect.stringContaining('p038'),
         expect.stringContaining('alternativa intermedia'),
-        expect.stringContaining('nueve preguntas'),
       ]),
     );
+    expect(
+      response.errors.some((error) => error.includes('nueve preguntas')),
+    ).toBe(false);
     expect(manager.find).not.toHaveBeenCalled();
     expect(manager.save).not.toHaveBeenCalled();
   });
