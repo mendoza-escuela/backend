@@ -33,6 +33,22 @@ describe('BulkUserImportService', () => {
 
   beforeEach(() => jest.clearAllMocks());
 
+  it('can parse and validate the exact downloaded template', async () => {
+    getRequestedSchools.mockResolvedValueOnce([
+      { id: 'school-id', cue: '500012300' },
+    ]);
+
+    const preview = await service.preview(
+      file('plantilla-usuarios.csv', service.template()),
+    );
+
+    expect(preview).toMatchObject({
+      totalRows: 2,
+      validCount: 2,
+      errorCount: 0,
+    });
+  });
+
   it('previews valid and invalid CSV rows without exposing passwords', async () => {
     const csv = [
       'nombre,apellido,correo,rol,colegio_codigo,contrasena_temporal,estado',
@@ -92,6 +108,7 @@ describe('BulkUserImportService', () => {
     createUser.mockResolvedValue({
       id: 'created-id',
       email: 'ana@mendoza.gov.ar',
+      invitationEmailSent: true,
     });
 
     const result = await service.import(
@@ -101,6 +118,8 @@ describe('BulkUserImportService', () => {
 
     expect(result.importedCount).toBe(1);
     expect(result.errorCount).toBe(1);
+    expect(result.invitationEmailSentCount).toBe(1);
+    expect(result.invitationEmailPendingCount).toBe(0);
     expect(createUser).toHaveBeenCalledTimes(1);
   });
 });

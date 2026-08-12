@@ -17,6 +17,7 @@ import {
   SortDirection,
 } from '../dto/list-campaign-tracking-query.dto';
 import { Campaign } from '../entities/campaign.entity';
+import { CampaignSchool } from '../entities/campaign-school.entity';
 
 type TrackingCountRow = {
   total: string;
@@ -45,6 +46,8 @@ type TrackingSchoolRow = {
   applicableCount: string;
 };
 
+type TrackingSchoolIdRow = { schoolId: string };
+
 type RespondentSnapshot = {
   id?: unknown;
   firstName?: unknown;
@@ -65,7 +68,7 @@ export class CampaignTrackingService {
   async summary(campaignId: string): Promise<CampaignTrackingSummaryDto> {
     const campaign = await this.campaign(campaignId);
     const inclusionCutoff = this.inclusionCutoff(campaign);
-    const counts = await this.baseQuery(campaignId, inclusionCutoff)
+    const counts = await this.baseQuery(campaignId)
       .select('COUNT("school"."id")', 'total')
       .addSelect(
         'COUNT("school"."id") FILTER (WHERE "submission"."id" IS NULL)',
@@ -122,17 +125,46 @@ export class CampaignTrackingService {
     campaignId: string,
     query: ListCampaignTrackingQueryDto,
   ): Promise<CampaignTrackingListDto> {
-    const campaign = await this.campaign(campaignId);
-    const inclusionCutoff = this.inclusionCutoff(campaign);
-    const countBuilder = this.filteredQuery(
-      this.baseQuery(campaignId, inclusionCutoff),
-      query,
-    );
+    await this.campaign(campaignId);
+    const countBuilder = this.filteredQuery(this.baseQuery(campaignId), query);
     const total = await countBuilder.getCount();
-    const builder = this.filteredQuery(
-      this.baseQuery(campaignId, inclusionCutoff),
-      query,
-    )
+
+    // La página se determina con una consulta angosta. `limit/offset` generan
+    // LIMIT/OFFSET SQL incluso cuando el QueryBuilder devuelve filas crudas.
+    const idsBuilder = this.filteredQuery(this.baseQuery(campaignId), query)
+      .select('school.id', 'schoolId')
+      .limit(query.limit)
+      .offset((query.page - 1) * query.limit);
+    this.applyOrdering(idsBuilder, query);
+    const pageIds = (await idsBuilder.getRawMany<TrackingSchoolIdRow>()).map(
+      ({ schoolId }) => schoolId,
+    );
+
+    const rows = pageIds.length
+      ? await this.detailQuery(campaignId, pageIds, query)
+      : [];
+
+    return {
+      items: rows.map((row) => this.trackingSchool(row)),
+      pagination: {
+        page: query.page,
+        limit: query.limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / query.limit)),
+      },
+    };
+  }
+
+  /**
+   * Carga el detalle y los subcálculos exclusivamente para los IDs de la
+   * página. Evita ejecutar los COUNT correlacionados sobre las 2.400 escuelas.
+   */
+  private async detailQuery(
+    campaignId: string,
+    schoolIds: string[],
+    query: ListCampaignTrackingQueryDto,
+  ): Promise<TrackingSchoolRow[]> {
+    const builder = this.baseQuery(campaignId)
       .select('school.id', 'schoolId')
       .addSelect('school.cue', 'schoolCue')
       .addSelect('school.name', 'schoolName')
@@ -152,8 +184,26 @@ export class CampaignTrackingService {
       .addSelect('respondent.email', 'respondentEmail')
       .addSelect('respondent.isActive', 'respondentIsActive')
       .addSelect(
-        `(SELECT COUNT(*) FROM "survey_answers" "answer"
-          WHERE "answer"."submission_id" = "submission"."id")`,
+        `(CASE
+          WHEN EXISTS (
+            SELECT 1
+            FROM "submission_question_applicability" "persisted_decision"
+            WHERE "persisted_decision"."submission_id" = "submission"."id"
+          ) THEN (
+            SELECT COUNT(*)
+            FROM "survey_answers" "answer"
+            INNER JOIN "submission_question_applicability" "answer_decision"
+              ON "answer_decision"."submission_id" = "answer"."submission_id"
+              AND "answer_decision"."question_id" = "answer"."question_id"
+              AND "answer_decision"."status" = 'applicable'
+            WHERE "answer"."submission_id" = "submission"."id"
+          )
+          ELSE (
+            SELECT COUNT(*)
+            FROM "survey_answers" "legacy_answer"
+            WHERE "legacy_answer"."submission_id" = "submission"."id"
+          )
+        END)`,
         'answeredCount',
       )
       .addSelect(
@@ -162,20 +212,11 @@ export class CampaignTrackingService {
             AND "decision"."status" = 'applicable')`,
         'applicableCount',
       )
-      .skip((query.page - 1) * query.limit)
-      .take(query.limit);
+      .andWhere('school.id IN (:...pageSchoolIds)', {
+        pageSchoolIds: schoolIds,
+      });
     this.applyOrdering(builder, query);
-    const rows = await builder.getRawMany<TrackingSchoolRow>();
-
-    return {
-      items: rows.map((row) => this.trackingSchool(row)),
-      pagination: {
-        page: query.page,
-        limit: query.limit,
-        total,
-        totalPages: Math.max(1, Math.ceil(total / query.limit)),
-      },
-    };
+    return builder.getRawMany<TrackingSchoolRow>();
   }
 
   private async campaign(id: string): Promise<Campaign> {
@@ -186,13 +227,11 @@ export class CampaignTrackingService {
     return campaign;
   }
 
-  private baseQuery(
-    campaignId: string,
-    inclusionCutoff: Date,
-  ): SelectQueryBuilder<School> {
+  private baseQuery(campaignId: string): SelectQueryBuilder<CampaignSchool> {
     return this.dataSource
-      .getRepository(School)
-      .createQueryBuilder('school')
+      .getRepository(CampaignSchool)
+      .createQueryBuilder('assignment')
+      .innerJoin(School, 'school', 'school.id = assignment.schoolId')
       .leftJoin(
         SurveySubmission,
         'submission',
@@ -204,16 +243,14 @@ export class CampaignTrackingService {
         'respondent',
         'respondent.id = submission.originalRespondentId',
       )
-      .where(
-        '(school.createdAt <= :inclusionCutoff OR submission.id IS NOT NULL)',
-        { inclusionCutoff },
-      );
+      .where('assignment.campaignId = :campaignId', { campaignId })
+      .andWhere('assignment.removedAt IS NULL');
   }
 
   private filteredQuery(
-    builder: SelectQueryBuilder<School>,
+    builder: SelectQueryBuilder<CampaignSchool>,
     query: ListCampaignTrackingQueryDto,
-  ): SelectQueryBuilder<School> {
+  ): SelectQueryBuilder<CampaignSchool> {
     if (query.search) {
       builder.andWhere(
         '(LOWER(school.cue) LIKE :search OR LOWER(school.name) LIKE :search)',
@@ -235,7 +272,7 @@ export class CampaignTrackingService {
   }
 
   private applyOrdering(
-    builder: SelectQueryBuilder<School>,
+    builder: SelectQueryBuilder<CampaignSchool>,
     query: ListCampaignTrackingQueryDto,
   ): void {
     const direction =
@@ -254,11 +291,16 @@ export class CampaignTrackingService {
     } else if (query.sortBy === CampaignTrackingSort.SubmittedAt) {
       builder.orderBy('submission.submittedAt', direction, 'NULLS LAST');
     } else {
-      builder.orderBy('LOWER(school.name)', direction);
+      builder
+        .orderBy('LOWER(school.name)', direction)
+        .addOrderBy('school.cue', direction)
+        .addOrderBy('school.id', direction);
+      return;
     }
     builder
       .addOrderBy('LOWER(school.name)', 'ASC')
-      .addOrderBy('school.cue', 'ASC');
+      .addOrderBy('school.cue', 'ASC')
+      .addOrderBy('school.id', 'ASC');
   }
 
   private trackingSchool(row: TrackingSchoolRow): CampaignTrackingSchoolDto {

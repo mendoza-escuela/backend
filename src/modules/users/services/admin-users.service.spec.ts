@@ -1,8 +1,11 @@
 import { DataSource } from 'typeorm';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
+import { MailService } from '../../mail/services/mail.service';
 import { School } from '../../schools/entities/school.entity';
+import { SchoolUserAssignmentHistory } from '../../schools/entities/school-user-assignment-history.entity';
 import { UserRole } from '../entities/user-role.enum';
+import { UserSchool } from '../entities/user-school.entity';
 import { User } from '../entities/user.entity';
 import { AdminUsersService } from './admin-users.service';
 
@@ -154,7 +157,12 @@ describe('AdminUsersService', () => {
         findOne: jest.fn().mockResolvedValue(persistedUser),
       })),
     } as unknown as DataSource;
-    const service = new AdminUsersService(dataSource);
+    const sendAccountWelcome = jest.fn().mockResolvedValue(undefined);
+    const mailService = {
+      isConfigured: jest.fn().mockReturnValue(true),
+      sendAccountWelcome,
+    } as unknown as MailService;
+    const service = new AdminUsersService(dataSource, mailService);
 
     const created = await service.create(
       {
@@ -179,6 +187,282 @@ describe('AdminUsersService', () => {
     });
     expect(JSON.stringify(auditSave?.[1])).not.toContain('Temporal!Clave2026');
     expect(created.email).toBe('ana@mendoza.gov.ar');
+    expect(created.invitationEmailSent).toBe(true);
+    expect(sendAccountWelcome).toHaveBeenCalledWith({
+      firstName: 'Ana',
+      lastName: 'Pérez',
+      email: 'ana@mendoza.gov.ar',
+      temporaryPassword: 'Temporal!Clave2026',
+    });
+  });
+
+  it('returns a structured email conflict for a concurrent unique violation', async () => {
+    const queryBuilder = {
+      where: jest.fn().mockReturnThis(),
+      getExists: jest.fn().mockResolvedValue(false),
+    };
+    const manager = {
+      getRepository: jest.fn(() => ({
+        createQueryBuilder: () => queryBuilder,
+      })),
+      create: jest.fn((_entity: unknown, values: unknown) => values),
+      save: jest.fn((entity: unknown) => {
+        if (entity === User)
+          return Promise.reject(
+            Object.assign(new Error('duplicate email'), {
+              code: '23505',
+              constraint: 'IDX_users_email_unique',
+            }),
+          );
+        return Promise.resolve({});
+      }),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (transactionManager: typeof manager) => Promise<string>) =>
+          callback(manager),
+      ),
+    } as unknown as DataSource;
+
+    const promise = new AdminUsersService(dataSource).create(
+      {
+        firstName: 'Ana',
+        lastName: 'Pérez',
+        email: 'ANA@EXAMPLE.COM',
+        role: UserRole.Admin,
+        temporaryPassword: 'Temporal!Clave2026',
+      },
+      { id: 'actor-id' } as never,
+    );
+
+    await expect(promise).rejects.toBeInstanceOf(ConflictException);
+    await expect(promise).rejects.toMatchObject({
+      response: {
+        code: 'USER_EMAIL_CONFLICT',
+        field: 'email',
+        message: 'Ya existe un usuario con ese correo.',
+      },
+    });
+    expect(queryBuilder.where).toHaveBeenCalledWith(
+      'LOWER(user.email) = :email',
+      { email: 'ana@example.com' },
+    );
+  });
+
+  it('permite dejar sin colegio a un usuario Escuela durante la edición', async () => {
+    const user = {
+      id: 'user-id',
+      firstName: 'Ana',
+      lastName: 'Pérez',
+      email: 'ana@example.com',
+      role: UserRole.School,
+      isActive: true,
+      userSchools: [{ userId: 'user-id', schoolId: 'old-school-id' }],
+    } as User;
+    const save = jest.fn().mockResolvedValue({});
+    const manager = {
+      getRepository: jest.fn(() => ({
+        findOne: jest.fn().mockResolvedValue(user),
+      })),
+      findOneBy: jest.fn((entity: unknown, criteria: { userId?: string }) =>
+        Promise.resolve(
+          entity === UserSchool && criteria.userId === user.id
+            ? { userId: user.id, schoolId: 'old-school-id' }
+            : null,
+        ),
+      ),
+      save,
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (transactionManager: typeof manager) => Promise<void>) =>
+          callback(manager),
+      ),
+    } as unknown as DataSource;
+    const service = new AdminUsersService(dataSource);
+    jest.spyOn(service, 'findOne').mockResolvedValue(user as never);
+
+    await service.update(user.id, { role: UserRole.School, schoolId: null }, {
+      id: 'actor-id',
+    } as never);
+
+    expect(manager.delete).toHaveBeenCalledWith(UserSchool, {
+      userId: user.id,
+    });
+    expect(save).toHaveBeenCalledWith(
+      SchoolUserAssignmentHistory,
+      expect.objectContaining({
+        schoolId: 'old-school-id',
+        previousUserId: user.id,
+        newUserId: null,
+        action: 'unassigned',
+      }),
+    );
+  });
+
+  it('asocia un usuario sin colegio a un establecimiento disponible', async () => {
+    const user = {
+      id: 'user-id',
+      firstName: 'Ana',
+      lastName: 'Pérez',
+      email: 'ana@example.com',
+      role: UserRole.School,
+      isActive: true,
+      userSchools: [],
+    } as unknown as User;
+    const targetSchool = {
+      id: 'new-school-id',
+      isActive: true,
+    } as School;
+    const findUser = jest.fn().mockResolvedValue(user);
+    const save = jest.fn().mockResolvedValue({});
+    const manager = {
+      getRepository: jest.fn(() => ({ findOne: findUser })),
+      findOneBy: jest.fn((entity: unknown) =>
+        Promise.resolve(entity === School ? targetSchool : null),
+      ),
+      save,
+      delete: jest.fn().mockResolvedValue({ affected: 0 }),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (transactionManager: typeof manager) => Promise<void>) =>
+          callback(manager),
+      ),
+    } as unknown as DataSource;
+    const service = new AdminUsersService(dataSource);
+    jest.spyOn(service, 'findOne').mockResolvedValue(user as never);
+
+    await service.update(
+      user.id,
+      { role: UserRole.School, schoolId: targetSchool.id },
+      { id: 'actor-id' } as never,
+    );
+
+    expect(findUser).toHaveBeenCalledWith({
+      where: { id: user.id },
+      lock: { mode: 'pessimistic_write' },
+    });
+    expect(save).toHaveBeenCalledWith(UserSchool, {
+      userId: user.id,
+      schoolId: targetSchool.id,
+    });
+    expect(save).toHaveBeenCalledWith(
+      SchoolUserAssignmentHistory,
+      expect.objectContaining({
+        schoolId: targetSchool.id,
+        previousUserId: null,
+        newUserId: user.id,
+        action: 'assigned',
+      }),
+    );
+  });
+
+  it('reemplaza la asociación existente al cambiar un usuario de colegio', async () => {
+    const user = {
+      id: 'user-id',
+      firstName: 'Ana',
+      lastName: 'Pérez',
+      email: 'ana@example.com',
+      role: UserRole.School,
+      isActive: true,
+      userSchools: [{ userId: 'user-id', schoolId: 'old-school-id' }],
+    } as User;
+    const targetSchool = {
+      id: 'new-school-id',
+      isActive: true,
+    } as School;
+    const occupied = {
+      userId: 'displaced-user-id',
+      schoolId: targetSchool.id,
+    } as UserSchool;
+    const save = jest.fn().mockResolvedValue({});
+    const manager = {
+      getRepository: jest.fn(() => ({
+        findOne: jest.fn().mockResolvedValue(user),
+      })),
+      findOneBy: jest.fn(
+        (entity: unknown, criteria: { userId?: string; schoolId?: string }) => {
+          if (entity === School) return Promise.resolve(targetSchool);
+          if (criteria.userId === user.id)
+            return Promise.resolve({
+              userId: user.id,
+              schoolId: 'old-school-id',
+            });
+          return Promise.resolve(occupied);
+        },
+      ),
+      save,
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (transactionManager: typeof manager) => Promise<void>) =>
+          callback(manager),
+      ),
+    } as unknown as DataSource;
+    const service = new AdminUsersService(dataSource);
+    jest.spyOn(service, 'findOne').mockResolvedValue(user as never);
+
+    await service.update(
+      user.id,
+      { role: UserRole.School, schoolId: targetSchool.id },
+      { id: 'actor-id' } as never,
+    );
+
+    expect(manager.delete).toHaveBeenCalledWith(UserSchool, {
+      userId: 'displaced-user-id',
+    });
+    expect(save).toHaveBeenCalledWith(UserSchool, {
+      userId: user.id,
+      schoolId: targetSchool.id,
+    });
+    expect(save).toHaveBeenCalledWith(
+      SchoolUserAssignmentHistory,
+      expect.objectContaining({
+        schoolId: targetSchool.id,
+        previousUserId: 'displaced-user-id',
+        newUserId: user.id,
+        action: 'replaced',
+      }),
+    );
+  });
+
+  it('does not mislabel an unrelated unique violation as duplicate email', async () => {
+    const databaseError = {
+      code: '23505',
+      constraint: 'IDX_user_schools_one_user_per_school',
+    };
+    const manager = {
+      getRepository: jest.fn(() => ({
+        createQueryBuilder: () => ({
+          where: jest.fn().mockReturnThis(),
+          getExists: jest.fn().mockResolvedValue(false),
+        }),
+      })),
+      create: jest.fn((_entity: unknown, values: unknown) => values),
+      save: jest.fn().mockRejectedValue(databaseError),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (transactionManager: typeof manager) => Promise<string>) =>
+          callback(manager),
+      ),
+    } as unknown as DataSource;
+
+    await expect(
+      new AdminUsersService(dataSource).create(
+        {
+          firstName: 'Ana',
+          lastName: 'Pérez',
+          email: 'ana@example.com',
+          role: UserRole.Admin,
+          temporaryPassword: 'Temporal!Clave2026',
+        },
+        { id: 'actor-id' } as never,
+      ),
+    ).rejects.toBe(databaseError);
   });
 
   it('revokes sessions and forces a password change after an administrative reset', async () => {

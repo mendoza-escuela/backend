@@ -11,6 +11,7 @@ import { AuthenticatedUser } from '../../../common/types/authenticated-user.type
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { CampaignStatus } from '../../campaigns/entities/campaign-status.enum';
 import { CampaignsService } from '../../campaigns/services/campaigns.service';
+import { CampaignSchoolsService } from '../../campaigns/services/campaign-schools.service';
 import { EvaluationResultsService } from '../../evaluation/services/evaluation-results.service';
 import { SchoolsService } from '../../schools/services/schools.service';
 import { SurveyQuestionType } from '../../surveys/entities/survey-question-type.enum';
@@ -39,16 +40,34 @@ export class SubmissionsService {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly campaignsService: CampaignsService,
+    private readonly campaignSchoolsService: CampaignSchoolsService,
     private readonly schoolsService: SchoolsService,
     private readonly surveyApplicability: SurveyApplicabilityService,
     private readonly evaluationResults: EvaluationResultsService,
   ) {}
 
   async availableCampaigns(actor: AuthenticatedUser) {
-    const [{ school, rectification }, campaigns] = await Promise.all([
-      this.schoolsService.evaluationContextForUser(actor.id),
-      this.campaignsService.operationalCampaigns(),
-    ]);
+    const { school, rectification } =
+      await this.schoolsService.evaluationContextForUser(actor.id);
+    const campaigns = await this.campaignsService.operationalCampaigns(
+      school.id,
+    );
+    const now = new Date();
+    const historicalDrafts = (
+      await this.dataSource.getRepository(SurveySubmission).find({
+        where: {
+          schoolId: school.id,
+          status: SubmissionStatus.Draft,
+        },
+        relations: {
+          campaign: { surveyVersion: { survey: true } },
+        },
+        order: {
+          campaign: { endsAt: 'DESC' },
+          startedAt: 'DESC',
+        },
+      })
+    ).filter((submission) => this.isExpiredDraft(submission, now.getTime()));
     const campaignIds = campaigns.map((campaign) => campaign.id);
     const submissions = campaignIds.length
       ? await this.dataSource.getRepository(SurveySubmission).find({
@@ -56,15 +75,16 @@ export class SubmissionsService {
             schoolId: school.id,
             campaignId: In(campaignIds),
           },
-          relations: { answers: true, applicabilityDecisions: true },
         })
       : [];
+    await this.loadSubmissionCollections([...historicalDrafts, ...submissions]);
     const submissionsByCampaign = new Map(
       submissions.map((submission) => [submission.campaignId, submission]),
     );
-    const questionCounts = await this.questionCounts(
-      campaigns.map((campaign) => campaign.surveyVersionId),
-    );
+    const questionCounts = await this.questionCounts([
+      ...campaigns.map((campaign) => campaign.surveyVersionId),
+      ...historicalDrafts.map((submission) => submission.surveyVersionId),
+    ]);
 
     return {
       school: {
@@ -80,16 +100,28 @@ export class SubmissionsService {
           questionCounts.get(campaign.surveyVersionId) ?? 0;
         return {
           ...this.campaignSummary(campaign),
-          canStart: school.isActive && rectification.isRectified,
+          canStart: school.isActive && rectification.isEvaluationReady,
           blockingReason: this.blockingReason(
             school.isActive,
-            rectification.isRectified,
+            rectification.isConfirmed,
+            rectification.isEvaluationReady,
           ),
           submission: submission
             ? this.submissionSummary(submission, totalQuestions)
             : null,
         };
       }),
+      expiredDrafts: historicalDrafts.map((submission) => ({
+        ...this.campaignSummary(submission.campaign),
+        canStart: false,
+        readOnly: true,
+        blockingReason:
+          'La campaña ya no se encuentra abierta. El borrador está disponible en modo de sólo lectura.',
+        submission: this.submissionSummary(
+          submission,
+          questionCounts.get(submission.surveyVersionId) ?? 0,
+        ),
+      })),
     };
   }
 
@@ -97,10 +129,22 @@ export class SubmissionsService {
     let submissionId: string | null = null;
     try {
       submissionId = await this.dataSource.transaction(async (manager) => {
-        const { school, rectification } =
-          await this.schoolsService.evaluationContextForUser(actor.id, manager);
+        const context = await this.schoolsService.evaluationContextForUser(
+          actor.id,
+          manager,
+        );
+        await this.schoolsService.assertActiveForEvaluation(
+          context.school.id,
+          manager,
+        );
+        const { school, rectification } = context;
         const campaign = await this.campaignsService.assertOperational(
           campaignId,
+          manager,
+        );
+        await this.campaignSchoolsService.assertAssigned(
+          campaignId,
+          school.id,
           manager,
         );
         const existing = await manager.findOne(SurveySubmission, {
@@ -108,18 +152,31 @@ export class SubmissionsService {
           lock: { mode: 'pessimistic_write' },
         });
         if (existing) return existing.id;
-        if (!school.isActive)
-          throw new ConflictException(
-            'El establecimiento está inactivo y no puede iniciar una evaluación.',
-          );
         if (
-          !rectification.isRectified ||
+          !rectification.isEvaluationReady ||
           !rectification.id ||
           !rectification.snapshot
-        )
+        ) {
+          const missingLabels = rectification.missingFields
+            .map(({ label }) => label)
+            .join(', ');
           throw new ConflictException(
-            `Antes de comenzar debés rectificar la ficha escolar para ${rectification.periodYear}.`,
+            rectification.isConfirmed
+              ? `La ficha escolar fue confirmada para ${rectification.periodYear}, pero requiere actualización antes de comenzar.${
+                  missingLabels ? ` Datos pendientes: ${missingLabels}.` : ''
+                }`
+              : `Antes de comenzar debés confirmar la ficha escolar para ${rectification.periodYear}.`,
           );
+        }
+
+        const version = await this.getVersion(
+          manager,
+          campaign.surveyVersionId,
+        );
+        this.surveyApplicability.assertVersionApplicabilitySafe(
+          version,
+          rectification.snapshot,
+        );
 
         const submission = await manager.save(
           SurveySubmission,
@@ -177,31 +234,54 @@ export class SubmissionsService {
   }
 
   async workspace(campaignId: string, actor: AuthenticatedUser) {
-    const { school, submission, applicability } =
+    const { school, submission, applicability, campaignOpen } =
       await this.dataSource.transaction(async (manager) => {
         const context = await this.schoolsService.evaluationContextForUser(
           actor.id,
           manager,
         );
+        await this.schoolsService.assertActiveForEvaluation(
+          context.school.id,
+          manager,
+        );
+        const accessState = await this.getSubmissionAccessState(
+          manager,
+          campaignId,
+          context.school.id,
+        );
+        const shouldLock =
+          accessState.status === SubmissionStatus.Draft &&
+          this.isCampaignOpen(accessState.campaign);
         const loaded = await this.getSubmission(
           manager,
           campaignId,
           context.school.id,
-          true,
+          shouldLock,
         );
-        await this.refreshDraftRectification(
-          manager,
-          loaded,
-          context.rectification,
-          actor.id,
-        );
+        const open = this.isCampaignOpen(loaded.campaign);
+        // Un borrador sólo puede recalcular o adoptar datos si fue cargado bajo
+        // bloqueo de escritura y la campaña continúa abierta al revalidarla.
+        const campaignOpen =
+          loaded.status === SubmissionStatus.Draft ? shouldLock && open : open;
+        if (campaignOpen && loaded.status === SubmissionStatus.Draft)
+          await this.refreshDraftRectification(
+            manager,
+            loaded,
+            context.rectification,
+            actor.id,
+          );
         return {
           school: context.school,
           submission: loaded,
-          applicability: await this.resolveApplicability(manager, loaded),
+          applicability: await this.resolveApplicability(
+            manager,
+            loaded,
+            loaded.surveyVersion,
+            { readOnly: !campaignOpen },
+          ),
+          campaignOpen,
         };
       });
-    const campaignOpen = this.isCampaignOpen(submission.campaign);
     return this.serializeWorkspace(
       submission,
       applicability,
@@ -224,10 +304,21 @@ export class SubmissionsService {
     actor: AuthenticatedUser,
   ) {
     await this.dataSource.transaction(async (manager) => {
-      const { school, rectification } =
-        await this.schoolsService.evaluationContextForUser(actor.id, manager);
-      await this.schoolsService.assertActiveForEvaluation(school.id, manager);
+      const context = await this.schoolsService.evaluationContextForUser(
+        actor.id,
+        manager,
+      );
+      await this.schoolsService.assertActiveForEvaluation(
+        context.school.id,
+        manager,
+      );
+      const { school, rectification } = context;
       await this.campaignsService.assertOperational(campaignId, manager);
+      await this.campaignSchoolsService.assertAssigned(
+        campaignId,
+        school.id,
+        manager,
+      );
       const submission = await this.getSubmission(
         manager,
         campaignId,
@@ -276,10 +367,21 @@ export class SubmissionsService {
 
   async submit(campaignId: string, actor: AuthenticatedUser) {
     await this.dataSource.transaction(async (manager) => {
-      const { school, rectification } =
-        await this.schoolsService.evaluationContextForUser(actor.id, manager);
-      await this.schoolsService.assertActiveForEvaluation(school.id, manager);
+      const context = await this.schoolsService.evaluationContextForUser(
+        actor.id,
+        manager,
+      );
+      await this.schoolsService.assertActiveForEvaluation(
+        context.school.id,
+        manager,
+      );
+      const { school, rectification } = context;
       await this.campaignsService.assertOperational(campaignId, manager);
+      await this.campaignSchoolsService.assertAssigned(
+        campaignId,
+        school.id,
+        manager,
+      );
       const submission = await this.getSubmission(
         manager,
         campaignId,
@@ -435,6 +537,65 @@ export class SubmissionsService {
     submission.answers = answers ?? submission.answers ?? [];
     submission.applicabilityDecisions =
       applicabilityDecisions ?? submission.applicabilityDecisions ?? [];
+    return submission;
+  }
+
+  /**
+   * Carga respuestas y decisiones en dos consultas agrupadas. Evita el
+   * producto cartesiano que produciría incluir ambas relaciones 1:N en el
+   * mismo `find` al listar varios borradores históricos.
+   */
+  private async loadSubmissionCollections(submissions: SurveySubmission[]) {
+    if (!submissions.length) return;
+    const submissionIds = submissions.map(({ id }) => id);
+    const [answers, applicabilityDecisions] = await Promise.all([
+      this.dataSource.manager.find(SurveyAnswer, {
+        where: { submissionId: In(submissionIds) },
+      }),
+      this.dataSource.manager.find(SubmissionQuestionApplicability, {
+        where: { submissionId: In(submissionIds) },
+      }),
+    ]);
+    const answersBySubmission = this.groupBySubmission(answers);
+    const decisionsBySubmission = this.groupBySubmission(
+      applicabilityDecisions,
+    );
+    submissions.forEach((submission) => {
+      submission.answers = answersBySubmission.get(submission.id) ?? [];
+      submission.applicabilityDecisions =
+        decisionsBySubmission.get(submission.id) ?? [];
+    });
+  }
+
+  private groupBySubmission<T extends { submissionId: string }>(rows: T[]) {
+    const grouped = new Map<string, T[]>();
+    rows.forEach((row) => {
+      const current = grouped.get(row.submissionId);
+      if (current) current.push(row);
+      else grouped.set(row.submissionId, [row]);
+    });
+    return grouped;
+  }
+
+  /**
+   * Lee sólo la identidad y la campaña para decidir si el workspace puede
+   * mutar. Así los borradores históricos nunca adquieren un bloqueo de
+   * escritura, mientras que un borrador operativo se vuelve a cargar bajo
+   * `pessimistic_write` antes de refrescar su snapshot o aplicabilidad.
+   */
+  private async getSubmissionAccessState(
+    manager: EntityManager,
+    campaignId: string,
+    schoolId: string,
+  ) {
+    const submission = await manager.findOne(SurveySubmission, {
+      where: { campaignId, schoolId },
+      relations: { campaign: true },
+    });
+    if (!submission)
+      throw new NotFoundException(
+        'Todavía no existe una presentación para esta campaña.',
+      );
     return submission;
   }
 
@@ -756,14 +917,14 @@ export class SubmissionsService {
     submission: SurveySubmission,
     rectification: {
       id: string | null;
-      isRectified: boolean;
+      isEvaluationReady: boolean;
       snapshot: SurveySubmission['schoolProfileSnapshot'];
     },
     actorUserId: string,
   ) {
     if (
       submission.status !== SubmissionStatus.Draft ||
-      !rectification.isRectified ||
+      !rectification.isEvaluationReady ||
       !rectification.id ||
       !rectification.snapshot ||
       (submission.schoolRectificationId === rectification.id &&
@@ -799,6 +960,7 @@ export class SubmissionsService {
     manager: EntityManager,
     submission: SurveySubmission,
     version = submission.surveyVersion,
+    options: { readOnly?: boolean } = {},
   ) {
     if (
       !version ||
@@ -808,8 +970,17 @@ export class SubmissionsService {
       throw new ConflictException(
         'La versión asociada a la presentación no está disponible.',
       );
+    const readOnly = options.readOnly ?? false;
+    if (submission.status === SubmissionStatus.Draft && !readOnly)
+      this.surveyApplicability.assertVersionApplicabilitySafe(
+        version,
+        submission.schoolProfileSnapshot,
+      );
     const stored = submission.applicabilityDecisions ?? [];
-    if (submission.status === SubmissionStatus.Submitted && stored.length)
+    if (
+      (submission.status === SubmissionStatus.Submitted || readOnly) &&
+      stored.length
+    )
       return this.applicabilityFromStored(version, stored);
 
     const evaluated = this.surveyApplicability.evaluate(
@@ -818,13 +989,14 @@ export class SubmissionsService {
     );
     if (
       submission.status === SubmissionStatus.Draft &&
+      !readOnly &&
       !this.sameApplicabilityDecisions(stored, evaluated.decisions)
     )
       await this.persistApplicability(manager, submission, evaluated);
     return {
       ...evaluated,
       source:
-        submission.status === SubmissionStatus.Submitted
+        submission.status === SubmissionStatus.Submitted || readOnly
           ? ('reconstructed' as const)
           : evaluated.source,
     };
@@ -996,11 +1168,17 @@ export class SubmissionsService {
     };
   }
 
-  private blockingReason(schoolActive: boolean, rectified: boolean) {
+  private blockingReason(
+    schoolActive: boolean,
+    isConfirmed: boolean,
+    isEvaluationReady: boolean,
+  ) {
     if (!schoolActive)
       return 'El establecimiento está inactivo y no puede iniciar evaluaciones.';
-    if (!rectified)
-      return 'Debés completar la rectificación anual antes de comenzar.';
+    if (!isConfirmed)
+      return 'Debés confirmar la ficha institucional anual antes de comenzar.';
+    if (!isEvaluationReady)
+      return 'La ficha anual está confirmada, pero requiere actualización antes de comenzar.';
     return null;
   }
 
@@ -1010,6 +1188,25 @@ export class SubmissionsService {
       campaign.status === CampaignStatus.Active &&
       campaign.startsAt.getTime() <= now &&
       campaign.endsAt.getTime() >= now
+    );
+  }
+
+  /**
+   * Un borrador histórico existe por la propia presentación, aunque su
+   * asignación haya sido retirada. No se consideran campañas futuras ni
+   * campañas abiertas: esas continúan en el flujo operativo habitual.
+   */
+  private isExpiredDraft(submission: SurveySubmission, now: number) {
+    if (
+      submission.status !== SubmissionStatus.Draft ||
+      !submission.campaign ||
+      submission.campaign.startsAt.getTime() > now
+    )
+      return false;
+    return (
+      submission.campaign.endsAt.getTime() < now ||
+      submission.campaign.status === CampaignStatus.Closed ||
+      submission.campaign.status === CampaignStatus.Archived
     );
   }
 

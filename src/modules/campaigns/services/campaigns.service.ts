@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, EntityManager, LessThanOrEqual, MoreThan } from 'typeorm';
+import { DataSource, EntityManager, IsNull, LessThanOrEqual } from 'typeorm';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { SurveyVersionStatus } from '../../surveys/entities/survey-version-status.enum';
@@ -15,6 +15,7 @@ import { CreateCampaignDto } from '../dto/create-campaign.dto';
 import { ListCampaignsQueryDto } from '../dto/list-campaigns-query.dto';
 import { UpdateCampaignDto } from '../dto/update-campaign.dto';
 import { CampaignStatus } from '../entities/campaign-status.enum';
+import { CampaignSchool } from '../entities/campaign-school.entity';
 import { Campaign } from '../entities/campaign.entity';
 import {
   mendozaDateString,
@@ -112,18 +113,26 @@ export class CampaignsService {
   }
 
   /** Devuelve campañas activas cuyo período está abierto en este instante. */
-  async operationalCampaigns() {
+  async operationalCampaigns(schoolId: string) {
     await this.closeExpiredCampaigns();
     const now = new Date();
-    return this.dataSource.getRepository(Campaign).find({
-      where: {
-        status: CampaignStatus.Active,
-        startsAt: LessThanOrEqual(now),
-        endsAt: MoreThan(now),
-      },
-      relations: { surveyVersion: { survey: true } },
-      order: { startsAt: 'ASC', name: 'ASC' },
-    });
+    return this.dataSource
+      .getRepository(Campaign)
+      .createQueryBuilder('campaign')
+      .innerJoin(
+        CampaignSchool,
+        'assignment',
+        'assignment.campaignId = campaign.id AND assignment.schoolId = :schoolId AND assignment.removedAt IS NULL',
+        { schoolId },
+      )
+      .innerJoinAndSelect('campaign.surveyVersion', 'version')
+      .innerJoinAndSelect('version.survey', 'survey')
+      .where('campaign.status = :status', { status: CampaignStatus.Active })
+      .andWhere('campaign.startsAt <= :now', { now })
+      .andWhere('campaign.endsAt > :now', { now })
+      .orderBy('campaign.startsAt', 'ASC')
+      .addOrderBy('campaign.name', 'ASC')
+      .getMany();
   }
 
   /**
@@ -235,6 +244,13 @@ export class CampaignsService {
 
       if (nextStatus === CampaignStatus.Active) {
         await this.assertPublishedVersion(manager, campaign.surveyVersionId);
+        const assignedSchools = await manager.count(CampaignSchool, {
+          where: { campaignId: campaign.id, removedAt: IsNull() },
+        });
+        if (!assignedSchools)
+          throw new ConflictException(
+            'No se puede activar una campaña sin escuelas asignadas.',
+          );
         if (campaign.endsAt.getTime() <= Date.now())
           throw new ConflictException(
             'No se puede activar una campaña cuya fecha de cierre ya venció.',

@@ -5,7 +5,6 @@ import {
   IsBoolean,
   IsInt,
   IsNotEmpty,
-  IsNumber,
   IsObject,
   IsOptional,
   IsString,
@@ -28,7 +27,7 @@ export class CreateEvaluationConfigurationDto {
   @IsString() @IsNotEmpty() @MaxLength(50) versionCode: string;
   @IsString() @IsNotEmpty() @MaxLength(160) name: string;
   @IsOptional() @IsString() @MaxLength(2000) description?: string;
-  @IsNumber({ maxDecimalPlaces: 8 })
+  @IsInt()
   @Min(0)
   @Max(100)
   mentalHealthCriticalThreshold: number;

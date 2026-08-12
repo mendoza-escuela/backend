@@ -2,20 +2,36 @@
 
 ## Universo de escuelas
 
-El modelo actual utiliza campañas de padrón abierto y no posee una asignación
-cerrada campaña–escuela. El seguimiento incluye:
+El universo se define explícitamente mediante `campaign_schools`. El
+seguimiento incluye sólo asignaciones vigentes (`removed_at IS NULL`) de la
+campaña seleccionada, incluso si la escuela fue desactivada posteriormente.
 
-- escuelas registradas hasta la fecha de cierre de la campaña;
-- escuelas activas e inactivas;
-- toda escuela que ya posea una presentación para la campaña, aun ante una
-  inconsistencia histórica de fechas.
+Mientras la campaña está en borrador se pueden incorporar, reactivar y quitar
+escuelas. No se permite quitar una escuela que ya tenga una presentación. Al
+activar se exige una versión publicada y al menos una escuela asignada.
 
-Para un cierre manual anticipado se usa `closed_at` cuando es anterior a
-`ends_at`. De este modo, escuelas creadas después del cierre no se incorporan
-retroactivamente a campañas históricas.
+Durante una campaña activa el universo admite únicamente incorporaciones: una
+escuela habilitada puede agregarse de forma manual, masiva o por filtros y queda
+disponible inmediatamente dentro del período de carga. No se permiten bajas en
+este estado, de modo que una incorporación no puede retirar ni alterar el
+histórico de otra escuela. Las campañas cerradas o archivadas son de sólo
+lectura; también se rechaza el alta si la fecha de cierre ya venció aunque el
+proceso periódico todavía no haya persistido el estado `closed`.
 
-Una futura selección explícita de establecimientos requerirá una entidad de
-asignación y una definición funcional adicional.
+Cada alta conserva en `campaign_schools` la fecha, el origen y el administrador
+responsable. La misma transacción registra en auditoría el estado de la campaña,
+las escuelas efectivamente incorporadas y las asignaciones reactivadas. La
+restricción única por campaña y escuela hace que una solicitud repetida sea
+idempotente. Si la escuela es desactivada después, su asignación y su historial
+permanecen en el universo, aunque el acceso y las nuevas cargas queden
+bloqueados.
+
+La migración `AddCampaignSchoolsAndSchoolContacts1720375219000` conserva las
+campañas existentes: crea asignaciones para el universo histórico anterior y
+para cualquier escuela con una presentación ya registrada.
+
+La fecha `inclusionCutoff` del resumen se mantiene como metadato histórico de
+cierre; ya no determina qué escuelas integran el denominador.
 
 ## Estados
 
@@ -57,7 +73,10 @@ GET /api/admin/campaigns/:id/tracking
 ```
 
 El listado admite `search`, `status`, `sortBy`, `sortDirection`, `page` y
-`limit`. La búsqueda, filtros, orden y paginación se ejecutan en PostgreSQL.
+`limit` (máximo 100). La búsqueda, filtros, orden y paginación se ejecutan en
+PostgreSQL. El total usa una consulta separada; después se obtiene sólo la
+página de IDs con `LIMIT/OFFSET` y los detalles, respuestas y aplicabilidad se
+calculan exclusivamente para esos IDs. El orden estable usa nombre, CUE e ID.
 
 Todos los endpoints requieren JWT, contraseña inicial cambiada y rol `admin`.
 
@@ -72,11 +91,49 @@ Si el snapshot histórico está incompleto, la fila no se elimina: se devuelve
 
 ## Índices
 
-La migración `1720375217000-AddCampaignTrackingIndexes.ts` agrega índices para:
+Las migraciones de seguimiento y asignación agregan índices para:
 
 - campaña y último guardado;
 - campaña y fecha de envío;
-- fecha de incorporación de la escuela.
+- campaña y estado de presentación;
+- campaña y asignación vigente;
+- escuela y asignación vigente;
+- campaña, fecha de asignación y escuela para asignaciones no removidas.
 
 Se reutilizan además los índices existentes de campaña/estado, unicidad
 escuela/campaña y búsqueda por CUE o nombre.
+
+## Verificación con 2.500 escuelas
+
+La prueba versionada
+`test/campaign-tracking.pagination.e2e-spec.ts` carga 2.500 escuelas en
+PostgreSQL, distribuidas entre los tres estados, y verifica:
+
+- 20 elementos como máximo con `limit=20`;
+- páginas consecutivas sin repetición ni solapamiento;
+- orden ascendente y descendente estable;
+- búsqueda exacta por CUE;
+- cantidad y contenido de `not_started`, `draft` y `submitted`;
+- payload menor a 100 KB por página;
+- tiempo menor a 5 segundos por llamada para tolerar variaciones de CI.
+
+Medición local de referencia del 10 de agosto de 2026 sobre PostgreSQL 17.10
+en Docker, con la API y la base en el mismo equipo:
+
+| Escenario | Tiempo | Payload |
+| --- | ---: | ---: |
+| Página 1, 20 filas | 31,45 ms | 5.616 bytes |
+| Página 2, 20 filas | 18,79 ms | 5.616 bytes |
+| Orden descendente, 20 filas | 19,36 ms | 11.196 bytes |
+| Búsqueda por CUE, 1 fila | 13,32 ms | 599 bytes |
+| Estado no iniciada, 20 filas | 24,70 ms | 5.614 bytes |
+| Estado borrador, 20 filas | 22,38 ms | 10.634 bytes |
+| Estado enviada, 20 filas | 21,96 ms | 11.194 bytes |
+
+Son valores diagnósticos, no un SLA. Para repetir la prueba contra una base
+vacía con todas las migraciones aplicadas:
+
+```bash
+TEST_DATABASE_URL=postgresql://usuario:clave@localhost:5432/base_prueba \
+  npm run test:tracking:integration
+```

@@ -2,16 +2,14 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { SurveyDimensionInputDto } from '../dto/update-survey-version.dto';
 import { SurveyQuestionType } from '../entities/survey-question-type.enum';
 import { isForbiddenInstitutionalSurveyOption } from '../policies/institutional-survey-option.policy';
-import {
-  isOfficialSurveyStructure,
-  OfficialSurveyDimensionCode,
-} from '../templates/official-survey-dimensions.template';
+import { getOfficialScoreProfile } from '../policies/official-survey-scoring.policy';
+import { isOfficialSurveyStructure } from '../templates/official-survey-dimensions.template';
 
 @Injectable()
 export class SurveyStructureValidator {
   /**
-   * Valida únicamente consistencia estructural. No introduce puntajes,
-   * condiciones, exclusiones ni ninguna otra regla funcional pendiente.
+   * Valida consistencia estructural y que los puntajes configurados pertenezcan
+   * a la escala institucional aprobada. No infiere puntajes ni condiciones.
    */
   validate(dimensions: SurveyDimensionInputDto[], requireContent = false) {
     const errors = this.inspect(dimensions, requireContent);
@@ -97,11 +95,7 @@ export class SurveyStructureValidator {
               errors.push(
                 `${questionPath} / opción ${option.value}: el puntaje debe ser un entero entre 0 y 100.`,
               );
-            const institutionalScores =
-              dimension.code.trim().toLowerCase() ===
-              String(OfficialSurveyDimensionCode.MentalHealth)
-                ? [0, 33, 66, 100]
-                : [0, 50, 100];
+            const institutionalScores = getOfficialScoreProfile(dimension.code);
             if (
               isInstitutional &&
               option.score !== undefined &&

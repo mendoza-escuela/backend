@@ -1,5 +1,6 @@
 import { DataSource } from 'typeorm';
 import { Campaign } from '../../campaigns/entities/campaign.entity';
+import { CampaignSchool } from '../../campaigns/entities/campaign-school.entity';
 import { School } from '../../schools/entities/school.entity';
 import { SurveySubmission } from '../../submissions/entities/survey-submission.entity';
 import { SubmissionStatus } from '../../submissions/entities/submission-status.enum';
@@ -43,6 +44,13 @@ describe('AdminSchoolResultDetailService', () => {
     repositories.set(SurveySubmission, {
       findOne: jest.fn().mockResolvedValue(null),
     });
+    repositories.set(CampaignSchool, {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'assignment',
+        campaignId: campaign.id,
+        schoolId: school.id,
+      }),
+    });
     repositories.set(EvaluationResult, {
       findOne: jest.fn().mockResolvedValue(null),
     });
@@ -82,10 +90,7 @@ describe('AdminSchoolResultDetailService', () => {
   });
 
   it('rechaza una escuela posterior al cierre que no tiene historial', async () => {
-    repositories.get(School)?.findOneBy?.mockResolvedValueOnce({
-      ...school,
-      createdAt: new Date('2027-01-01'),
-    });
+    repositories.get(CampaignSchool)?.findOne?.mockResolvedValueOnce(null);
     await expect(service.get(campaign.id, school.id)).rejects.toThrow(
       'La escuela no estaba incluida en el universo de esta campaña.',
     );

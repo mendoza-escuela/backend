@@ -5,12 +5,14 @@ import { AuthSession } from '../auth/entities/auth-session.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UserSchool } from '../users/entities/user-school.entity';
 import { User } from '../users/entities/user.entity';
+import { UsersModule } from '../users/users.module';
 import { PasswordChangeRequiredGuard } from '../../common/guards/password-change-required.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { AdminSchoolsController } from './controllers/admin-schools.controller';
 import { SchoolPortalController } from './controllers/school-portal.controller';
 import { SchoolUserAssignmentHistory } from './entities/school-user-assignment-history.entity';
 import { School } from './entities/school.entity';
+import { SchoolContact } from './entities/school-contact.entity';
 import { SchoolRectification } from './entities/school-rectification.entity';
 import { EducationLevelCatalog } from './entities/education-level-catalog.entity';
 import { SchoolEducationLevel } from './entities/school-education-level.entity';
@@ -21,8 +23,10 @@ import { SchoolsService } from './services/schools.service';
 
 @Module({
   imports: [
+    UsersModule,
     TypeOrmModule.forFeature([
       School,
+      SchoolContact,
       SchoolRectification,
       SchoolRectificationEducationLevel,
       SchoolEducationLevel,

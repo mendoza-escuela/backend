@@ -1,3 +1,5 @@
+import { parseFrontendOrigin } from './frontend-origins';
+
 type Environment = Record<string, string | number | undefined>;
 
 const requiredAppEnvironmentVariables = [
@@ -24,6 +26,8 @@ export function validateEnvironment(config: Environment) {
       `Missing required environment variables: ${missingAppVariables.join(', ')}`,
     );
   }
+
+  parseFrontendOrigin(String(config.FRONTEND_URL));
 
   if (config.DATABASE_URL) {
     return validateNumericEnvironment(config);
@@ -57,20 +61,23 @@ function validateNumericEnvironment(config: Environment) {
     'LOGIN_MAX_ATTEMPTS',
     'LOGIN_LOCK_MINUTES',
     'PASSWORD_RESET_TOKEN_EXPIRES_MINUTES',
+    'TRUST_PROXY_HOPS',
+    'SMTP_PORT',
   ]) {
     const value = Number(config[variableName]);
-    if (config[variableName] && (!Number.isInteger(value) || value <= 0)) {
-      throw new Error(`${variableName} must be a positive integer.`);
+    const allowsZero = variableName === 'TRUST_PROXY_HOPS';
+    if (
+      config[variableName] !== undefined &&
+      config[variableName] !== '' &&
+      (!Number.isInteger(value) || (allowsZero ? value < 0 : value <= 0))
+    ) {
+      throw new Error(
+        `${variableName} must be ${allowsZero ? 'a non-negative' : 'a positive'} integer.`,
+      );
     }
   }
 
-  const smtpValues = [
-    'SMTP_HOST',
-    'SMTP_PORT',
-    'SMTP_USER',
-    'SMTP_PASSWORD',
-    'SMTP_FROM',
-  ];
+  const smtpValues = ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASSWORD', 'SMTP_FROM'];
   const configuredSmtpValues = smtpValues.filter((name) => config[name]);
   if (
     configuredSmtpValues.length > 0 &&

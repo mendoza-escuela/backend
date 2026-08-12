@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -12,6 +13,7 @@ import { AuthenticatedUser } from '../../../common/types/authenticated-user.type
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { AuthSession } from '../../auth/entities/auth-session.entity';
 import { assertStrongPassword } from '../../auth/utils/password-policy';
+import { MailService } from '../../mail/services/mail.service';
 import { School } from '../../schools/entities/school.entity';
 import { SchoolUserAssignmentHistory } from '../../schools/entities/school-user-assignment-history.entity';
 import { CreateUserDto } from '../dto/create-user.dto';
@@ -24,7 +26,12 @@ import { User } from '../entities/user.entity';
 
 @Injectable()
 export class AdminUsersService {
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  private readonly logger = new Logger(AdminUsersService.name);
+
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly mailService?: MailService,
+  ) {}
 
   async list(query: ListUsersQueryDto) {
     const builder = this.dataSource
@@ -134,63 +141,88 @@ export class AdminUsersService {
   }
 
   async create(dto: CreateUserDto, actor: AuthenticatedUser) {
-    assertStrongPassword(dto.temporaryPassword);
     let userId: string;
     try {
       userId = await this.dataSource.transaction(async (manager) => {
-        await this.assertUniqueEmail(manager, dto.email);
-        const school = await this.resolveSchool(
-          manager,
-          dto.role,
-          dto.schoolId,
-        );
-        const user = await manager.save(
-          User,
-          manager.create(User, {
-            firstName: this.cleanName(dto.firstName),
-            lastName: this.cleanName(dto.lastName),
-            email: dto.email.trim().toLowerCase(),
-            passwordHash: await bcrypt.hash(dto.temporaryPassword, 12),
-            role: dto.role,
-            isActive: dto.isActive ?? true,
-            mustChangePassword: true,
-            lastLoginAt: null,
-            failedLoginAttempts: 0,
-            lockedUntil: null,
-          }),
-        );
-        if (school) {
-          await manager.save(UserSchool, {
-            userId: user.id,
-            schoolId: school.id,
-          });
-          await this.assignmentHistory(
-            manager,
-            school.id,
-            null,
-            user.id,
-            actor.id,
-            'assigned',
-          );
-        }
-        await this.audit(manager, actor.id, 'USER_CREATED', user.id, {
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email,
-          role: user.role,
-          schoolId: school?.id ?? null,
-          isActive: user.isActive,
-          mustChangePassword: true,
-        });
+        const user = await this.createInTransaction(manager, dto, actor);
         return user.id;
       });
     } catch (error) {
-      if (this.isUniqueViolation(error)) {
-        throw new ConflictException('Ya existe un usuario con ese correo.');
+      if (this.isEmailUniqueViolation(error)) {
+        throw this.duplicateEmailConflict();
       }
       throw error;
     }
-    return this.findOne(userId);
+    const user = await this.findOne(userId);
+    const invitationEmailSent = await this.sendWelcomeEmail(userId, {
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      temporaryPassword: dto.temporaryPassword,
+    });
+    return { ...user, invitationEmailSent };
+  }
+
+  /**
+   * Crea y, cuando corresponde, asocia un usuario dentro de una transacción
+   * administrada por el flujo llamador. Permite que el alta de colegio y su
+   * responsable se confirmen o reviertan como una sola operación.
+   */
+  async createInTransaction(
+    manager: EntityManager,
+    dto: CreateUserDto,
+    actor: AuthenticatedUser,
+  ): Promise<User> {
+    assertStrongPassword(dto.temporaryPassword);
+    await this.assertUniqueEmail(manager, dto.email);
+    const school = await this.resolveSchool(manager, dto.role, dto.schoolId);
+    const user = await manager.save(
+      User,
+      manager.create(User, {
+        firstName: this.cleanName(dto.firstName),
+        lastName: this.cleanName(dto.lastName),
+        email: dto.email.trim().toLowerCase(),
+        passwordHash: await bcrypt.hash(dto.temporaryPassword, 12),
+        role: dto.role,
+        isActive: dto.isActive ?? true,
+        mustChangePassword: true,
+        lastLoginAt: null,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      }),
+    );
+    if (school) {
+      await manager.save(UserSchool, {
+        userId: user.id,
+        schoolId: school.id,
+      });
+      await this.assignmentHistory(
+        manager,
+        school.id,
+        null,
+        user.id,
+        actor.id,
+        'assigned',
+      );
+    }
+    await this.audit(manager, actor.id, 'USER_CREATED', user.id, {
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      role: user.role,
+      schoolId: school?.id ?? null,
+      isActive: user.isActive,
+      mustChangePassword: true,
+    });
+    return user;
+  }
+
+  /** Envía las credenciales luego de confirmar la transacción de alta. */
+  sendInvitation(
+    userId: string,
+    account: Parameters<MailService['sendAccountWelcome']>[0],
+  ) {
+    return this.sendWelcomeEmail(userId, account);
   }
 
   async update(id: string, dto: UpdateUserDto, actor: AuthenticatedUser) {
@@ -198,10 +230,12 @@ export class AdminUsersService {
       await this.dataSource.transaction(async (manager) => {
         const user = await manager.getRepository(User).findOne({
           where: { id },
-          relations: { userSchools: { school: true } },
           lock: { mode: 'pessimistic_write' },
         });
         if (!user) throw new NotFoundException('Usuario no encontrado.');
+        const currentAssociation = await manager.findOneBy(UserSchool, {
+          userId: id,
+        });
         if (actor.id === id && dto.role && dto.role !== UserRole.Admin) {
           throw new ForbiddenException(
             'No podés quitarte tu propio rol administrador.',
@@ -214,9 +248,12 @@ export class AdminUsersService {
           await this.assertUniqueEmail(manager, dto.email, id);
         }
 
-        const before = this.snapshot(user);
+        const before = {
+          ...this.snapshot(user),
+          schoolId: currentAssociation?.schoolId ?? null,
+        };
         const targetRole = dto.role ?? user.role;
-        const currentSchoolId = user.userSchools[0]?.schoolId;
+        const currentSchoolId = currentAssociation?.schoolId;
         const requestedSchoolId =
           targetRole === UserRole.Admin
             ? undefined
@@ -228,7 +265,16 @@ export class AdminUsersService {
           targetRole,
           requestedSchoolId,
           id,
+          true,
+          true,
         );
+        const displacedAssociation = school
+          ? await manager.findOneBy(UserSchool, { schoolId: school.id })
+          : null;
+        const displacedUserId =
+          displacedAssociation?.userId !== id
+            ? (displacedAssociation?.userId ?? null)
+            : null;
 
         user.firstName = dto.firstName
           ? this.cleanName(dto.firstName)
@@ -242,6 +288,16 @@ export class AdminUsersService {
         await this.assertActiveAdministratorRemains(manager, user, before);
         await manager.save(User, user);
         await manager.delete(UserSchool, { userId: id });
+        if (displacedUserId) {
+          await manager.delete(UserSchool, { userId: displacedUserId });
+          await this.audit(
+            manager,
+            actor.id,
+            'USER_SCHOOL_UNASSIGNED',
+            displacedUserId,
+            { schoolId: { from: school?.id ?? null, to: null } },
+          );
+        }
         if (school)
           await manager.save(UserSchool, { userId: id, schoolId: school.id });
         if (currentSchoolId !== school?.id) {
@@ -258,10 +314,10 @@ export class AdminUsersService {
             await this.assignmentHistory(
               manager,
               school.id,
-              null,
+              displacedUserId,
               id,
               actor.id,
-              'assigned',
+              displacedUserId ? 'replaced' : 'assigned',
             );
         }
 
@@ -283,8 +339,8 @@ export class AdminUsersService {
         }
       });
     } catch (error) {
-      if (this.isUniqueViolation(error)) {
-        throw new ConflictException('Ya existe un usuario con ese correo.');
+      if (this.isEmailUniqueViolation(error)) {
+        throw this.duplicateEmailConflict();
       }
       throw error;
     }
@@ -343,6 +399,28 @@ export class AdminUsersService {
     });
   }
 
+  /**
+   * Intenta entregar las credenciales una vez confirmada la transacción de
+   * alta. Un problema de SMTP no revierte la cuenta ya creada ni expone la
+   * contraseña temporal en logs; el estado se devuelve al administrador.
+   */
+  private async sendWelcomeEmail(
+    userId: string,
+    account: Parameters<MailService['sendAccountWelcome']>[0],
+  ): Promise<boolean> {
+    if (!this.mailService?.isConfigured()) return false;
+
+    try {
+      await this.mailService.sendAccountWelcome(account);
+      return true;
+    } catch {
+      this.logger.error(
+        `Account welcome email could not be sent for user ${userId}.`,
+      );
+      return false;
+    }
+  }
+
   private async loadUser(id: string): Promise<User | null> {
     return this.dataSource.getRepository(User).findOne({
       where: { id },
@@ -362,8 +440,7 @@ export class AdminUsersService {
         email: email.trim().toLowerCase(),
       });
     if (exceptId) builder.andWhere('user.id <> :exceptId', { exceptId });
-    if (await builder.getExists())
-      throw new ConflictException('Ya existe un usuario con ese correo.');
+    if (await builder.getExists()) throw this.duplicateEmailConflict();
   }
 
   private async resolveSchool(
@@ -371,6 +448,8 @@ export class AdminUsersService {
     role: UserRole,
     schoolId?: string,
     exceptUserId?: string,
+    allowUnassigned = false,
+    allowOccupied = false,
   ) {
     if (role === UserRole.Admin) {
       if (schoolId)
@@ -379,9 +458,10 @@ export class AdminUsersService {
         );
       return null;
     }
+    if (!schoolId && allowUnassigned) return null;
     if (!schoolId)
       throw new BadRequestException(
-        'El rol Colegio requiere un establecimiento asociado.',
+        'El rol Escuela requiere un establecimiento asociado.',
       );
     const school = await manager.findOneBy(School, { id: schoolId });
     if (!school)
@@ -391,7 +471,11 @@ export class AdminUsersService {
     });
     if (!school.isActive && existingAssociation?.userId !== exceptUserId)
       throw new BadRequestException('El colegio seleccionado está inactivo.');
-    if (existingAssociation && existingAssociation.userId !== exceptUserId) {
+    if (
+      existingAssociation &&
+      existingAssociation.userId !== exceptUserId &&
+      !allowOccupied
+    ) {
       throw new ConflictException(
         'El colegio ya tiene un usuario asociado. Reemplazalo desde el detalle del colegio.',
       );
@@ -454,7 +538,7 @@ export class AdminUsersService {
     previousUserId: string | null,
     newUserId: string | null,
     actorUserId: string,
-    action: 'assigned' | 'unassigned',
+    action: 'assigned' | 'unassigned' | 'replaced',
   ) {
     return manager.save(SchoolUserAssignmentHistory, {
       schoolId,
@@ -495,16 +579,25 @@ export class AdminUsersService {
     );
   }
 
-  private isUniqueViolation(error: unknown): boolean {
+  private isEmailUniqueViolation(error: unknown): boolean {
     if (!error || typeof error !== 'object') return false;
     const databaseError = error as {
       code?: string;
-      driverError?: { code?: string };
+      constraint?: string;
+      driverError?: { code?: string; constraint?: string };
     };
-    return (
-      databaseError.code === '23505' ||
-      databaseError.driverError?.code === '23505'
-    );
+    const code = databaseError.code ?? databaseError.driverError?.code;
+    const constraint =
+      databaseError.constraint ?? databaseError.driverError?.constraint;
+    return code === '23505' && constraint === 'IDX_users_email_unique';
+  }
+
+  private duplicateEmailConflict() {
+    return new ConflictException({
+      code: 'USER_EMAIL_CONFLICT',
+      field: 'email',
+      message: 'Ya existe un usuario con ese correo.',
+    });
   }
 
   private toResponse(user: User) {

@@ -37,8 +37,8 @@ export class BulkUserImportService {
   template(): Buffer {
     const content = [
       'nombre,apellido,correo,rol,colegio_cue,contrasena_temporal,estado',
-      'María,Pérez,maria.perez@escuela.edu.ar,Colegio,500012300,Temporal!2026Clave,activo',
-      'Juan,Gómez,juan.gomez@mendoza.gov.ar,Administrador,,Temporal!2026Admin,activo',
+      'María,Pérez,maria.perez@escuela.edu.ar,Escuela,500012300,Temporal!2026Clave,activo',
+      'Juan,Gómez,juan.gomez@mendoza.gov.ar,Administrador Central,,Temporal!2026Admin,activo',
     ].join('\r\n');
     return Buffer.from(`\uFEFF${content}`, 'utf8');
   }
@@ -50,7 +50,12 @@ export class BulkUserImportService {
 
   async import(file: Express.Multer.File, actor: AuthenticatedUser) {
     const validated = await this.readAndValidate(file);
-    const imported: Array<{ line: number; id: string; email: string }> = [];
+    const imported: Array<{
+      line: number;
+      id: string;
+      email: string;
+      invitationEmailSent: boolean;
+    }> = [];
     const errors = validated
       .filter((row) => row.errors.length > 0)
       .map((row) => ({ line: row.line, email: row.email, errors: row.errors }));
@@ -71,7 +76,12 @@ export class BulkUserImportService {
           },
           actor,
         );
-        imported.push({ line: row.line, id: user.id, email: user.email });
+        imported.push({
+          line: row.line,
+          id: user.id,
+          email: user.email,
+          invitationEmailSent: user.invitationEmailSent,
+        });
       } catch (error) {
         errors.push({
           line: row.line,
@@ -85,6 +95,12 @@ export class BulkUserImportService {
       totalRows: validated.length,
       importedCount: imported.length,
       errorCount: errors.length,
+      invitationEmailSentCount: imported.filter(
+        (user) => user.invitationEmailSent,
+      ).length,
+      invitationEmailPendingCount: imported.filter(
+        (user) => !user.invitationEmailSent,
+      ).length,
       imported,
       errors: errors.sort((a, b) => a.line - b.line),
     };
@@ -256,7 +272,8 @@ export class BulkUserImportService {
         row.errors.push('Apellido inválido.');
       if (!isEmail(email) || email.length > 255)
         row.errors.push('Correo inválido.');
-      if (!role) row.errors.push('Rol inválido; usá Administrador o Colegio.');
+      if (!role)
+        row.errors.push('Rol inválido; usá Administrador Central o Escuela.');
       if (isActive === null)
         row.errors.push('Estado inválido; usá activo o bloqueado.');
       if (existingEmails.has(email))
@@ -264,7 +281,7 @@ export class BulkUserImportService {
       if ((occurrences.get(email) ?? 0) > 1)
         row.errors.push('El correo está repetido dentro del archivo.');
       if (role === UserRole.School && !row.schoolCode)
-        row.errors.push('El rol Colegio requiere colegio_cue.');
+        row.errors.push('El rol Escuela requiere colegio_cue.');
       if (role === UserRole.School && row.schoolCode && !school)
         row.errors.push('El código de colegio no existe.');
       if (school && occupiedSchoolIds.has(school.id))
@@ -338,9 +355,13 @@ export class BulkUserImportService {
   }
 
   private parseRole(value: string): UserRole | null {
-    const normalized = value.trim().toLowerCase();
-    if (['admin', 'administrador'].includes(normalized)) return UserRole.Admin;
-    if (['school', 'colegio'].includes(normalized)) return UserRole.School;
+    const normalized = value.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (
+      ['admin', 'administrador', 'administrador central'].includes(normalized)
+    )
+      return UserRole.Admin;
+    if (['school', 'colegio', 'escuela'].includes(normalized))
+      return UserRole.School;
     return null;
   }
 

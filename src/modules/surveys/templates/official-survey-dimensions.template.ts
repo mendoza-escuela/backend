@@ -76,6 +76,13 @@ export const OFFICIAL_SOCIOEMOTIONAL_QUESTION_NUMBERS = Object.freeze([
   41, 42, 43,
 ] as const);
 
+export const OFFICIAL_SURVEY_QUESTION_CODES = Object.freeze(
+  Array.from(
+    { length: 60 },
+    (_, index) => `p${String(index + 1).padStart(3, '0')}`,
+  ),
+);
+
 /**
  * Genera una estructura nueva para una versión borrador. No incluye secciones
  * ni preguntas porque el cuestionario definitivo todavía no fue aprobado.
@@ -99,16 +106,35 @@ export function getOfficialDimensionCodeForQuestion(
     : null;
 }
 
+/**
+ * Reconoce el instrumento institucional por su espacio de nombres reservado.
+ * Los códigos de dimensión oficiales y p001-p060 no deben reutilizarse en
+ * cuestionarios personalizados.
+ */
 export function isOfficialSurveyStructure(
-  dimensions: ReadonlyArray<{ code: string }>,
+  dimensions: ReadonlyArray<{
+    code: string;
+    sections?: ReadonlyArray<{
+      questions?: ReadonlyArray<{ code: string }>;
+    }>;
+  }>,
 ): boolean {
   const officialCodes = new Set<string>(
     OFFICIAL_SURVEY_DIMENSIONS.map((dimension) => dimension.code),
   );
-  return (
-    dimensions.length > 0 &&
+  if (
     dimensions.some((dimension) =>
       officialCodes.has(dimension.code.trim().toLowerCase()),
     )
+  )
+    return true;
+
+  const officialQuestionCodes = new Set(OFFICIAL_SURVEY_QUESTION_CODES);
+  return dimensions.some((dimension) =>
+    (dimension.sections ?? []).some((section) =>
+      (section.questions ?? []).some((question) =>
+        officialQuestionCodes.has(question.code.trim().toLowerCase()),
+      ),
+    ),
   );
 }

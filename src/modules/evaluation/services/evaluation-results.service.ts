@@ -94,6 +94,14 @@ type StarDecision = {
   >;
 };
 
+type EvaluationCalculationOptions = {
+  /**
+   * Configuración histórica que debe reutilizar un recálculo. Los cálculos
+   * iniciales omiten esta opción y continúan usando la configuración activa.
+   */
+  configuration?: EvaluationConfiguration;
+};
+
 @Injectable()
 export class EvaluationResultsService {
   constructor(
@@ -117,6 +125,7 @@ export class EvaluationResultsService {
     applicability: SurveyApplicabilityResult,
     actorUserId: string | null,
     source: EvaluationCalculationSource,
+    options: EvaluationCalculationOptions = {},
   ): Promise<EvaluationResult> {
     const lockedSubmission = await manager.findOne(SurveySubmission, {
       where: { id: submission.id },
@@ -127,7 +136,8 @@ export class EvaluationResultsService {
       throw new NotFoundException('La presentación indicada no existe.');
     }
 
-    const configuration = await this.configurations.active(manager);
+    const configuration =
+      options.configuration ?? (await this.configurations.active(manager));
     const calculation = this.prepareCalculation(
       submission,
       surveyVersion,
@@ -243,70 +253,149 @@ export class EvaluationResultsService {
     actorUserId: string | null,
     source: EvaluationCalculationSource = 'single_recalculation',
   ): Promise<EvaluationResult> {
-    return this.dataSource.transaction(async (manager) => {
-      const lockedSubmission = await manager.findOne(SurveySubmission, {
-        where: { id: submissionId },
-        select: { id: true },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!lockedSubmission) {
-        throw new NotFoundException('La presentación indicada no existe.');
-      }
-
-      const submission = await manager.findOne(SurveySubmission, {
-        where: { id: submissionId },
-        relations: {
-          answers: { option: true },
-          applicabilityDecisions: true,
-          surveyVersion: {
-            survey: true,
-            dimensions: {
-              sections: {
-                questions: {
-                  options: true,
-                  applicabilityRules: { conditions: true },
-                },
-              },
-            },
-          },
-        },
-        order: {
-          surveyVersion: {
-            dimensions: {
-              order: 'ASC',
-              sections: {
-                order: 'ASC',
-                questions: {
-                  order: 'ASC',
-                  options: { order: 'ASC' },
-                  applicabilityRules: {
-                    order: 'ASC',
-                    conditions: { order: 'ASC' },
-                  },
-                },
-              },
-            },
-          },
-        },
-      });
-      if (!submission) {
-        throw new NotFoundException('La presentación indicada no existe.');
-      }
-      if (submission.status !== SubmissionStatus.Submitted) {
-        throw new ConflictException(
-          'Sólo pueden recalcularse presentaciones enviadas.',
-        );
-      }
-
-      return this.calculateAndPersist(
+    return this.dataSource.transaction((manager) =>
+      this.recalculateSubmissionWithManager(
         manager,
-        submission,
-        submission.surveyVersion,
-        this.applicabilityFromStoredDecisions(submission),
+        submissionId,
         actorUserId,
         source,
-      );
+      ),
+    );
+  }
+
+  /**
+   * Variante transaccional reutilizable por reparaciones controladas. La
+   * presentación se bloquea y todo el resultado se reconstruye desde sus
+   * respuestas y decisiones históricas persistidas.
+   */
+  async recalculateSubmissionWithManager(
+    manager: EntityManager,
+    submissionId: string,
+    actorUserId: string | null,
+    source: EvaluationCalculationSource = 'single_recalculation',
+  ): Promise<EvaluationResult> {
+    const lockedSubmission = await manager.findOne(SurveySubmission, {
+      where: { id: submissionId },
+      select: { id: true },
+      lock: { mode: 'pessimistic_write' },
     });
+    if (!lockedSubmission) {
+      throw new NotFoundException('La presentación indicada no existe.');
+    }
+
+    const submission = await manager.findOne(SurveySubmission, {
+      where: { id: submissionId },
+      relations: {
+        answers: { option: true },
+        applicabilityDecisions: true,
+        surveyVersion: {
+          survey: true,
+          dimensions: {
+            sections: {
+              questions: {
+                options: true,
+                applicabilityRules: { conditions: true },
+              },
+            },
+          },
+        },
+      },
+      order: {
+        surveyVersion: {
+          dimensions: {
+            order: 'ASC',
+            sections: {
+              order: 'ASC',
+              questions: {
+                order: 'ASC',
+                options: { order: 'ASC' },
+                applicabilityRules: {
+                  order: 'ASC',
+                  conditions: { order: 'ASC' },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!submission) {
+      throw new NotFoundException('La presentación indicada no existe.');
+    }
+    if (submission.status !== SubmissionStatus.Submitted) {
+      throw new ConflictException(
+        'Sólo pueden recalcularse presentaciones enviadas.',
+      );
+    }
+
+    const previousResult = await manager.findOne(EvaluationResult, {
+      where: { submissionId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!previousResult) {
+      throw new ConflictException({
+        code: 'EVALUATION_RECALCULATION_RESULT_REQUIRED',
+        message:
+          'La presentación no posee un resultado histórico que pueda recalcularse de forma segura.',
+      });
+    }
+    if (previousResult.algorithmVersion !== EVALUATION_ALGORITHM_VERSION) {
+      throw new ConflictException({
+        code: 'EVALUATION_RECALCULATION_ALGORITHM_DRIFT',
+        message:
+          'El resultado fue generado con otra versión del algoritmo y requiere una migración específica.',
+        storedAlgorithmVersion: previousResult.algorithmVersion,
+        currentAlgorithmVersion: EVALUATION_ALGORITHM_VERSION,
+      });
+    }
+    if (!previousResult.evaluationConfigurationId) {
+      throw new ConflictException({
+        code: 'EVALUATION_RECALCULATION_CONFIGURATION_REQUIRED',
+        message:
+          'El resultado no identifica la configuración histórica necesaria para recalcularlo.',
+      });
+    }
+
+    let historicalConfiguration: EvaluationConfiguration;
+    try {
+      historicalConfiguration = await this.configurations.get(
+        previousResult.evaluationConfigurationId,
+        manager,
+      );
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw new ConflictException({
+          code: 'EVALUATION_RECALCULATION_CONFIGURATION_REQUIRED',
+          message:
+            'La configuración histórica del resultado ya no está disponible.',
+        });
+      }
+      throw error;
+    }
+    if (
+      previousResult.evaluationConfigurationVersion &&
+      previousResult.evaluationConfigurationVersion !==
+        historicalConfiguration.versionCode
+    ) {
+      throw new ConflictException({
+        code: 'EVALUATION_RECALCULATION_CONFIGURATION_DRIFT',
+        message:
+          'La configuración histórica no coincide con la versión registrada en el resultado.',
+        storedConfigurationVersion:
+          previousResult.evaluationConfigurationVersion,
+        resolvedConfigurationVersion: historicalConfiguration.versionCode,
+      });
+    }
+
+    return this.calculateAndPersist(
+      manager,
+      submission,
+      submission.surveyVersion,
+      this.applicabilityFromStoredDecisions(submission),
+      actorUserId,
+      source,
+      { configuration: historicalConfiguration },
+    );
   }
 
   /**
@@ -1214,6 +1303,8 @@ export class EvaluationResultsService {
           snapshot.result.generalScore,
           'puntaje general',
         ),
+        numerator: Number(snapshot.result.numerator),
+        denominator: snapshot.result.denominator,
         stars: {
           available: snapshot.result.stars.value !== null,
           base: snapshot.result.stars.baseValue ?? snapshot.result.stars.value,

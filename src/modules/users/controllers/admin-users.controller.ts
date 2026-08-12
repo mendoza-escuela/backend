@@ -2,20 +2,19 @@ import {
   Body,
   Controller,
   Get,
-  Header,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
   Query,
   Req,
-  Res,
+  StreamableFile,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import type { Request, Response } from 'express';
+import type { Request } from 'express';
 import { Roles } from '../../../common/decorators/roles.decorator';
 import { PasswordChangeRequiredGuard } from '../../../common/guards/password-change-required.guard';
 import { RolesGuard } from '../../../common/guards/roles.guard';
@@ -51,13 +50,11 @@ export class AdminUsersController {
   }
 
   @Get('import/template')
-  @Header('Content-Type', 'text/csv; charset=utf-8')
-  template(@Res({ passthrough: true }) response: Response) {
-    response.setHeader(
-      'Content-Disposition',
-      'attachment; filename="plantilla-usuarios.csv"',
-    );
-    return this.bulkImportService.template();
+  template() {
+    return new StreamableFile(this.bulkImportService.template(), {
+      type: 'text/csv; charset=utf-8',
+      disposition: 'attachment; filename="plantilla-usuarios.csv"',
+    });
   }
 
   @Post('import/preview')

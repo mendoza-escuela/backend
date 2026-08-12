@@ -5,6 +5,7 @@ import ExcelJS from 'exceljs';
 import { DataSource } from 'typeorm';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { School } from '../entities/school.entity';
+import { SchoolContactType } from '../entities/school-contact.entity';
 import { SchoolsService } from './schools.service';
 
 type RawRecord = Record<string, string>;
@@ -28,6 +29,7 @@ type ValidatedSchoolRow = {
   referentLastName: string;
   referentEmail: string;
   referentPhone: string;
+  referentPosition: string;
   enrollment: number | null;
   characteristics: Record<string, string | number | boolean | null>;
   isActive: boolean | null;
@@ -44,9 +46,9 @@ export class BulkSchoolImportService {
 
   template() {
     const headers =
-      'cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_correo,referente_telefono,matricula,caracteristicas,estado';
+      'cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_cargo,referente_correo,referente_telefono,matricula,caracteristicas,estado';
     const example =
-      '500012300,Escuela Ejemplo,María González,1-001,Capital,Mendoza,Av. Ejemplo 123,5500,Primario,Estatal,Urbano,Completa,2614000000,escuela@ejemplo.edu.ar,Ana,Pérez,ana.perez@ejemplo.edu.ar,2614000001,350,"{""comedor"":true}",activo';
+      '500012300,Escuela Ejemplo,María González,1-001,Capital,Mendoza,Av. Ejemplo 123,5500,Primario,Estatal,Urbano,Completa,2614000000,escuela@ejemplo.edu.ar,Ana,Pérez,Secretaria,ana.perez@ejemplo.edu.ar,2614000001,350,"{""comedor"":true}",activo';
     return Buffer.from(`\uFEFF${headers}\r\n${example}`, 'utf8');
   }
 
@@ -56,7 +58,12 @@ export class BulkSchoolImportService {
 
   async import(file: Express.Multer.File, actor: AuthenticatedUser) {
     const rows = await this.readAndValidate(file);
-    const imported: Array<{ line: number; id: string; cue: string }> = [];
+    const imported: Array<{
+      line: number;
+      id: string;
+      cue: string;
+      invitationEmailSent: boolean;
+    }> = [];
     const errors = rows
       .filter((row) => row.errors.length)
       .map((row) => ({ line: row.line, cue: row.cue, errors: row.errors }));
@@ -82,13 +89,29 @@ export class BulkSchoolImportService {
             referentLastName: row.referentLastName,
             referentEmail: row.referentEmail || undefined,
             referentPhone: row.referentPhone || undefined,
+            contacts: [
+              {
+                type: SchoolContactType.Respondent,
+                firstName: row.referentFirstName,
+                lastName: row.referentLastName,
+                position: row.referentPosition || undefined,
+                email: row.referentEmail || undefined,
+                phone: row.referentPhone || undefined,
+              },
+            ],
             enrollment: row.enrollment!,
             characteristics: row.characteristics,
             isActive: row.isActive!,
           },
           actor,
         );
-        imported.push({ line: row.line, id: school.id, cue: school.cue });
+        imported.push({
+          line: row.line,
+          id: school.id,
+          cue: school.cue,
+          invitationEmailSent:
+            school.responsibleUserInvitationEmailSent === true,
+        });
       } catch (error) {
         errors.push({
           line: row.line,
@@ -100,6 +123,12 @@ export class BulkSchoolImportService {
     return {
       totalRows: rows.length,
       importedCount: imported.length,
+      invitationEmailSentCount: imported.filter(
+        ({ invitationEmailSent }) => invitationEmailSent,
+      ).length,
+      invitationEmailPendingCount: imported.filter(
+        ({ invitationEmailSent }) => !invitationEmailSent,
+      ).length,
       errorCount: errors.length,
       imported,
       errors: errors.sort((a, b) => a.line - b.line),
@@ -178,6 +207,7 @@ export class BulkSchoolImportService {
         referentLastName: record.referente_apellido.trim(),
         referentEmail: record.referente_correo.trim().toLowerCase(),
         referentPhone: record.referente_telefono.trim(),
+        referentPosition: this.optional(record, 'referente_cargo'),
         enrollment,
         characteristics: characteristics.value,
         isActive,
@@ -217,11 +247,15 @@ export class BulkSchoolImportService {
         if (value.length > max) row.errors.push(`${label} demasiado largo.`);
       if (row.email && (!isEmail(row.email) || row.email.length > 255))
         row.errors.push('Correo del colegio inválido.');
+      if (!row.referentEmail)
+        row.errors.push('El correo del referente responsable es obligatorio.');
+      else if (!isEmail(row.referentEmail) || row.referentEmail.length > 255)
+        row.errors.push('Correo del referente responsable inválido.');
       if (
-        row.referentEmail &&
-        (!isEmail(row.referentEmail) || row.referentEmail.length > 255)
+        row.referentPosition &&
+        (row.referentPosition.length < 2 || row.referentPosition.length > 160)
       )
-        row.errors.push('Correo del referente inválido.');
+        row.errors.push('Cargo del referente inválido.');
       if (enrollment === null || enrollment < 0 || enrollment > 1_000_000)
         row.errors.push('Matrícula inválida.');
       if (isActive === null)
@@ -374,6 +408,9 @@ export class BulkSchoolImportService {
   private integer(value: string) {
     const number = Number(value);
     return Number.isInteger(number) ? number : null;
+  }
+  private optional(record: RawRecord, key: string) {
+    return record[key]?.trim() ?? '';
   }
   private status(value: string): boolean | null {
     const normalized = value.trim().toLowerCase();

@@ -14,9 +14,11 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PasswordChangeRequiredGuard } from '../../common/guards/password-change-required.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { SchoolUserAssignmentHistory } from '../schools/entities/school-user-assignment-history.entity';
+import { MailModule } from '../mail/mail.module';
 
 @Module({
   imports: [
+    MailModule,
     TypeOrmModule.forFeature([
       User,
       UserSchool,
@@ -36,6 +38,6 @@ import { SchoolUserAssignmentHistory } from '../schools/entities/school-user-ass
     PasswordChangeRequiredGuard,
     RolesGuard,
   ],
-  exports: [UsersService, SchoolAccessGuard, TypeOrmModule],
+  exports: [UsersService, AdminUsersService, SchoolAccessGuard, TypeOrmModule],
 })
 export class UsersModule {}

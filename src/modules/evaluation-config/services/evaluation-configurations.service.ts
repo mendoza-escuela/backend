@@ -73,76 +73,86 @@ export class EvaluationConfigurationsService {
     return configuration;
   }
 
-  create(dto: CreateEvaluationConfigurationDto, actorUserId: string) {
-    return this.dataSource.transaction(async (manager) => {
-      this.validator.validate(dto.starRanges);
-      const configuration = manager.create(EvaluationConfiguration, {
-        ...this.values(dto),
-        status: EvaluationConfigurationStatus.Draft,
-        createdByUserId: actorUserId,
-        activatedAt: null,
-        activatedByUserId: null,
-        archivedAt: null,
-        archivedByUserId: null,
+  async create(dto: CreateEvaluationConfigurationDto, actorUserId: string) {
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        this.validator.validate(dto.starRanges);
+        const configuration = manager.create(EvaluationConfiguration, {
+          ...this.values(dto),
+          status: EvaluationConfigurationStatus.Draft,
+          createdByUserId: actorUserId,
+          activatedAt: null,
+          activatedByUserId: null,
+          archivedAt: null,
+          archivedByUserId: null,
+        });
+        const saved = await manager.save(configuration);
+        saved.starRanges = await manager.save(
+          EvaluationStarRange,
+          dto.starRanges.map((range) =>
+            manager.create(EvaluationStarRange, {
+              ...range,
+              lowerBound: String(range.lowerBound),
+              upperBound: String(range.upperBound),
+              configurationId: saved.id,
+            }),
+          ),
+        );
+        await this.audit(
+          manager,
+          actorUserId,
+          'EVALUATION_CONFIGURATION_CREATED',
+          saved.id,
+          null,
+          this.summary(saved),
+        );
+        return saved;
       });
-      const saved = await manager.save(configuration);
-      saved.starRanges = await manager.save(
-        EvaluationStarRange,
-        dto.starRanges.map((range) =>
-          manager.create(EvaluationStarRange, {
-            ...range,
-            lowerBound: String(range.lowerBound),
-            upperBound: String(range.upperBound),
-            configurationId: saved.id,
-          }),
-        ),
-      );
-      await this.audit(
-        manager,
-        actorUserId,
-        'EVALUATION_CONFIGURATION_CREATED',
-        saved.id,
-        null,
-        this.summary(saved),
-      );
-      return saved;
-    });
+    } catch (error) {
+      if (this.isVersionCodeViolation(error)) throw this.versionCodeConflict();
+      throw error;
+    }
   }
 
-  update(
+  async update(
     id: string,
     dto: UpdateEvaluationConfigurationDto,
     actorUserId: string,
   ) {
-    return this.dataSource.transaction(async (manager) => {
-      this.validator.validate(dto.starRanges);
-      const configuration = await this.get(id, manager);
-      this.assertDraft(configuration);
-      const before = this.summary(configuration);
-      Object.assign(configuration, this.values(dto));
-      await manager.save(configuration);
-      await manager.delete(EvaluationStarRange, { configurationId: id });
-      configuration.starRanges = await manager.save(
-        EvaluationStarRange,
-        dto.starRanges.map((range) =>
-          manager.create(EvaluationStarRange, {
-            ...range,
-            lowerBound: String(range.lowerBound),
-            upperBound: String(range.upperBound),
-            configurationId: id,
-          }),
-        ),
-      );
-      await this.audit(
-        manager,
-        actorUserId,
-        'EVALUATION_CONFIGURATION_UPDATED',
-        id,
-        before,
-        this.summary(configuration),
-      );
-      return configuration;
-    });
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        this.validator.validate(dto.starRanges);
+        const configuration = await this.get(id, manager);
+        this.assertDraft(configuration);
+        const before = this.summary(configuration);
+        Object.assign(configuration, this.values(dto));
+        await manager.save(configuration);
+        await manager.delete(EvaluationStarRange, { configurationId: id });
+        configuration.starRanges = await manager.save(
+          EvaluationStarRange,
+          dto.starRanges.map((range) =>
+            manager.create(EvaluationStarRange, {
+              ...range,
+              lowerBound: String(range.lowerBound),
+              upperBound: String(range.upperBound),
+              configurationId: id,
+            }),
+          ),
+        );
+        await this.audit(
+          manager,
+          actorUserId,
+          'EVALUATION_CONFIGURATION_UPDATED',
+          id,
+          before,
+          this.summary(configuration),
+        );
+        return configuration;
+      });
+    } catch (error) {
+      if (this.isVersionCodeViolation(error)) throw this.versionCodeConflict();
+      throw error;
+    }
   }
 
   async clone(
@@ -356,5 +366,29 @@ export class EvaluationConfigurationsService {
         changes: { before, after },
       }),
     );
+  }
+
+  private isVersionCodeViolation(error: unknown) {
+    if (!error || typeof error !== 'object') return false;
+    const databaseError = error as {
+      code?: string;
+      constraint?: string;
+      driverError?: { code?: string; constraint?: string };
+    };
+    const code = databaseError.code ?? databaseError.driverError?.code;
+    const constraint =
+      databaseError.constraint ?? databaseError.driverError?.constraint;
+    return (
+      code === '23505' &&
+      constraint === 'UQ_evaluation_configurations_version_code'
+    );
+  }
+
+  private versionCodeConflict() {
+    return new ConflictException({
+      code: 'EVALUATION_VERSION_CODE_CONFLICT',
+      field: 'versionCode',
+      message: 'Ya existe una configuración con ese código de versión.',
+    });
   }
 }

@@ -17,6 +17,7 @@ import { SurveySubmission } from '../../submissions/entities/survey-submission.e
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { EvaluationDimensionResult } from '../entities/evaluation-dimension-result.entity';
 import { EvaluationResult } from '../entities/evaluation-result.entity';
+import { EVALUATION_ALGORITHM_VERSION } from '../evaluation.constants';
 import { EvaluationResultsService } from './evaluation-results.service';
 
 describe('EvaluationResultsService', () => {
@@ -70,6 +71,7 @@ describe('EvaluationResultsService', () => {
   };
   const configurations = {
     active: jest.fn().mockResolvedValue(evaluationConfiguration),
+    get: jest.fn().mockResolvedValue(evaluationConfiguration),
     resolveStars: jest.fn((_configuration, score: number) =>
       Math.min(5, Math.floor(Math.max(score - 0.000001, 0) / 20) + 1),
     ),
@@ -263,6 +265,126 @@ describe('EvaluationResultsService', () => {
       'EVALUATION_RESULT_RECALCULATED',
     );
     expect(originalAnswers[1]).toEqual(fixture.submission.answers[1]);
+  });
+
+  it('recalculates with the original configuration resolved by its persisted id', async () => {
+    const fixture = evaluationFixture();
+    const previousResult = {
+      id: 'result-id',
+      submissionId: fixture.submission.id,
+      algorithmVersion: EVALUATION_ALGORITHM_VERSION,
+      evaluationConfigurationId: evaluationConfiguration.id,
+      evaluationConfigurationVersion: evaluationConfiguration.versionCode,
+    } as EvaluationResult;
+    const manager = createRecalculationManager(fixture, previousResult);
+    const calculate = jest
+      .spyOn(service, 'calculateAndPersist')
+      .mockResolvedValue(previousResult);
+
+    await service.recalculateSubmissionWithManager(
+      manager,
+      fixture.submission.id,
+      'actor-id',
+      'system',
+    );
+
+    expect(configurations.get).toHaveBeenCalledWith(
+      evaluationConfiguration.id,
+      manager,
+    );
+    expect(configurations.active).not.toHaveBeenCalled();
+    expect(calculate).toHaveBeenCalledWith(
+      manager,
+      fixture.submission,
+      fixture.version,
+      expect.any(Object),
+      'actor-id',
+      'system',
+      { configuration: evaluationConfiguration },
+    );
+    calculate.mockRestore();
+  });
+
+  it('blocks recalculation when the stored algorithm differs from the deployed one', async () => {
+    const fixture = evaluationFixture();
+    const manager = createRecalculationManager(fixture, {
+      id: 'result-id',
+      submissionId: fixture.submission.id,
+      algorithmVersion: 'question-average-legacy-v0',
+      evaluationConfigurationId: evaluationConfiguration.id,
+      evaluationConfigurationVersion: evaluationConfiguration.versionCode,
+    } as EvaluationResult);
+
+    await expect(
+      service.recalculateSubmissionWithManager(
+        manager,
+        fixture.submission.id,
+        null,
+      ),
+    ).rejects.toMatchObject({
+      response: { code: 'EVALUATION_RECALCULATION_ALGORITHM_DRIFT' },
+    });
+    expect(configurations.get).not.toHaveBeenCalled();
+  });
+
+  it('blocks recalculation without an existing historical result', async () => {
+    const fixture = evaluationFixture();
+    const manager = createRecalculationManager(fixture, null);
+
+    await expect(
+      service.recalculateSubmissionWithManager(
+        manager,
+        fixture.submission.id,
+        null,
+      ),
+    ).rejects.toMatchObject({
+      response: { code: 'EVALUATION_RECALCULATION_RESULT_REQUIRED' },
+    });
+    expect(configurations.get).not.toHaveBeenCalled();
+  });
+
+  it('blocks recalculation without a historical configuration reference', async () => {
+    const fixture = evaluationFixture();
+    const manager = createRecalculationManager(fixture, {
+      id: 'result-id',
+      submissionId: fixture.submission.id,
+      algorithmVersion: EVALUATION_ALGORITHM_VERSION,
+      evaluationConfigurationId: null,
+      evaluationConfigurationVersion: null,
+    } as EvaluationResult);
+
+    await expect(
+      service.recalculateSubmissionWithManager(
+        manager,
+        fixture.submission.id,
+        null,
+      ),
+    ).rejects.toMatchObject({
+      response: { code: 'EVALUATION_RECALCULATION_CONFIGURATION_REQUIRED' },
+    });
+    expect(configurations.get).not.toHaveBeenCalled();
+  });
+
+  it('blocks recalculation when the historical configuration no longer exists', async () => {
+    const fixture = evaluationFixture();
+    const manager = createRecalculationManager(fixture, {
+      id: 'result-id',
+      submissionId: fixture.submission.id,
+      algorithmVersion: EVALUATION_ALGORITHM_VERSION,
+      evaluationConfigurationId: evaluationConfiguration.id,
+      evaluationConfigurationVersion: evaluationConfiguration.versionCode,
+    } as EvaluationResult);
+    configurations.get.mockRejectedValueOnce(new NotFoundException());
+
+    await expect(
+      service.recalculateSubmissionWithManager(
+        manager,
+        fixture.submission.id,
+        null,
+      ),
+    ).rejects.toMatchObject({
+      response: { code: 'EVALUATION_RECALCULATION_CONFIGURATION_REQUIRED' },
+    });
   });
 
   it('keeps the stored snapshot unchanged after current school or survey data changes', async () => {
@@ -469,11 +591,19 @@ describe('EvaluationResultsService', () => {
 
   it('rolls back the staged result when a later write fails', async () => {
     const fixture = evaluationFixture();
-    let committedResult: EvaluationResult | null = null;
+    const historicalResult = {
+      id: 'existing-result-id',
+      submissionId: fixture.submission.id,
+      algorithmVersion: EVALUATION_ALGORITHM_VERSION,
+      evaluationConfigurationId: evaluationConfiguration.id,
+      evaluationConfigurationVersion: evaluationConfiguration.versionCode,
+      generalScore: '50',
+    } as EvaluationResult;
+    let committedResult: EvaluationResult | null = historicalResult;
     const transactionalDataSource = {
       transaction: jest.fn(
         async (callback: (manager: EntityManager) => Promise<unknown>) => {
-          let stagedResult = committedResult;
+          let stagedResult = committedResult ? { ...committedResult } : null;
           const transactionalManager = {
             findOne: jest.fn((entity: unknown, options: unknown) => {
               if (entity === EvaluationResult) {
@@ -532,7 +662,8 @@ describe('EvaluationResultsService', () => {
     await expect(
       transactionalService.recalculateSubmission(fixture.submission.id, null),
     ).rejects.toBeInstanceOf(ConflictException);
-    expect(committedResult).toBeNull();
+    expect(committedResult).toBe(historicalResult);
+    expect(committedResult.generalScore).toBe('50');
   });
 
   it('queries results using the school resolved from the authenticated session', async () => {
@@ -955,6 +1086,29 @@ function createConcurrentManagerHarness() {
       return createdRootCount;
     },
   };
+}
+
+function createRecalculationManager(
+  fixture: ReturnType<typeof evaluationFixture>,
+  previousResult: EvaluationResult | null,
+): EntityManager {
+  return {
+    findOne: jest.fn((entity: unknown, options: unknown) => {
+      if (entity === EvaluationResult) return Promise.resolve(previousResult);
+      if (
+        entity === SurveySubmission &&
+        typeof options === 'object' &&
+        options !== null &&
+        'relations' in options
+      ) {
+        return Promise.resolve(fixture.submission);
+      }
+      if (entity === SurveySubmission) {
+        return Promise.resolve({ id: fixture.submission.id });
+      }
+      return Promise.resolve(null);
+    }),
+  } as unknown as EntityManager;
 }
 
 function evaluationFixture() {

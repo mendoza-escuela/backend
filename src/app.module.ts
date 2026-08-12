@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
 import { UsersModule } from './modules/users/users.module';
@@ -14,6 +15,9 @@ import { SubmissionsModule } from './modules/submissions/submissions.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { EvaluationModule } from './modules/evaluation/evaluation.module';
 import { EvaluationConfigModule } from './modules/evaluation-config/evaluation-config.module';
+import { ExportsModule } from './modules/exports/exports.module';
+import { ReportsModule } from './modules/reports/reports.module';
+import { CsrfProtectionGuard } from './common/guards/csrf-protection.guard';
 
 @Module({
   imports: [
@@ -38,7 +42,19 @@ import { EvaluationConfigModule } from './modules/evaluation-config/evaluation-c
     DashboardModule,
     EvaluationModule,
     EvaluationConfigModule,
+    ExportsModule,
+    ReportsModule,
     AuthModule,
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: CsrfProtectionGuard,
+    },
   ],
 })
 export class AppModule {}

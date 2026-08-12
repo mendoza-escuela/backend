@@ -1,6 +1,7 @@
 import {
   createOfficialSurveyDimensionInputs,
   getOfficialDimensionCodeForQuestion,
+  isOfficialSurveyStructure,
   OFFICIAL_SURVEY_DIMENSIONS,
   OfficialSurveyDimensionCode,
 } from './official-survey-dimensions.template';
@@ -54,5 +55,32 @@ describe('Official survey dimensions template', () => {
     expect(second.every((dimension) => dimension.sections.length === 0)).toBe(
       true,
     );
+  });
+
+  it('reconoce el banco por sus preguntas aunque se hayan renombrado todas las dimensiones', () => {
+    expect(
+      isOfficialSurveyStructure([
+        {
+          code: 'dimension_renombrada',
+          sections: [
+            {
+              questions: [{ code: 'P001' }],
+            },
+          ],
+        },
+      ]),
+    ).toBe(true);
+    expect(
+      isOfficialSurveyStructure([
+        {
+          code: 'dimension_personalizada',
+          sections: [
+            {
+              questions: [{ code: 'p061' }],
+            },
+          ],
+        },
+      ]),
+    ).toBe(false);
   });
 });
