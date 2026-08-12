@@ -191,7 +191,7 @@ describe('CampaignSchoolsService', () => {
     expect(savedAssignments?.[0].assignedAt).toBeInstanceOf(Date);
   });
 
-  it('es idempotente y reactiva con trazabilidad durante una campaña activa', async () => {
+  it('es idempotente y reactiva con trazabilidad durante una etapa activa', async () => {
     manager.findOne.mockResolvedValue({
       id: campaignId,
       status: CampaignStatus.Active,
@@ -303,7 +303,7 @@ describe('CampaignSchoolsService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('incorpora una escuela durante una campaña activa con trazabilidad', async () => {
+  it('incorpora una escuela durante una etapa activa con trazabilidad', async () => {
     manager.findOne.mockResolvedValue({
       id: campaignId,
       status: CampaignStatus.Active,
@@ -360,7 +360,7 @@ describe('CampaignSchoolsService', () => {
     expect(audit?.changes.assignedAt).toBeInstanceOf(Date);
   });
 
-  it('permite previsualizar una incorporación durante una campaña activa', async () => {
+  it('permite previsualizar una incorporación durante una etapa activa', async () => {
     manager.findOne.mockResolvedValue({
       id: campaignId,
       status: CampaignStatus.Active,
@@ -386,7 +386,7 @@ describe('CampaignSchoolsService', () => {
     });
   });
 
-  it('rechaza en preview una escuela inactiva nueva durante una campaña activa', async () => {
+  it('rechaza en preview una escuela inactiva nueva durante una etapa activa', async () => {
     manager.findOne.mockResolvedValue({
       id: campaignId,
       status: CampaignStatus.Active,
@@ -402,7 +402,7 @@ describe('CampaignSchoolsService', () => {
         schoolIds,
       }),
     ).rejects.toThrow(
-      'No se pueden incorporar escuelas inactivas a una campaña activa.',
+      'No se pueden incorporar escuelas inactivas a una etapa activa.',
     );
   });
 
@@ -423,7 +423,7 @@ describe('CampaignSchoolsService', () => {
         actor,
       ),
     ).rejects.toThrow(
-      'No se pueden incorporar escuelas inactivas a una campaña activa.',
+      'No se pueden incorporar escuelas inactivas a una etapa activa.',
     );
     expect(repositories.schools.find).toHaveBeenLastCalledWith(
       expect.objectContaining({ lock: { mode: 'pessimistic_read' } }),
@@ -458,7 +458,7 @@ describe('CampaignSchoolsService', () => {
   });
 
   it.each([CampaignStatus.Closed, CampaignStatus.Archived])(
-    'rechaza incorporar escuelas cuando la campaña está %s',
+    'rechaza incorporar escuelas cuando la etapa está %s',
     async (status) => {
       manager.findOne.mockResolvedValue({
         id: campaignId,
@@ -477,7 +477,7 @@ describe('CampaignSchoolsService', () => {
     },
   );
 
-  it('rechaza incorporar escuelas cuando la campaña activa ya venció', async () => {
+  it('rechaza incorporar escuelas cuando la etapa activa ya venció', async () => {
     manager.findOne.mockResolvedValue({
       id: campaignId,
       status: CampaignStatus.Active,
@@ -491,12 +491,12 @@ describe('CampaignSchoolsService', () => {
         actor,
       ),
     ).rejects.toThrow(
-      'No se pueden incorporar escuelas porque la campaña ya finalizó.',
+      'No se pueden incorporar escuelas porque la etapa ya finalizó.',
     );
     expect(manager.save).not.toHaveBeenCalled();
   });
 
-  it('mantiene la baja de escuelas restringida a campañas borrador', async () => {
+  it('mantiene la baja de escuelas restringida a etapas borrador', async () => {
     manager.findOne.mockResolvedValue({
       id: campaignId,
       status: CampaignStatus.Active,
@@ -506,7 +506,7 @@ describe('CampaignSchoolsService', () => {
     await expect(
       service.remove(campaignId, schoolIds[0], undefined, actor),
     ).rejects.toThrow(
-      'Las escuelas sólo pueden quitarse mientras la campaña está en borrador.',
+      'Las escuelas sólo pueden quitarse mientras la etapa está en borrador.',
     );
     expect(manager.save).not.toHaveBeenCalled();
   });

@@ -1139,7 +1139,7 @@ describe('SubmissionsService', () => {
       });
       campaignsService.assertOperational.mockRejectedValueOnce(
         new ConflictException(
-          'La campaña no se encuentra abierta para recibir respuestas.',
+          'La etapa no se encuentra abierta para recibir respuestas.',
         ),
       );
 

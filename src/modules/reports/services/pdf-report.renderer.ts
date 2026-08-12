@@ -112,7 +112,7 @@ export class PdfReportRenderer {
         this.keyValues([
           ['Escuela', view.school.name],
           ['CUE', view.school.cue],
-          ['Campaña', view.campaign.name],
+          ['Etapa', view.campaign.name],
           [
             'Versión',
             `v${view.survey.version.number} - ${view.survey.version.title}`,

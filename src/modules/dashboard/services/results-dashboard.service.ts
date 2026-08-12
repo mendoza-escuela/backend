@@ -54,16 +54,16 @@ export class ResultsDashboardService {
     const campaign = await this.dataSource
       .getRepository(Campaign)
       .findOneBy({ id: query.campaignId });
-    if (!campaign) throw new NotFoundException('Campaña no encontrada.');
+    if (!campaign) throw new NotFoundException('Etapa no encontrada.');
     if (campaign.status === CampaignStatus.Draft)
       throw new ConflictException(
-        'Las campañas en borrador no poseen métricas de resultados.',
+        'Las etapas en borrador no poseen métricas de resultados.',
       );
     return (await this.metricsForCampaign(campaign, query)).response;
   }
 
   /**
-   * Compara entre dos y seis campañas sin mezclar sus universos. El primer ID
+   * Compara entre dos y seis etapas sin mezclar sus universos. El primer ID
    * solicitado es la línea de base y el orden de entrada se conserva.
    *
    * Puntaje general y estrellas son las métricas históricas estandarizadas. La
@@ -91,13 +91,13 @@ export class ResultsDashboardService {
       campaignById.get(campaignId),
     );
     if (orderedCampaigns.some((campaign) => !campaign))
-      throw new NotFoundException('Una o más campañas no fueron encontradas.');
+      throw new NotFoundException('Una o más etapas no fueron encontradas.');
     const draftCampaigns = orderedCampaigns.filter(
       (campaign) => campaign?.status === CampaignStatus.Draft,
     );
     if (draftCampaigns.length)
       throw new ConflictException(
-        'Las campañas en borrador no poseen métricas comparables.',
+        'Las etapas en borrador no poseen métricas comparables.',
       );
 
     const filters = query;
@@ -158,7 +158,7 @@ export class ResultsDashboardService {
           'criticalAreas',
         ],
         notice:
-          'Cada campaña conserva su propio universo y usa la ficha escolar vigente. El puntaje general y las estrellas son las métricas históricas estandarizadas; el radar sólo representa la trayectoria de una escuela y puede no ser comparable si cambian el cuestionario o el algoritmo dimensional.',
+          'Cada etapa conserva su propio universo y usa la ficha escolar vigente. El puntaje general y las estrellas son las métricas históricas estandarizadas; el radar sólo representa la trayectoria de una escuela y puede no ser comparable si cambian el cuestionario o el algoritmo dimensional.',
       },
       radarComparison,
       commonDimensions: this.commonDimensions(periods),
@@ -318,10 +318,10 @@ export class ResultsDashboardService {
     const campaign = await this.dataSource
       .getRepository(Campaign)
       .findOneBy({ id: query.campaignId });
-    if (!campaign) throw new NotFoundException('Campaña no encontrada.');
+    if (!campaign) throw new NotFoundException('Etapa no encontrada.');
     if (campaign.status === CampaignStatus.Draft)
       throw new ConflictException(
-        'Las campañas en borrador no poseen alertas de resultados.',
+        'Las etapas en borrador no poseen alertas de resultados.',
       );
 
     const totalsBuilder = this.criticalBase(query)

@@ -147,9 +147,7 @@ describe('CampaignsService', () => {
 
     await expect(
       service.setStatus('campaign-id', CampaignStatus.Active, actor),
-    ).rejects.toThrow(
-      'No se puede activar una campaña sin escuelas asignadas.',
-    );
+    ).rejects.toThrow('No se puede activar una etapa sin escuelas asignadas.');
     expect(manager.count).toHaveBeenCalledWith(
       CampaignSchool,
       expect.anything(),

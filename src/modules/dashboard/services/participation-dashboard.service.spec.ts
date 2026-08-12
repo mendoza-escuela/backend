@@ -7,7 +7,7 @@ import { ParticipationDashboardService } from './participation-dashboard.service
 describe('ParticipationDashboardService', () => {
   const campaign = {
     id: 'campaign-id',
-    name: 'Campaña anual',
+    name: 'Etapa anual',
     status: CampaignStatus.Active,
     startsAt: new Date('2026-01-01T03:00:00Z'),
     endsAt: new Date('2027-01-01T02:59:59Z'),

@@ -224,7 +224,7 @@ export class CampaignSchoolsService {
       throw new ServiceUnavailableException({
         code: 'CAMPAIGN_SCHOOLS_SCHEMA_UNAVAILABLE',
         message:
-          'La asignación de escuelas no está disponible porque el esquema de datos de campañas requiere actualización.',
+          'La asignación de escuelas no está disponible porque el esquema de datos de etapas requiere actualización.',
       });
     }
     return { ...outcome, summary: await this.assignmentSummary(campaignId) };
@@ -243,9 +243,7 @@ export class CampaignSchoolsService {
         lock: { mode: 'pessimistic_write' },
       });
       if (!assignment)
-        throw new NotFoundException(
-          'La escuela no está asignada a la campaña.',
-        );
+        throw new NotFoundException('La escuela no está asignada a la etapa.');
       if (
         await manager.exists(SurveySubmission, {
           where: { campaignId, schoolId },
@@ -302,7 +300,7 @@ export class CampaignSchoolsService {
     });
     if (!assigned)
       throw new ConflictException(
-        'El establecimiento no está asignado a esta campaña.',
+        'El establecimiento no está asignado a esta etapa.',
       );
   }
 
@@ -393,7 +391,7 @@ export class CampaignSchoolsService {
     manager: EntityManager = this.dataSource.manager,
   ) {
     const campaign = await manager.findOneBy(Campaign, { id });
-    if (!campaign) throw new NotFoundException('La campaña no existe.');
+    if (!campaign) throw new NotFoundException('La etapa no existe.');
     return campaign;
   }
 
@@ -405,10 +403,10 @@ export class CampaignSchoolsService {
       where: { id },
       lock: manager.queryRunner ? { mode: 'pessimistic_write' } : undefined,
     });
-    if (!campaign) throw new NotFoundException('La campaña no existe.');
+    if (!campaign) throw new NotFoundException('La etapa no existe.');
     if (campaign.status !== CampaignStatus.Draft)
       throw new ConflictException(
-        'Las escuelas sólo pueden quitarse mientras la campaña está en borrador.',
+        'Las escuelas sólo pueden quitarse mientras la etapa está en borrador.',
       );
     return campaign;
   }
@@ -417,9 +415,9 @@ export class CampaignSchoolsService {
    * Valida el estado que admite una incorporación de escuelas.
    *
    * La respuesta funcional vigente permite incorporar escuelas durante una
-   * campaña activa. Dentro de la operación definitiva, el bloqueo de la fila
+   * etapa activa. Dentro de la operación definitiva, el bloqueo de la fila
    * evita que un alta pueda confirmarse detrás de un cierre concurrente. La
-   * vista previa ejecuta la misma validación sin bloquear. Las campañas activas
+   * vista previa ejecuta la misma validación sin bloquear. Las etapas activas
    * que ya vencieron se tratan como cerradas aunque el proceso periódico aún no
    * haya persistido el cambio de estado.
    */
@@ -431,26 +429,26 @@ export class CampaignSchoolsService {
       where: { id },
       lock: manager.queryRunner ? { mode: 'pessimistic_write' } : undefined,
     });
-    if (!campaign) throw new NotFoundException('La campaña no existe.');
+    if (!campaign) throw new NotFoundException('La etapa no existe.');
     if (
       campaign.status !== CampaignStatus.Draft &&
       campaign.status !== CampaignStatus.Active
     )
       throw new ConflictException(
-        'Las escuelas sólo pueden incorporarse mientras la campaña está en borrador o activa.',
+        'Las escuelas sólo pueden incorporarse mientras la etapa está en borrador o activa.',
       );
     if (
       campaign.status === CampaignStatus.Active &&
       campaign.endsAt.getTime() <= Date.now()
     )
       throw new ConflictException(
-        'No se pueden incorporar escuelas porque la campaña ya finalizó.',
+        'No se pueden incorporar escuelas porque la etapa ya finalizó.',
       );
     return campaign;
   }
 
   /**
-   * Durante una campaña activa sólo una escuela habilitada puede incorporarse.
+   * Durante una etapa activa sólo una escuela habilitada puede incorporarse.
    *
    * Las asignaciones ya vigentes quedan fuera de esta validación para que una
    * repetición sea idempotente aun cuando la escuela haya sido dada de baja
@@ -479,7 +477,7 @@ export class CampaignSchoolsService {
       );
     if (schools.some(({ isActive }) => !isActive))
       throw new ConflictException(
-        'No se pueden incorporar escuelas inactivas a una campaña activa.',
+        'No se pueden incorporar escuelas inactivas a una etapa activa.',
       );
   }
 

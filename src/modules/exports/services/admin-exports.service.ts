@@ -53,7 +53,7 @@ export class AdminExportsService {
     const campaign = await this.dataSource
       .getRepository(Campaign)
       .findOneBy({ id: query.campaignId });
-    if (!campaign) throw new NotFoundException('Campaña no encontrada.');
+    if (!campaign) throw new NotFoundException('Etapa no encontrada.');
 
     const audit = await this.dataSource.getRepository(AuditLog).save({
       actorUserId: actor.id,
@@ -327,7 +327,7 @@ export class AdminExportsService {
       return [
         'CUE',
         'Escuela',
-        'Campaña',
+        'Etapa',
         'Versión',
         'Fecha de envío',
         'Código dimensión',
@@ -350,7 +350,7 @@ export class AdminExportsService {
       'Gestión',
       'Ámbito',
       'Jornada',
-      'Campaña',
+      'Etapa',
       'Versión',
       'Estado',
       'Fecha de envío',

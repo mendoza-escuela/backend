@@ -321,7 +321,7 @@ function fixture(rows: Array<Record<string, unknown>>) {
   const campaignRepository = {
     findOneBy: jest.fn().mockResolvedValue({
       id: campaignId,
-      name: 'Campaña de prueba',
+      name: 'Etapa de prueba',
     }),
   };
   const auditRepository = {
@@ -400,7 +400,7 @@ function exportRow(index: number, snapshot: EvaluationSnapshot | null) {
     managementType: 'Estatal',
     scope: 'Urbano',
     shift: 'Mañana',
-    campaignName: 'Campaña de prueba',
+    campaignName: 'Etapa de prueba',
     submissionStatus: SubmissionStatus.Submitted,
     submittedAt: '2026-08-10T12:00:00.000Z',
     generalScore: snapshot?.result.generalScore ?? '75',

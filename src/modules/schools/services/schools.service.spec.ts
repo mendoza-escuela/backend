@@ -206,7 +206,7 @@ describe('SchoolsService administrative detail readiness', () => {
     expect(detail.campaigns).toEqual({
       available: true,
       items: [],
-      message: 'El colegio no tiene asignaciones de campaña vigentes.',
+      message: 'El colegio no tiene asignaciones de etapa vigentes.',
     });
     expect(detail.evaluations).toEqual({
       available: true,
@@ -215,14 +215,14 @@ describe('SchoolsService administrative detail readiness', () => {
     });
   });
 
-  it('integra campañas, presentaciones y resultados sin consultas por fila', async () => {
+  it('integra etapas, presentaciones y resultados sin consultas por fila', async () => {
     const rows = [
       {
         assignmentId: 'assignment-submitted',
         assignmentSource: 'manual',
         assignedAt: new Date('2026-08-02T12:00:00.000Z'),
         campaignId: 'campaign-submitted',
-        campaignName: 'Campaña enviada',
+        campaignName: 'Etapa enviada',
         campaignType: 'annual',
         campaignStatus: 'closed',
         campaignStartsAt: new Date('2026-08-01T03:00:00.000Z'),
@@ -242,7 +242,7 @@ describe('SchoolsService administrative detail readiness', () => {
         assignmentSource: 'filter',
         assignedAt: '2025-08-02T12:00:00.000Z',
         campaignId: 'campaign-draft',
-        campaignName: 'Campaña en borrador',
+        campaignName: 'Etapa en borrador',
         campaignType: 'annual',
         campaignStatus: 'active',
         campaignStartsAt: '2025-08-01T03:00:00.000Z',
@@ -262,7 +262,7 @@ describe('SchoolsService administrative detail readiness', () => {
         assignmentSource: 'bulk',
         assignedAt: '2024-08-02T12:00:00.000Z',
         campaignId: 'campaign-not-started',
-        campaignName: 'Campaña no iniciada',
+        campaignName: 'Etapa no iniciada',
         campaignType: 'annual',
         campaignStatus: 'archived',
         campaignStartsAt: '2024-08-01T03:00:00.000Z',
@@ -318,7 +318,7 @@ describe('SchoolsService administrative detail readiness', () => {
           },
           campaign: {
             id: 'campaign-submitted',
-            name: 'Campaña enviada',
+            name: 'Etapa enviada',
             startsAt: '2026-08-01T03:00:00.000Z',
           },
           participationStatus: 'submitted',

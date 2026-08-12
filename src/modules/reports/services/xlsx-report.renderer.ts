@@ -85,9 +85,9 @@ export class XlsxReportRenderer {
       ['Escuela', 'Código postal', view.school.postalCode ?? ''],
       ['Escuela', 'Teléfono institucional', view.school.phone ?? ''],
       ['Escuela', 'Correo institucional', view.school.email ?? ''],
-      ['Campaña', 'Nombre', view.campaign.name],
+      ['Etapa', 'Nombre', view.campaign.name],
       [
-        'Campaña',
+        'Etapa',
         'Período',
         `${this.date(view.campaign.startsAt)} al ${this.date(view.campaign.endsAt)}`,
       ],

@@ -51,7 +51,7 @@ Las presentaciones no calculan aplicabilidad con la ficha actual: copian y conge
 | `survey_applicability_rules`      | Acción condicional (`show`/`omit`) y acción por defecto. | Orden único por pregunta.                                                    |
 | `survey_applicability_conditions` | Condiciones sobre hechos del snapshot escolar.           | Orden único por regla; valor esperado JSONB.                                 |
 
-Una versión publicada y todos sus descendientes son inmutables. Una corrección funcional se realiza clonando y publicando una nueva versión; las campañas existentes conservan la referencia histórica.
+Una versión publicada y todos sus descendientes son inmutables. Una corrección funcional se realiza clonando y publicando una nueva versión; las etapas existentes conservan la referencia histórica.
 
 La plantilla incorporada en código crea las seis dimensiones, pero deliberadamente no inventa secciones, preguntas ni opciones. El banco definitivo se incorpora mediante una planilla CSV/XLSX validada. Para el instrumento institucional, cada pregunta importada es de selección simple, debe tener código único, texto, obligatoriedad, orden y opciones puntuadas. Los puntajes admitidos son `0`, `50` y `100`; en Salud Mental también se admiten `33` y `66`. No se permiten opciones “Otro” ni “No aplica”.
 
@@ -65,20 +65,20 @@ Para las preguntas oficiales `p021` a `p027`, la política validada es:
 
 Ésta es la única correspondencia pregunta/condición cerrada hasta ahora. El informe de QA menciona condiciones de comedor y jornada, pero no identifica los códigos ni la expresión funcional que deben aplicar; esas asociaciones requieren la planilla o definición oficial antes de publicarse.
 
-## Campañas y presentaciones
+## Etapas y presentaciones
 
 | Tabla                               | Propósito                                          | Relaciones y restricciones principales                                              |
 | ----------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | `campaigns`                         | Ciclos anuales o semestrales.                      | Referencia una versión publicada y recorre `draft → active → closed → archived`.    |
-| `campaign_schools`                  | Universo explícito de escuelas de una campaña.     | Par campaña/escuela único; baja lógica, fuente y actor de asignación.               |
-| `survey_submissions`                | Borrador o envío único de una escuela por campaña. | Par campaña/escuela único; snapshot escolar y respondente original.                 |
+| `campaign_schools`                  | Universo explícito de escuelas de una etapa.     | Par etapa/escuela único; baja lógica, fuente y actor de asignación.               |
+| `survey_submissions`                | Borrador o envío único de una escuela por etapa. | Par etapa/escuela único; snapshot escolar y respondente original.                 |
 | `survey_answers`                    | Respuestas estructuradas de la presentación.       | Una respuesta por pregunta y presentación; opción o valor según tipo.               |
 | `submission_question_applicability` | Decisión congelada para cada pregunta.             | Una decisión por pregunta/presentación, motivo, hechos relevantes y regla aplicada. |
 
 En borrador se pueden incorporar, reactivar y quitar escuelas, salvo que ya
-exista una presentación. Durante una campaña activa el universo es aditivo: el
+exista una presentación. Durante una etapa activa el universo es aditivo: el
 administrador puede incorporar nuevas escuelas habilitadas, con fecha, origen,
-actor y auditoría, pero no quitar las existentes. Las campañas cerradas o
+actor y auditoría, pero no quitar las existentes. Las etapas cerradas o
 archivadas son de sólo lectura. La presentación enviada, su identidad, snapshot,
 respuestas y decisiones quedan protegidos para preservar el histórico.
 
@@ -117,7 +117,7 @@ campaigns ──< survey_submissions >── schools
 
 ## Integridad, seguridad y operación
 
-- Las FKs impiden eliminar definiciones utilizadas por campañas, presentaciones o resultados.
+- Las FKs impiden eliminar definiciones utilizadas por etapas, presentaciones o resultados.
 - Los índices únicos constituyen la defensa final ante solicitudes concurrentes.
 - Los DTO y servicios validan antes de persistir; las restricciones PostgreSQL vuelven a validar la integridad.
 - Las operaciones compuestas usan transacciones y bloqueos pesimistas cuando existe riesgo de carrera.

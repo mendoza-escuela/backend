@@ -1,20 +1,20 @@
 # DASH-08 — Comparación entre períodos
 
-El dashboard administrativo compara entre dos y seis campañas mediante:
+El dashboard administrativo compara entre dos y seis etapas mediante:
 
 ```http
 GET /api/admin/dashboard/results/comparison?campaignIds=<uuid-1>&campaignIds=<uuid-2>
 ```
 
 `campaignIds` es obligatorio, conserva el orden solicitado y no admite valores
-duplicados. El primer ID es la línea de base. Las campañas en borrador se
+duplicados. El primer ID es la línea de base. Las etapas en borrador se
 rechazan porque todavía no poseen resultados publicables.
 
 El endpoint acepta los filtros institucionales y escolares de DASH-04, excepto
 `campaignId`. No acepta `submissionStatuses`, `stars` ni `criticalAreas`: esos
 filtros seleccionan por el resultado de cada período y producirían una
 comparación sesgada. Los valores permitidos se aplican de forma independiente a
-cada campaña: no se crea implícitamente una cohorte común ni se modifica el
+cada etapa: no se crea implícitamente una cohorte común ni se modifica el
 universo histórico de cada período.
 
 ## Métricas comparables
@@ -50,7 +50,7 @@ La respuesta explicita esta semántica en `comparisonPolicy`:
 
 Los filtros institucionales usan la ficha escolar vigente, igual que DASH-04.
 El cliente todavía debe definir si una vista histórica futura debe reconstruir
-la ficha al cierre de cada campaña.
+la ficha al cierre de cada etapa.
 
 ## Trayectoria dimensional de una escuela
 
@@ -85,7 +85,7 @@ dimensionales. Se consulta el resultado vigente persistido, incluida una
 eventual corrección o recalculación; no se reconstruyen revisiones dimensionales
 anteriores.
 
-Las consultas de campañas, métricas generales y dimensiones se ejecutan dentro
+Las consultas de etapas, métricas generales y dimensiones se ejecutan dentro
 de una transacción `REPEATABLE READ` de sólo lectura. Así, una recalculación
 concurrente no puede mezclar el resumen anterior con dimensiones nuevas.
 

@@ -426,7 +426,7 @@ export class EvaluationResultsService {
     if (!submission) {
       throw new NotFoundException({
         code: 'SUBMISSION_NOT_FOUND',
-        message: 'La escuela no posee una presentación para esta campaña.',
+        message: 'La escuela no posee una presentación para esta etapa.',
       });
     }
     if (submission.status !== SubmissionStatus.Submitted) {

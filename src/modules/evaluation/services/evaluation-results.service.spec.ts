@@ -678,7 +678,7 @@ describe('EvaluationResultsService', () => {
     );
     persisted.campaign = {
       id: fixture.submission.campaignId,
-      name: 'Campaña 2026',
+      name: 'Etapa 2026',
       type: 'annual',
     } as never;
     schoolsService.evaluationContextForUser.mockResolvedValue({
@@ -703,7 +703,7 @@ describe('EvaluationResultsService', () => {
       },
       campaign: {
         id: 'campaign-id',
-        name: 'Campaña 2026',
+        name: 'Etapa 2026',
       },
       result: {
         generalScore: 58.16666666,
@@ -811,7 +811,7 @@ describe('EvaluationResultsService', () => {
     );
     persisted.campaign = {
       id: fixture.submission.campaignId,
-      name: 'Campaña 2026',
+      name: 'Etapa 2026',
       type: 'annual',
     } as never;
     persisted.snapshot.survey.dimensions[0].sections = undefined as never;
@@ -844,7 +844,7 @@ describe('EvaluationResultsService', () => {
     );
     persisted.campaign = {
       id: fixture.submission.campaignId,
-      name: 'Campaña 2026',
+      name: 'Etapa 2026',
       type: 'annual',
     } as never;
     persisted.snapshot.survey.dimensions =
@@ -885,7 +885,7 @@ describe('EvaluationResultsService', () => {
     );
     persisted.campaign = {
       id: fixture.submission.campaignId,
-      name: 'Campaña 2026',
+      name: 'Etapa 2026',
       type: 'annual',
     } as never;
     persisted.submission = fixture.submission;
@@ -898,7 +898,7 @@ describe('EvaluationResultsService', () => {
     expect(list.items).toHaveLength(1);
     expect(list.items[0]).toMatchObject({
       id: 'result-id',
-      campaign: { name: 'Campaña 2026' },
+      campaign: { name: 'Etapa 2026' },
       generalScore: 58.16666666,
     });
     expect(resultRepository.find).toHaveBeenCalledWith(

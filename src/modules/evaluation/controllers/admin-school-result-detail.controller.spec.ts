@@ -70,7 +70,7 @@ describe('AdminSchoolResultDetailController authorization', () => {
   afterAll(async () => app.close());
   beforeEach(() => jest.clearAllMocks());
 
-  it('permite al administrador consultar por campaña y escuela', async () => {
+  it('permite al administrador consultar por etapa y escuela', async () => {
     await request(server)
       .get(
         `/api/admin/campaigns/${campaignId}/schools/${schoolId}/result-detail`,

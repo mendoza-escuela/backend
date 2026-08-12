@@ -154,7 +154,7 @@ function fixture(sources: {
     campaign: {
       findOneBy: jest.fn().mockResolvedValue({
         id: CAMPAIGN_ID,
-        name: 'Campaña histórica',
+        name: 'Etapa histórica',
         startsAt: new Date('2026-01-01T03:00:00.000Z'),
         endsAt: new Date('2026-09-01T02:59:59.999Z'),
       }),

@@ -44,7 +44,7 @@ La baja no ejecuta eliminaciones sobre:
 
 - `users` ni `user_schools`;
 - rectificaciones y snapshots institucionales;
-- campañas asignadas;
+- etapas asignadas;
 - presentaciones, respuestas y resultados de evaluación;
 - registros de auditoría y reportes históricos.
 

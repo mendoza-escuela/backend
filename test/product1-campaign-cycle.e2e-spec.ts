@@ -196,7 +196,7 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
     const emptyCampaign = await admin
       .post('/api/admin/campaigns')
       .send({
-        name: 'Campaña sin escuelas E2E',
+        name: 'Etapa sin escuelas E2E',
         type: 'annual',
         surveyVersionId,
         ...dates,
@@ -211,7 +211,7 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
     const campaignResponse = await admin
       .post('/api/admin/campaigns')
       .send({
-        name: 'Campaña Producto 1 E2E',
+        name: 'Etapa Producto 1 E2E',
         description: 'Ciclo real sobre PostgreSQL',
         type: 'annual',
         surveyVersionId,
@@ -338,7 +338,7 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
     });
     await admin
       .delete(`/api/admin/campaigns/${campaignId}/schools/${secondarySchoolId}`)
-      .send({ reason: 'No se permiten bajas durante la campaña activa' })
+      .send({ reason: 'No se permiten bajas durante la etapa activa' })
       .expect(409);
 
     const available = await school.get('/api/school/campaigns').expect(200);
@@ -497,7 +497,7 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
     const comparisonCampaignResponse = await admin
       .post('/api/admin/campaigns')
       .send({
-        name: 'Campaña comparativa E2E',
+        name: 'Etapa comparativa E2E',
         description: 'Segundo período para DASH-08',
         type: 'annual',
         surveyVersionId,

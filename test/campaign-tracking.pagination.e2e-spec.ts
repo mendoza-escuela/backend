@@ -50,7 +50,7 @@ describeWithDatabase('Campaign tracking pagination (PostgreSQL)', () => {
       `INSERT INTO campaigns
          (name, type, status, survey_version_id, starts_at, ends_at, activated_at)
        VALUES
-         ('Campaña de paginación', 'annual', 'active', $1,
+         ('Etapa de paginación', 'annual', 'active', $1,
           now() - interval '1 day', now() + interval '30 days', now())
        RETURNING id`,
       [surveyVersionId],

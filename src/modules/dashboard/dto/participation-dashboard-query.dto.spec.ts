@@ -93,7 +93,7 @@ describe('ParticipationDashboardQueryDto', () => {
 describe('ResultsComparisonDashboardQueryDto', () => {
   const secondCampaignId = '10000000-0000-4000-8000-000000000002';
 
-  it('acepta de dos a seis campañas y hereda los filtros DASH-04', async () => {
+  it('acepta de dos a seis etapas y hereda los filtros DASH-04', async () => {
     const query = plainToInstance(ResultsComparisonDashboardQueryDto, {
       campaignIds: [campaignId, secondCampaignId],
       departments: [' Capital ', 'Lavalle'],
@@ -122,7 +122,7 @@ describe('ResultsComparisonDashboardQueryDto', () => {
     );
   });
 
-  it('rechaza campañas duplicadas en vez de normalizarlas silenciosamente', async () => {
+  it('rechaza etapas duplicadas en vez de normalizarlas silenciosamente', async () => {
     const query = plainToInstance(ResultsComparisonDashboardQueryDto, {
       campaignIds: [campaignId, secondCampaignId, campaignId],
     });
@@ -132,7 +132,7 @@ describe('ResultsComparisonDashboardQueryDto', () => {
     );
   });
 
-  it('rechaza menos de dos o más de seis campañas', async () => {
+  it('rechaza menos de dos o más de seis etapas', async () => {
     const tooFew = plainToInstance(ResultsComparisonDashboardQueryDto, {
       campaignIds: [campaignId],
     });

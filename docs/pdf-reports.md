@@ -69,7 +69,7 @@ entregue las versiones definitivas.
 `GET /api/school/campaigns/:campaignId/submission/report.xlsx` descarga un
 único libro institucional con cuatro hojas:
 
-- `Resumen`: ficha, campaña, envío, resultado y trazabilidad del cálculo.
+- `Resumen`: ficha, etapa, envío, resultado y trazabilidad del cálculo.
 - `Dimensiones`: numerador, denominador, puntaje y criticidad persistidos.
 - `Respuestas`: sólo preguntas aplicables y sus respuestas declaradas.
 - `Exclusiones`: preguntas excluidas y motivo histórico, sin exponer una
@@ -92,4 +92,4 @@ respuestas en la auditoría.
 Todo texto dinámico pasa por `spreadsheetSafeCell`; también se neutralizan
 prefijos de fórmula precedidos por espacios, tabulaciones u otros caracteres de
 control. Las fechas visibles usan `America/Argentina/Mendoza`, evitando mostrar
-como día siguiente en UTC el cierre civil de una campaña.
+como día siguiente en UTC el cierre civil de una etapa.

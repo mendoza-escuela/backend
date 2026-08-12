@@ -1,4 +1,4 @@
-# Detalle administrativo por escuela y campaña
+# Detalle administrativo por escuela y etapa
 
 ## Endpoint
 
@@ -25,7 +25,7 @@ El usuario original procede primero de `original_respondent_snapshot`; su estado
 
 ## Rendimiento y base de datos
 
-La consulta realiza una cantidad fija de accesos (campaña/escuela, presentación, resultado y usuario), independiente de la cantidad de preguntas, ya que éstas están dentro del snapshot JSONB. No se agregó migración: ya existen la restricción única `(school_id, campaign_id)` en presentaciones y los índices de resultados por campaña, escuela y presentación.
+La consulta realiza una cantidad fija de accesos (etapa/escuela, presentación, resultado y usuario), independiente de la cantidad de preguntas, ya que éstas están dentro del snapshot JSONB. No se agregó migración: ya existen la restricción única `(school_id, campaign_id)` en presentaciones y los índices de resultados por etapa, escuela y presentación.
 
 No se registra auditoría de lectura: el patrón actual audita cambios administrativos y esta pantalla no ofrece ninguna acción modificatoria.
 
@@ -33,6 +33,6 @@ No se registra auditoría de lectura: el patrón actual audita cambios administr
 
 Ruta recargable: `/admin/campanas/:campaignId/colegios/:schoolId/resultado`.
 
-Se accede desde Seguimiento mediante “Ver detalle”. El dashboard enlaza directamente cuando hay una escuela filtrada o lleva al seguimiento de la campaña. El parámetro `volver` conserva la URL de origen y se acepta únicamente si pertenece a `/admin/`.
+Se accede desde Seguimiento mediante “Ver detalle”. El dashboard enlaza directamente cuando hay una escuela filtrada o lleva al seguimiento de la etapa. El parámetro `volver` conserva la URL de origen y se acepta únicamente si pertenece a `/admin/`.
 
 La página separa Resumen, Respuestas, Exclusiones, Ficha histórica e Historial. Incluye estados vacíos para no iniciada, borrador, enviada sin resultado, snapshot incompleto y ausencia de exclusiones. Las pruebas añadidas cubren autorización, parámetros inválidos, pertenencia al universo, estados sin presentación/borrador y renderizado de datos históricos.

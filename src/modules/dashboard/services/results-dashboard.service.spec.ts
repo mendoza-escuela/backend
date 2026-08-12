@@ -7,7 +7,7 @@ import { ResultsDashboardService } from './results-dashboard.service';
 describe('ResultsDashboardService', () => {
   const campaign = {
     id: 'campaign-id',
-    name: 'Campaña anual',
+    name: 'Etapa anual',
     status: CampaignStatus.Active,
     startsAt: new Date('2026-01-01T03:00:00Z'),
     endsAt: new Date('2027-01-01T02:59:59Z'),
@@ -174,7 +174,7 @@ describe('ResultsDashboardService', () => {
       );
   });
 
-  it('rechaza alertas de una campaña en borrador', async () => {
+  it('rechaza alertas de una etapa en borrador', async () => {
     const service = fixture({ ...campaign, status: CampaignStatus.Draft }, []);
 
     await expect(
@@ -182,7 +182,7 @@ describe('ResultsDashboardService', () => {
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
-  it('compara campañas en el orden solicitado y conserva cada denominador', async () => {
+  it('compara etapas en el orden solicitado y conserva cada denominador', async () => {
     const firstCampaign = {
       ...campaign,
       id: 'campaign-first',
@@ -191,7 +191,7 @@ describe('ResultsDashboardService', () => {
     const secondCampaign = {
       ...campaign,
       id: 'campaign-second',
-      name: 'Campaña siguiente',
+      name: 'Etapa siguiente',
       surveyVersionId: 'survey-version-shared',
     };
     const builders = [
@@ -351,7 +351,7 @@ describe('ResultsDashboardService', () => {
     });
   });
 
-  it('rechaza la comparación si alguna campaña no existe', async () => {
+  it('rechaza la comparación si alguna etapa no existe', async () => {
     const existing = {
       ...campaign,
       id: 'campaign-existing',
@@ -366,7 +366,7 @@ describe('ResultsDashboardService', () => {
     ).rejects.toMatchObject({ status: 404 });
   });
 
-  it('no expone un radar territorial y rechaza campañas en borrador', async () => {
+  it('no expone un radar territorial y rechaza etapas en borrador', async () => {
     const active = {
       ...campaign,
       id: 'campaign-active',

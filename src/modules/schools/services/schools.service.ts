@@ -1833,7 +1833,7 @@ export class SchoolsService {
         items,
         message: items.length
           ? ''
-          : 'El colegio no tiene asignaciones de campaña vigentes.',
+          : 'El colegio no tiene asignaciones de etapa vigentes.',
       },
       evaluations: {
         available: true,

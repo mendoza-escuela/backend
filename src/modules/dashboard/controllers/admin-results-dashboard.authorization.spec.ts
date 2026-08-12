@@ -96,7 +96,7 @@ describe('Results comparison dashboard authorization and contract', () => {
     expect(dashboard.comparison).not.toHaveBeenCalled();
   });
 
-  it('normaliza campañas repetidas y filtros institucionales', async () => {
+  it('normaliza etapas repetidas y filtros institucionales', async () => {
     await request(server)
       .get(`${comparisonPath}&departments=Capital&departments=Lavalle`)
       .set('x-test-role', UserRole.Admin)

@@ -189,12 +189,12 @@ describe('IndividualReportService', () => {
     expect(view.school.managementType).toBeUndefined();
   });
 
-  it('no genera el archivo si la escuela no pertenece al universo de la campaña', async () => {
+  it('no genera el archivo si la escuela no pertenece al universo de la etapa', async () => {
     const { service, repositories } = fixture({ assignment: null });
 
     await expect(service.get(campaignId, schoolId)).rejects.toThrow(
       new NotFoundException(
-        'La escuela no pertenece al universo de esta campaña.',
+        'La escuela no pertenece al universo de esta etapa.',
       ),
     );
     expect(repositories.campaign.findOneBy).not.toHaveBeenCalled();
@@ -251,7 +251,7 @@ function fixture(overrides?: {
     campaign: {
       findOneBy: jest.fn().mockResolvedValue({
         id: 'campaign-id',
-        name: 'Campaña histórica',
+        name: 'Etapa histórica',
         startsAt: new Date('2026-01-01T03:00:00.000Z'),
         endsAt: new Date('2026-09-01T02:59:59.999Z'),
       }),

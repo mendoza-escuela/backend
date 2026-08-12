@@ -20,7 +20,7 @@ export class AdminSchoolResultDetailService {
   constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
   /**
-   * Recupera el detalle histórico persistido de una escuela en una campaña.
+   * Recupera el detalle histórico persistido de una escuela en una etapa.
    * Nunca vuelve a ejecutar el motor ni mezcla respuestas con la ficha actual.
    */
   async get(
@@ -31,7 +31,7 @@ export class AdminSchoolResultDetailService {
       this.dataSource.getRepository(Campaign).findOneBy({ id: campaignId }),
       this.dataSource.getRepository(School).findOneBy({ id: schoolId }),
     ]);
-    if (!campaign) throw new NotFoundException('La campaña no existe.');
+    if (!campaign) throw new NotFoundException('La etapa no existe.');
     if (!school) throw new NotFoundException('La escuela no existe.');
 
     const submission = await this.dataSource
@@ -42,7 +42,7 @@ export class AdminSchoolResultDetailService {
       .findOne({ where: { campaignId, schoolId } });
     if (!assignment) {
       throw new NotFoundException(
-        'La escuela no estaba incluida en el universo de esta campaña.',
+        'La escuela no estaba incluida en el universo de esta etapa.',
       );
     }
 

@@ -116,7 +116,7 @@ export class SubmissionsService {
         canStart: false,
         readOnly: true,
         blockingReason:
-          'La campaña ya no se encuentra abierta. El borrador está disponible en modo de sólo lectura.',
+          'La etapa ya no se encuentra abierta. El borrador está disponible en modo de sólo lectura.',
         submission: this.submissionSummary(
           submission,
           questionCounts.get(submission.surveyVersionId) ?? 0,
@@ -251,7 +251,7 @@ export class SubmissionsService {
         );
         const open = this.isCampaignOpen(loaded.campaign);
         // Un borrador sólo puede recalcular o adoptar datos si fue cargado bajo
-        // bloqueo de escritura y la campaña continúa abierta al revalidarla.
+        // bloqueo de escritura y la etapa continúa abierta al revalidarla.
         const campaignOpen =
           loaded.status === SubmissionStatus.Draft ? shouldLock && open : open;
         if (campaignOpen && loaded.status === SubmissionStatus.Draft)
@@ -282,7 +282,7 @@ export class SubmissionsService {
       !school.isActive
         ? 'El establecimiento está inactivo.'
         : !campaignOpen
-          ? 'La campaña ya no se encuentra abierta.'
+          ? 'La etapa ya no se encuentra abierta.'
           : submission.status === SubmissionStatus.Submitted
             ? 'La presentación ya fue enviada y es de sólo lectura.'
             : null,
@@ -471,7 +471,7 @@ export class SubmissionsService {
       });
       if (!locked)
         throw new NotFoundException(
-          'Todavía no existe una presentación para esta campaña.',
+          'Todavía no existe una presentación para esta etapa.',
         );
     }
     const submission = await manager.findOne(SurveySubmission, {
@@ -511,7 +511,7 @@ export class SubmissionsService {
     });
     if (!submission)
       throw new NotFoundException(
-        'Todavía no existe una presentación para esta campaña.',
+        'Todavía no existe una presentación para esta etapa.',
       );
     // Estas colecciones no comparten una rama relacional. Incluirlas en la
     // consulta anterior multiplica respuestas x decisiones x preguntas y
@@ -569,7 +569,7 @@ export class SubmissionsService {
   }
 
   /**
-   * Lee sólo la identidad y la campaña para decidir si el workspace puede
+   * Lee sólo la identidad y la etapa para decidir si el workspace puede
    * mutar. Así los borradores históricos nunca adquieren un bloqueo de
    * escritura, mientras que un borrador operativo se vuelve a cargar bajo
    * `pessimistic_write` antes de refrescar su snapshot o aplicabilidad.
@@ -585,7 +585,7 @@ export class SubmissionsService {
     });
     if (!submission)
       throw new NotFoundException(
-        'Todavía no existe una presentación para esta campaña.',
+        'Todavía no existe una presentación para esta etapa.',
       );
     return submission;
   }
@@ -650,7 +650,7 @@ export class SubmissionsService {
       const question = questionsById.get(answer.questionId);
       if (!question)
         throw new BadRequestException(
-          'Una de las preguntas no pertenece a la versión de la campaña.',
+          'Una de las preguntas no pertenece a la versión de la etapa.',
         );
       if (this.isEmptyAnswer(answer.optionId, answer.value)) return [];
       if (!applicability.applicableQuestionIds.has(question.id))
@@ -1179,8 +1179,8 @@ export class SubmissionsService {
 
   /**
    * Un borrador histórico existe por la propia presentación, aunque su
-   * asignación haya sido retirada. No se consideran campañas futuras ni
-   * campañas abiertas: esas continúan en el flujo operativo habitual.
+   * asignación haya sido retirada. No se consideran etapas futuras ni
+   * etapas abiertas: esas continúan en el flujo operativo habitual.
    */
   private isExpiredDraft(submission: SurveySubmission, now: number) {
     if (

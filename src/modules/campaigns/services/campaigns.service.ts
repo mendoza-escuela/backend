@@ -112,7 +112,7 @@ export class CampaignsService {
     }));
   }
 
-  /** Devuelve campañas activas cuyo período está abierto en este instante. */
+  /** Devuelve etapas activas cuyo período está abierto en este instante. */
   async operationalCampaigns(schoolId: string) {
     await this.closeExpiredCampaigns();
     const now = new Date();
@@ -147,7 +147,7 @@ export class CampaignsService {
       where: { id },
       relations: { surveyVersion: { survey: true } },
     });
-    if (!campaign) throw new NotFoundException('Campaña no encontrada.');
+    if (!campaign) throw new NotFoundException('Etapa no encontrada.');
     const now = Date.now();
     if (
       campaign.status !== CampaignStatus.Active ||
@@ -155,7 +155,7 @@ export class CampaignsService {
       now > campaign.endsAt.getTime()
     )
       throw new ConflictException(
-        'La campaña no se encuentra abierta para recibir respuestas.',
+        'La etapa no se encuentra abierta para recibir respuestas.',
       );
     return campaign;
   }
@@ -239,7 +239,7 @@ export class CampaignsService {
       if (campaign.status === nextStatus) return;
       if (!STATUS_TRANSITIONS[campaign.status].includes(nextStatus))
         throw new ConflictException(
-          `No se puede pasar una campaña de ${campaign.status} a ${nextStatus}.`,
+          `No se puede pasar una etapa de ${campaign.status} a ${nextStatus}.`,
         );
 
       if (nextStatus === CampaignStatus.Active) {
@@ -249,11 +249,11 @@ export class CampaignsService {
         });
         if (!assignedSchools)
           throw new ConflictException(
-            'No se puede activar una campaña sin escuelas asignadas.',
+            'No se puede activar una etapa sin escuelas asignadas.',
           );
         if (campaign.endsAt.getTime() <= Date.now())
           throw new ConflictException(
-            'No se puede activar una campaña cuya fecha de cierre ya venció.',
+            'No se puede activar una etapa cuya fecha de cierre ya venció.',
           );
         campaign.activatedAt = new Date();
       }
@@ -364,7 +364,7 @@ export class CampaignsService {
       !version.publishedAt
     )
       throw new ConflictException(
-        'La campaña sólo puede asociarse a una versión publicada.',
+        'La etapa sólo puede asociarse a una versión publicada.',
       );
     if (!version.survey.isActive)
       throw new ConflictException(
@@ -378,7 +378,7 @@ export class CampaignsService {
       where: { id },
       relations: { surveyVersion: { survey: true } },
     });
-    if (!campaign) throw new NotFoundException('Campaña no encontrada.');
+    if (!campaign) throw new NotFoundException('Etapa no encontrada.');
     return campaign;
   }
 
@@ -387,14 +387,14 @@ export class CampaignsService {
       where: { id },
       lock: { mode: 'pessimistic_write' },
     });
-    if (!campaign) throw new NotFoundException('Campaña no encontrada.');
+    if (!campaign) throw new NotFoundException('Etapa no encontrada.');
     return campaign;
   }
 
   private assertDraft(campaign: Campaign) {
     if (campaign.status !== CampaignStatus.Draft)
       throw new ConflictException(
-        'Sólo las campañas en borrador pueden editarse o eliminarse.',
+        'Sólo las etapas en borrador pueden editarse o eliminarse.',
       );
   }
 
