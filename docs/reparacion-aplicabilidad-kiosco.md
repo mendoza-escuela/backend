@@ -16,34 +16,26 @@ Este procedimiento corrige exclusivamente presentaciones enviadas cuyo snapshot 
 
 No modifica la ficha escolar actual, respuestas, versiones publicadas ni snapshots de otras campañas. El resultado se recalcula desde los datos históricos de la presentación dentro de la misma transacción.
 
-## Contención de nuevos borradores y envíos
+## Comportamiento de versiones nuevas
 
-Antes de crear, abrir, guardar o enviar un borrador, backend comprueba la
-decisión que la versión produciría para la ficha histórica de la escuela:
+Los códigos `p021-p027` pertenecen únicamente al alcance histórico de esta
+reparación. El sistema no exige reglas para códigos concretos, no crea reglas
+automáticamente al importar y no bloquea campañas por la ausencia de esas
+reglas. Administración define desde el editor qué preguntas son condicionales.
 
-- con `hasKiosk=false`, `p021-p027` deben quedar excluidas;
-- con `hasKiosk=true`, deben ser aplicables;
-- sin el dato, deben quedar incompletas.
-
-Si una versión oficial no cumple la decisión correspondiente, la operación se
-detiene antes de confirmar escrituras con estado 409 y código
-`SURVEY_VERSION_APPLICABILITY_NOT_READY`. Una escuela con kiosco no queda
-bloqueada por la omisión histórica de la regla cuando las siete preguntas le
-resultan correctamente aplicables. Las presentaciones ya enviadas siguen
-disponibles en modo de sólo lectura y se corrigen únicamente mediante el
-procedimiento auditado de este documento.
-
-Esta defensa es una contención y no modifica la definición publicada. Las
+Backend continúa validando la estructura de cada regla que el usuario decida
+crear y evalúa esas reglas contra el snapshot de la ficha escolar. Las
 versiones publicadas continúan siendo inmutables.
 
-## Restablecimiento de una campaña ligada a una versión defectuosa
+## Aplicación futura de la regla histórica
 
 No se debe insertar reglas directamente en una versión publicada ni desactivar
-sus triggers de protección. Para recuperar el flujo completo:
+sus triggers de protección. Si administración decide conservar esta regla en
+una campaña futura:
 
 1. crear o importar una nueva versión oficial que persista la regla aprobada en
    `p021-p027`;
-2. validar que pase la política de publicación y sus pruebas de aplicabilidad;
+2. validar la versión y las reglas configuradas;
 3. publicar la nueva versión;
 4. cerrar la campaña defectuosa y crear una campaña con la versión corregida;
 5. validar escuelas con y sin kiosco antes de habilitar el uso general.

@@ -1,15 +1,12 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { SurveyDimensionInputDto } from '../dto/update-survey-version.dto';
 import { SurveyQuestionType } from '../entities/survey-question-type.enum';
-import { isForbiddenInstitutionalSurveyOption } from '../policies/institutional-survey-option.policy';
-import { getOfficialScoreProfile } from '../policies/official-survey-scoring.policy';
-import { isOfficialSurveyStructure } from '../templates/official-survey-dimensions.template';
 
 @Injectable()
 export class SurveyStructureValidator {
   /**
-   * Valida consistencia estructural y que los puntajes configurados pertenezcan
-   * a la escala institucional aprobada. No infiere puntajes ni condiciones.
+   * Valida la consistencia estructural sin imponer códigos, textos, tipos ni
+   * escalas de un cuestionario concreto.
    */
   validate(dimensions: SurveyDimensionInputDto[], requireContent = false) {
     const errors = this.inspect(dimensions, requireContent);
@@ -23,7 +20,6 @@ export class SurveyStructureValidator {
   /** Devuelve todos los errores para que la interfaz pueda corregirlos en conjunto. */
   inspect(dimensions: SurveyDimensionInputDto[], requireContent = false) {
     const errors: string[] = [];
-    const isInstitutional = isOfficialSurveyStructure(dimensions);
     if (requireContent && dimensions.length === 0)
       errors.push('La versión debe contener al menos una dimensión.');
 
@@ -55,13 +51,6 @@ export class SurveyStructureValidator {
 
         for (const question of section.questions) {
           const questionPath = `${sectionPath} / pregunta ${question.code}`;
-          if (
-            isInstitutional &&
-            question.type !== SurveyQuestionType.SingleChoice
-          )
-            errors.push(
-              `${questionPath}: el cuestionario institucional sólo admite selección simple.`,
-            );
           const isChoice = [
             SurveyQuestionType.SingleChoice,
             SurveyQuestionType.MultipleChoice,
@@ -95,29 +84,12 @@ export class SurveyStructureValidator {
               errors.push(
                 `${questionPath} / opción ${option.value}: el puntaje debe ser un entero entre 0 y 100.`,
               );
-            const institutionalScores = getOfficialScoreProfile(dimension.code);
-            if (
-              isInstitutional &&
-              option.score !== undefined &&
-              option.score !== null &&
-              !institutionalScores.includes(option.score)
-            )
-              errors.push(
-                `${questionPath} / opción ${option.value}: los puntajes permitidos para esta dimensión son ${institutionalScores.join(', ')}.`,
-              );
             if (
               requireContent &&
               (option.score === undefined || option.score === null)
             )
               errors.push(
                 `${questionPath} / opción ${option.value}: debe tener un puntaje antes de publicar.`,
-              );
-            if (
-              isInstitutional &&
-              isForbiddenInstitutionalSurveyOption(option.value, option.label)
-            )
-              errors.push(
-                `${questionPath} / opción ${option.value}: el cuestionario institucional no admite “Otro” ni “No aplica”.`,
               );
           }
 

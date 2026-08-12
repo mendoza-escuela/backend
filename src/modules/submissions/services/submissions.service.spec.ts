@@ -84,7 +84,6 @@ describe('SubmissionsService', () => {
     assertActiveForEvaluation: jest.fn(),
   };
   const surveyApplicability = {
-    assertVersionApplicabilitySafe: jest.fn(),
     evaluate: jest.fn(),
     result: jest.fn(),
   };
@@ -352,49 +351,6 @@ describe('SubmissionsService', () => {
         },
       }),
     );
-    expect(
-      surveyApplicability.assertVersionApplicabilitySafe,
-    ).toHaveBeenCalledWith(
-      expect.objectContaining({ id: campaign.surveyVersionId }),
-      schoolSnapshot,
-    );
-  });
-
-  it('does not create a draft when the official version would apply kiosk questions incorrectly', async () => {
-    const snapshot = schoolSnapshot();
-    schoolsService.evaluationContextForUser.mockResolvedValue({
-      school,
-      rectification: {
-        id: 'rectification-id',
-        periodYear: 2026,
-        isConfirmed: true,
-        isEvaluationReady: true,
-        missingFields: [],
-        isRectified: true,
-        rectifiedAt: new Date(),
-        snapshot,
-      },
-    });
-    campaignsService.assertOperational.mockResolvedValue(campaign);
-    manager.findOne
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(publishedVersion());
-    surveyApplicability.assertVersionApplicabilitySafe.mockImplementationOnce(
-      () => {
-        throw new ConflictException({
-          code: 'SURVEY_VERSION_APPLICABILITY_NOT_READY',
-          message: 'La versión requiere una corrección administrativa.',
-        });
-      },
-    );
-
-    await expect(service.startOrGet(campaign.id, actor)).rejects.toBeInstanceOf(
-      ConflictException,
-    );
-
-    expect(manager.save).not.toHaveBeenCalled();
-    expect(manager.update).not.toHaveBeenCalled();
-    expect(manager.delete).not.toHaveBeenCalled();
   });
 
   it('replaces only applicable answers with validated option references', async () => {
@@ -792,9 +748,6 @@ describe('SubmissionsService', () => {
 
     expect(surveyApplicability.result).toHaveBeenCalled();
     expect(surveyApplicability.evaluate).not.toHaveBeenCalled();
-    expect(
-      surveyApplicability.assertVersionApplicabilitySafe,
-    ).not.toHaveBeenCalled();
   });
 
   it('opens an expired draft from stored applicability without mutating historical data', async () => {
@@ -836,9 +789,6 @@ describe('SubmissionsService', () => {
     );
     expect(surveyApplicability.result).toHaveBeenCalled();
     expect(surveyApplicability.evaluate).not.toHaveBeenCalled();
-    expect(
-      surveyApplicability.assertVersionApplicabilitySafe,
-    ).not.toHaveBeenCalled();
     const writeLockCalls = manager.findOne.mock.calls.filter(
       ([entity, options]: [unknown, { lock?: unknown }]) =>
         entity === SurveySubmission && Boolean(options.lock),
@@ -889,79 +839,6 @@ describe('SubmissionsService', () => {
     expect(manager.save).not.toHaveBeenCalled();
   });
 
-  it('blocks opening an affected draft before recalculating its applicability', async () => {
-    const version = workspaceVersion();
-    const submission = workspaceSubmission(
-      version,
-      schoolSnapshot(),
-      'draft',
-      [],
-    );
-    schoolsService.evaluationContextForUser.mockResolvedValue({
-      school,
-      rectification: {
-        id: submission.schoolRectificationId,
-        isRectified: true,
-        snapshot: submission.schoolProfileSnapshot,
-      },
-    });
-    manager.findOne.mockResolvedValue(submission);
-    surveyApplicability.assertVersionApplicabilitySafe.mockImplementationOnce(
-      () => {
-        throw new ConflictException({
-          code: 'SURVEY_VERSION_APPLICABILITY_NOT_READY',
-          message: 'La versión requiere una corrección administrativa.',
-        });
-      },
-    );
-
-    await expect(service.workspace(campaign.id, actor)).rejects.toBeInstanceOf(
-      ConflictException,
-    );
-
-    expect(surveyApplicability.evaluate).not.toHaveBeenCalled();
-    expect(manager.update).not.toHaveBeenCalled();
-    expect(manager.delete).not.toHaveBeenCalled();
-    expect(manager.save).not.toHaveBeenCalled();
-  });
-
-  it('blocks saving an affected draft before replacing answers', async () => {
-    const version = workspaceVersion();
-    const submission = workspaceSubmission(
-      version,
-      schoolSnapshot(),
-      'draft',
-      [],
-    );
-    schoolsService.evaluationContextForUser.mockResolvedValue({
-      school,
-      rectification: {
-        id: submission.schoolRectificationId,
-        isRectified: true,
-        snapshot: submission.schoolProfileSnapshot,
-      },
-    });
-    campaignsService.assertOperational.mockResolvedValue(campaign);
-    manager.findOne.mockResolvedValue(submission);
-    surveyApplicability.assertVersionApplicabilitySafe.mockImplementationOnce(
-      () => {
-        throw new ConflictException({
-          code: 'SURVEY_VERSION_APPLICABILITY_NOT_READY',
-          message: 'La versión requiere una corrección administrativa.',
-        });
-      },
-    );
-
-    await expect(
-      service.saveDraft(campaign.id, { answers: [] }, actor),
-    ).rejects.toBeInstanceOf(ConflictException);
-
-    expect(surveyApplicability.evaluate).not.toHaveBeenCalled();
-    expect(manager.update).not.toHaveBeenCalled();
-    expect(manager.delete).not.toHaveBeenCalled();
-    expect(manager.save).not.toHaveBeenCalled();
-  });
-
   it('blocks final submission while applicability has missing school data', async () => {
     const version = publishedVersion();
     const submission = {
@@ -994,52 +871,6 @@ describe('SubmissionsService', () => {
 
     await expect(service.submit(campaign.id, actor)).rejects.toThrow(
       'Tiene kiosco',
-    );
-    expect(evaluationResults.calculateAndPersist).not.toHaveBeenCalled();
-  });
-
-  it('blocks final submission when the published official version lacks the kiosk rules', async () => {
-    const version = publishedVersion();
-    const submission = workspaceSubmission(
-      version,
-      schoolSnapshot(),
-      'draft',
-      [],
-    );
-    schoolsService.evaluationContextForUser.mockResolvedValue({
-      school,
-      rectification: {
-        id: submission.schoolRectificationId,
-        isRectified: true,
-        snapshot: submission.schoolProfileSnapshot,
-      },
-    });
-    campaignsService.assertOperational.mockResolvedValue(campaign);
-    manager.findOne
-      .mockResolvedValueOnce(submission)
-      .mockResolvedValueOnce(submission)
-      .mockResolvedValueOnce(version);
-    surveyApplicability.assertVersionApplicabilitySafe.mockImplementationOnce(
-      () => {
-        throw new ConflictException({
-          code: 'SURVEY_VERSION_APPLICABILITY_NOT_READY',
-          message: 'La versión requiere una corrección administrativa.',
-        });
-      },
-    );
-
-    await expect(service.submit(campaign.id, actor)).rejects.toBeInstanceOf(
-      ConflictException,
-    );
-
-    expect(
-      surveyApplicability.assertVersionApplicabilitySafe,
-    ).toHaveBeenCalledWith(version, submission.schoolProfileSnapshot);
-    expect(surveyApplicability.evaluate).not.toHaveBeenCalled();
-    expect(manager.update).not.toHaveBeenCalledWith(
-      SurveySubmission,
-      submission.id,
-      expect.objectContaining({ status: 'submitted' }),
     );
     expect(evaluationResults.calculateAndPersist).not.toHaveBeenCalled();
   });

@@ -174,31 +174,20 @@ describe('SurveyStructureValidator', () => {
     expectValidationError(dimensions, true, 'está duplicada');
   });
 
-  it('restringe el cuestionario institucional a selección simple', () => {
-    const dimensions = [
-      dimension({
-        code: OfficialSurveyDimensionCode.InstitutionalCommitment,
-        sections: [
-          section({
-            questions: [question({ type: SurveyQuestionType.Boolean })],
-          }),
-        ],
-      }),
-    ];
-
-    expectValidationError(dimensions, false, 'sólo admite selección simple');
-  });
-
-  it('rechaza Otro y No aplica en el cuestionario institucional', () => {
+  it('no impone tipos, etiquetas ni escalas según códigos institucionales', () => {
     const dimensions = [
       dimension({
         code: OfficialSurveyDimensionCode.InstitutionalCommitment,
         sections: [
           section({
             questions: [
+              question({ type: SurveyQuestionType.Boolean }),
               question({
+                code: 'p999',
                 type: SurveyQuestionType.SingleChoice,
-                options: [{ value: 'no_aplica', label: 'No aplica', score: 0 }],
+                options: [
+                  { value: 'no_aplica', label: 'No aplica', score: 66 },
+                ],
               }),
             ],
           }),
@@ -206,7 +195,7 @@ describe('SurveyStructureValidator', () => {
       }),
     ];
 
-    expectValidationError(dimensions, false, 'no admite “Otro”');
+    expect(() => validator.validate(dimensions, false)).not.toThrow();
   });
 
   it('permite otro dentro de una frase que no representa una opción autónoma', () => {
@@ -234,44 +223,6 @@ describe('SurveyStructureValidator', () => {
     ];
 
     expect(() => validator.validate(dimensions, false)).not.toThrow();
-  });
-
-  it('aplica las escalas aprobadas según la dimensión', () => {
-    const generalDimensions = [
-      dimension({
-        code: OfficialSurveyDimensionCode.InstitutionalCommitment,
-        sections: [
-          section({
-            questions: [
-              question({
-                type: SurveyQuestionType.SingleChoice,
-                options: [{ value: 'medio', label: 'Medio', score: 66 }],
-              }),
-            ],
-          }),
-        ],
-      }),
-    ];
-    const mentalHealthDimensions = [
-      dimension({
-        code: OfficialSurveyDimensionCode.MentalHealth,
-        sections: [
-          section({
-            questions: [
-              question({
-                type: SurveyQuestionType.SingleChoice,
-                options: [{ value: 'medio', label: 'Medio', score: 66 }],
-              }),
-            ],
-          }),
-        ],
-      }),
-    ];
-
-    expectValidationError(generalDimensions, false, '100, 50, 0');
-    expect(() =>
-      validator.validate(mentalHealthDimensions, false),
-    ).not.toThrow();
   });
 });
 
