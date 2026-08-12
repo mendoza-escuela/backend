@@ -18,7 +18,6 @@ import { SurveyStructureValidator } from './survey-structure-validator.service';
 import { SurveyVersionComparator } from './survey-version-comparator.service';
 import { ApplicabilityRulesService } from './applicability-rules.service';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
-import { ApplicabilityEngine } from './applicability-engine.service';
 import { SurveyApplicabilityRule } from '../entities/survey-applicability-rule.entity';
 import { SurveyApplicabilityCondition } from '../entities/survey-applicability-condition.entity';
 import {
@@ -54,7 +53,6 @@ describe('AdminSurveysService', () => {
       {
         validateRules: jest.fn(() => []),
       } as unknown as ApplicabilityRulesService,
-      new ApplicabilityEngine(),
     );
   });
 
@@ -94,7 +92,6 @@ describe('AdminSurveysService', () => {
       {
         validateRules: jest.fn(() => []),
       } as unknown as ApplicabilityRulesService,
-      new ApplicabilityEngine(),
     );
 
     const response = await listService.list({
@@ -143,110 +140,6 @@ describe('AdminSurveysService', () => {
       service.publishVersion('survey-id', 'version-id', actor),
     ).rejects.toBeInstanceOf(BadRequestException);
 
-    expect(manager.save).not.toHaveBeenCalled();
-  });
-
-  it('impide publicar silenciosamente el banco oficial con definiciones provisionales', async () => {
-    const draft = officialPublishableDraft();
-    manager.findOne
-      .mockResolvedValueOnce({ id: draft.surveyId })
-      .mockResolvedValueOnce(draft)
-      .mockResolvedValueOnce(draft);
-
-    let caught: unknown;
-    try {
-      await service.publishVersion(draft.surveyId, draft.id, actor);
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(caught).toBeInstanceOf(BadRequestException);
-    const response = (caught as BadRequestException).getResponse() as {
-      message: string;
-      errors: string[];
-    };
-    expect(response.message).toBe(
-      'El cuestionario institucional todavía no está listo para publicarse.',
-    );
-    expect(response.errors).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('p038'),
-        expect.stringContaining('alternativa intermedia'),
-      ]),
-    );
-    expect(
-      response.errors.some((error) => error.includes('nueve preguntas')),
-    ).toBe(false);
-    expect(manager.find).not.toHaveBeenCalled();
-    expect(manager.save).not.toHaveBeenCalled();
-  });
-
-  it('impide publicar si se permuta la secuencia oficial de puntajes', async () => {
-    const draft = officialPublishableDraft();
-    const p001 = draft.dimensions[0].sections[0].questions.find(
-      ({ code }) => code === 'p001',
-    )!;
-    p001.options.forEach((option, index) => {
-      option.score = [0, 50, 100][index];
-    });
-    manager.findOne
-      .mockResolvedValueOnce({ id: draft.surveyId })
-      .mockResolvedValueOnce(draft)
-      .mockResolvedValueOnce(draft);
-
-    let caught: unknown;
-    try {
-      await service.publishVersion(draft.surveyId, draft.id, actor);
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(caught).toBeInstanceOf(BadRequestException);
-    const response = (caught as BadRequestException).getResponse() as {
-      errors: string[];
-    };
-    expect(response.errors).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('p001'),
-        expect.stringContaining('100/50/0'),
-        expect.stringContaining('0/50/100'),
-      ]),
-    );
-    expect(manager.find).not.toHaveBeenCalled();
-    expect(manager.save).not.toHaveBeenCalled();
-  });
-
-  it('impide publicar un banco oficial incompleto o con preguntas opcionales', async () => {
-    const draft = officialPublishableDraft();
-    draft.dimensions[0].sections[0].questions[0].required = false;
-    draft.dimensions = draft.dimensions.filter(
-      ({ code }) => code !== String(OfficialSurveyDimensionCode.MentalHealth),
-    );
-    manager.findOne
-      .mockResolvedValueOnce({ id: draft.surveyId })
-      .mockResolvedValueOnce(draft)
-      .mockResolvedValueOnce(draft);
-
-    let caught: unknown;
-    try {
-      await service.publishVersion(draft.surveyId, draft.id, actor);
-    } catch (error) {
-      caught = error;
-    }
-
-    expect(caught).toBeInstanceOf(BadRequestException);
-    const response = (caught as BadRequestException).getResponse() as {
-      errors: string[];
-    };
-    expect(response.errors).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('Faltan dimensiones del banco oficial'),
-        expect.stringContaining('salud_mental'),
-        expect.stringContaining('preguntas aplicables deben ser obligatorias'),
-        expect.stringContaining('p001'),
-      ]),
-    );
-    expect(manager.find).not.toHaveBeenCalled();
     expect(manager.save).not.toHaveBeenCalled();
   });
 
@@ -439,7 +332,7 @@ describe('AdminSurveysService', () => {
     });
   });
 
-  it('expone obligatoriedad y dimensiones faltantes en la validación previa oficial', async () => {
+  it('no impone dimensiones, obligatoriedad ni secuencias de puntaje por código', async () => {
     const repository = {
       findOneBy: jest.fn().mockResolvedValue({ id: 'survey-id' }),
     };
@@ -462,17 +355,8 @@ describe('AdminSurveysService', () => {
 
     const response = await service.validateVersion(draft.surveyId, draft.id);
 
-    expect(response.valid).toBe(false);
-    expect(response.errors).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining('Faltan dimensiones del banco oficial'),
-        expect.stringContaining('salud_mental'),
-        expect.stringContaining('preguntas aplicables deben ser obligatorias'),
-        expect.stringContaining('p001'),
-        expect.stringContaining('100/50/0'),
-        expect.stringContaining('0/50/100'),
-      ]),
-    );
+    expect(response.valid).toBe(true);
+    expect(response.errors).toEqual([]);
   });
 
   it('crea un borrador nuevo con las seis dimensiones oficiales por defecto', async () => {
@@ -653,7 +537,7 @@ describe('AdminSurveysService', () => {
     expect(manager.delete).not.toHaveBeenCalled();
   });
 
-  it('incorpora la regla oficial de kiosco al importar p021', async () => {
+  it('no inventa reglas de aplicabilidad al importar una pregunta', async () => {
     manager.findOne
       .mockResolvedValueOnce({ id: 'survey-id' })
       .mockResolvedValueOnce(null);
@@ -694,21 +578,13 @@ describe('AdminSurveysService', () => {
       actor,
     );
 
-    expect(manager.save).toHaveBeenCalledWith(
+    expect(manager.save).not.toHaveBeenCalledWith(
       SurveyApplicabilityRule,
-      expect.objectContaining({
-        questionId: 'saved-id',
-        action: 'show',
-        defaultAction: 'omit',
-      }),
+      expect.anything(),
     );
-    expect(manager.save).toHaveBeenCalledWith(
+    expect(manager.save).not.toHaveBeenCalledWith(
       SurveyApplicabilityCondition,
-      expect.objectContaining({
-        feature: 'has_kiosk',
-        operator: 'equals',
-        expectedValue: true,
-      }),
+      expect.anything(),
     );
   });
 

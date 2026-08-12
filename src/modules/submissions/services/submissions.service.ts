@@ -169,15 +169,6 @@ export class SubmissionsService {
           );
         }
 
-        const version = await this.getVersion(
-          manager,
-          campaign.surveyVersionId,
-        );
-        this.surveyApplicability.assertVersionApplicabilitySafe(
-          version,
-          rectification.snapshot,
-        );
-
         const submission = await manager.save(
           SurveySubmission,
           manager.create(SurveySubmission, {
@@ -971,11 +962,6 @@ export class SubmissionsService {
         'La versión asociada a la presentación no está disponible.',
       );
     const readOnly = options.readOnly ?? false;
-    if (submission.status === SubmissionStatus.Draft && !readOnly)
-      this.surveyApplicability.assertVersionApplicabilitySafe(
-        version,
-        submission.schoolProfileSnapshot,
-      );
     const stored = submission.applicabilityDecisions ?? [];
     if (
       (submission.status === SubmissionStatus.Submitted || readOnly) &&

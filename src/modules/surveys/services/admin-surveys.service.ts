@@ -34,18 +34,11 @@ import {
   OFFICIAL_SURVEY_DIMENSIONS,
   OfficialSurveyDimensionCode,
 } from '../templates/official-survey-dimensions.template';
-import {
-  createOfficialKioskApplicabilityRule,
-  inspectOfficialKioskApplicability,
-  OFFICIAL_KIOSK_QUESTION_CODES,
-} from '../policies/official-survey-applicability.policy';
-import { inspectOfficialSurveyPublicationReadiness } from '../policies/official-survey-publication.policy';
 import { SurveyStructureValidator } from './survey-structure-validator.service';
 import { SurveyVersionComparator } from './survey-version-comparator.service';
 import { SurveyApplicabilityRule } from '../entities/survey-applicability-rule.entity';
 import { SurveyApplicabilityCondition } from '../entities/survey-applicability-condition.entity';
 import { ApplicabilityRulesService } from './applicability-rules.service';
-import { ApplicabilityEngine } from './applicability-engine.service';
 
 @Injectable()
 export class AdminSurveysService {
@@ -54,7 +47,6 @@ export class AdminSurveysService {
     private readonly structureValidator: SurveyStructureValidator,
     private readonly comparator: SurveyVersionComparator,
     private readonly applicabilityRules: ApplicabilityRulesService,
-    private readonly applicabilityEngine: ApplicabilityEngine,
   ) {}
 
   async list(query: ListSurveysQueryDto) {
@@ -391,7 +383,7 @@ export class AdminSurveysService {
           publishedAt: null,
         }),
       );
-      await this.persistStructure(manager, version.id, dimensions, true);
+      await this.persistStructure(manager, version.id, dimensions);
       await this.audit(
         manager,
         actor.id,
@@ -469,14 +461,6 @@ export class AdminSurveysService {
         );
         const versionInput = this.versionToInput(withContent);
         this.structureValidator.validate(versionInput, true);
-        const publicationReadinessErrors =
-          inspectOfficialSurveyPublicationReadiness(versionInput);
-        if (publicationReadinessErrors.length)
-          throw new BadRequestException({
-            message:
-              'El cuestionario institucional todavía no está listo para publicarse.',
-            errors: publicationReadinessErrors,
-          });
         const applicabilityErrors = this.applicabilityRules.validateRules(
           withContent.dimensions.flatMap((dimension) =>
             dimension.sections.flatMap((section) =>
@@ -484,12 +468,6 @@ export class AdminSurveysService {
                 (question) => question.applicabilityRules ?? [],
               ),
             ),
-          ),
-        );
-        applicabilityErrors.push(
-          ...inspectOfficialKioskApplicability(
-            withContent.dimensions,
-            this.applicabilityEngine,
           ),
         );
         if (applicabilityErrors.length)
@@ -597,7 +575,6 @@ export class AdminSurveysService {
     const version = await this.getVersionWithContent(surveyId, versionId);
     const versionInput = this.versionToInput(version);
     const errors = this.structureValidator.inspect(versionInput, true);
-    errors.push(...inspectOfficialSurveyPublicationReadiness(versionInput));
     errors.push(
       ...this.applicabilityRules.validateRules(
         version.dimensions.flatMap((dimension) =>
@@ -607,10 +584,6 @@ export class AdminSurveysService {
             ),
           ),
         ),
-      ),
-      ...inspectOfficialKioskApplicability(
-        version.dimensions,
-        this.applicabilityEngine,
       ),
     );
     return {
@@ -724,7 +697,6 @@ export class AdminSurveysService {
     manager: EntityManager,
     versionId: string,
     dimensions: SurveyDimensionInputDto[],
-    applyOfficialApplicability = false,
   ) {
     for (const [dimensionOrder, dimensionInput] of dimensions.entries()) {
       const dimension = await manager.save(
@@ -768,13 +740,6 @@ export class AdminSurveysService {
               validation: questionInput.validation ?? {},
             }),
           );
-          if (
-            applyOfficialApplicability &&
-            OFFICIAL_KIOSK_QUESTION_CODES.includes(
-              question.code as (typeof OFFICIAL_KIOSK_QUESTION_CODES)[number],
-            )
-          )
-            await this.persistOfficialKioskApplicability(manager, question.id);
           for (const [
             optionOrder,
             optionInput,
@@ -793,30 +758,6 @@ export class AdminSurveysService {
         }
       }
     }
-  }
-
-  private async persistOfficialKioskApplicability(
-    manager: EntityManager,
-    questionId: string,
-  ) {
-    const definition = createOfficialKioskApplicabilityRule();
-    const rule = await manager.save(
-      SurveyApplicabilityRule,
-      manager.create(SurveyApplicabilityRule, {
-        questionId,
-        groupOperator: definition.groupOperator,
-        action: definition.action,
-        defaultAction: definition.defaultAction,
-        order: definition.order,
-      }),
-    );
-    await manager.save(
-      SurveyApplicabilityCondition,
-      manager.create(SurveyApplicabilityCondition, {
-        ruleId: rule.id,
-        ...definition.conditions[0],
-      }),
-    );
   }
 
   private async cloneApplicabilityRules(
