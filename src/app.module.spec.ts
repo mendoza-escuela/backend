@@ -1,6 +1,7 @@
 import { MODULE_METADATA } from '@nestjs/common/constants';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerExceptionFilter } from './common/filters/throttler-exception.filter';
 import { CsrfProtectionGuard } from './common/guards/csrf-protection.guard';
 import { AppModule } from './app.module';
 
@@ -21,6 +22,15 @@ describe('AppModule security guards', () => {
 
     expect(globalGuards).toEqual(
       expect.arrayContaining([ThrottlerGuard, CsrfProtectionGuard]),
+    );
+
+    expect(providers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provide: APP_FILTER,
+          useClass: ThrottlerExceptionFilter,
+        }),
+      ]),
     );
   });
 });
