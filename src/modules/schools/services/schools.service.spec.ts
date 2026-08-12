@@ -69,10 +69,20 @@ describe('SchoolsService pagination', () => {
         lastName: 'Pérez',
         email: 'ana@example.com',
         isActive: true,
+        userSchools: [
+          {
+            schoolId: 'other-school-id',
+            school: {
+              id: 'other-school-id',
+              cue: '500000001',
+              name: 'Escuela anterior',
+            },
+          },
+        ],
       },
     ] as User[];
     const builder = {
-      leftJoin: jest.fn().mockReturnThis(),
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
       select: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
@@ -98,10 +108,19 @@ describe('SchoolsService pagination', () => {
     expect(builder.where).toHaveBeenCalledWith('user.role = :role', {
       role: UserRole.School,
     });
+    expect(builder.andWhere).not.toHaveBeenCalledWith(
+      expect.stringContaining('assignment.userId IS NULL'),
+      expect.anything(),
+    );
     expect(builder.orderBy).toHaveBeenCalledWith('user.lastName', 'ASC');
     expect(builder.addOrderBy).toHaveBeenCalledWith('user.firstName', 'ASC');
     expect(builder.skip).toHaveBeenCalledWith(20);
     expect(builder.take).toHaveBeenCalledWith(20);
+    expect(response.items[0].assignedSchool).toEqual({
+      id: 'other-school-id',
+      cue: '500000001',
+      name: 'Escuela anterior',
+    });
     expect(response.pagination.totalPages).toBe(2);
   });
 });

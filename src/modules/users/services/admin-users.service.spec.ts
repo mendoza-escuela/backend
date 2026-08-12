@@ -3,7 +3,9 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { MailService } from '../../mail/services/mail.service';
 import { School } from '../../schools/entities/school.entity';
+import { SchoolUserAssignmentHistory } from '../../schools/entities/school-user-assignment-history.entity';
 import { UserRole } from '../entities/user-role.enum';
+import { UserSchool } from '../entities/user-school.entity';
 import { User } from '../entities/user.entity';
 import { AdminUsersService } from './admin-users.service';
 
@@ -244,6 +246,186 @@ describe('AdminUsersService', () => {
     expect(queryBuilder.where).toHaveBeenCalledWith(
       'LOWER(user.email) = :email',
       { email: 'ana@example.com' },
+    );
+  });
+
+  it('permite dejar sin colegio a un usuario Escuela durante la edición', async () => {
+    const user = {
+      id: 'user-id',
+      firstName: 'Ana',
+      lastName: 'Pérez',
+      email: 'ana@example.com',
+      role: UserRole.School,
+      isActive: true,
+      userSchools: [{ userId: 'user-id', schoolId: 'old-school-id' }],
+    } as User;
+    const save = jest.fn().mockResolvedValue({});
+    const manager = {
+      getRepository: jest.fn(() => ({
+        findOne: jest.fn().mockResolvedValue(user),
+      })),
+      findOneBy: jest.fn((entity: unknown, criteria: { userId?: string }) =>
+        Promise.resolve(
+          entity === UserSchool && criteria.userId === user.id
+            ? { userId: user.id, schoolId: 'old-school-id' }
+            : null,
+        ),
+      ),
+      save,
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (transactionManager: typeof manager) => Promise<void>) =>
+          callback(manager),
+      ),
+    } as unknown as DataSource;
+    const service = new AdminUsersService(dataSource);
+    jest.spyOn(service, 'findOne').mockResolvedValue(user as never);
+
+    await service.update(user.id, { role: UserRole.School, schoolId: null }, {
+      id: 'actor-id',
+    } as never);
+
+    expect(manager.delete).toHaveBeenCalledWith(UserSchool, {
+      userId: user.id,
+    });
+    expect(save).toHaveBeenCalledWith(
+      SchoolUserAssignmentHistory,
+      expect.objectContaining({
+        schoolId: 'old-school-id',
+        previousUserId: user.id,
+        newUserId: null,
+        action: 'unassigned',
+      }),
+    );
+  });
+
+  it('asocia un usuario sin colegio a un establecimiento disponible', async () => {
+    const user = {
+      id: 'user-id',
+      firstName: 'Ana',
+      lastName: 'Pérez',
+      email: 'ana@example.com',
+      role: UserRole.School,
+      isActive: true,
+      userSchools: [],
+    } as unknown as User;
+    const targetSchool = {
+      id: 'new-school-id',
+      isActive: true,
+    } as School;
+    const findUser = jest.fn().mockResolvedValue(user);
+    const save = jest.fn().mockResolvedValue({});
+    const manager = {
+      getRepository: jest.fn(() => ({ findOne: findUser })),
+      findOneBy: jest.fn((entity: unknown) =>
+        Promise.resolve(entity === School ? targetSchool : null),
+      ),
+      save,
+      delete: jest.fn().mockResolvedValue({ affected: 0 }),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (transactionManager: typeof manager) => Promise<void>) =>
+          callback(manager),
+      ),
+    } as unknown as DataSource;
+    const service = new AdminUsersService(dataSource);
+    jest.spyOn(service, 'findOne').mockResolvedValue(user as never);
+
+    await service.update(
+      user.id,
+      { role: UserRole.School, schoolId: targetSchool.id },
+      { id: 'actor-id' } as never,
+    );
+
+    expect(findUser).toHaveBeenCalledWith({
+      where: { id: user.id },
+      lock: { mode: 'pessimistic_write' },
+    });
+    expect(save).toHaveBeenCalledWith(UserSchool, {
+      userId: user.id,
+      schoolId: targetSchool.id,
+    });
+    expect(save).toHaveBeenCalledWith(
+      SchoolUserAssignmentHistory,
+      expect.objectContaining({
+        schoolId: targetSchool.id,
+        previousUserId: null,
+        newUserId: user.id,
+        action: 'assigned',
+      }),
+    );
+  });
+
+  it('reemplaza la asociación existente al cambiar un usuario de colegio', async () => {
+    const user = {
+      id: 'user-id',
+      firstName: 'Ana',
+      lastName: 'Pérez',
+      email: 'ana@example.com',
+      role: UserRole.School,
+      isActive: true,
+      userSchools: [{ userId: 'user-id', schoolId: 'old-school-id' }],
+    } as User;
+    const targetSchool = {
+      id: 'new-school-id',
+      isActive: true,
+    } as School;
+    const occupied = {
+      userId: 'displaced-user-id',
+      schoolId: targetSchool.id,
+    } as UserSchool;
+    const save = jest.fn().mockResolvedValue({});
+    const manager = {
+      getRepository: jest.fn(() => ({
+        findOne: jest.fn().mockResolvedValue(user),
+      })),
+      findOneBy: jest.fn(
+        (entity: unknown, criteria: { userId?: string; schoolId?: string }) => {
+          if (entity === School) return Promise.resolve(targetSchool);
+          if (criteria.userId === user.id)
+            return Promise.resolve({
+              userId: user.id,
+              schoolId: 'old-school-id',
+            });
+          return Promise.resolve(occupied);
+        },
+      ),
+      save,
+      delete: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (transactionManager: typeof manager) => Promise<void>) =>
+          callback(manager),
+      ),
+    } as unknown as DataSource;
+    const service = new AdminUsersService(dataSource);
+    jest.spyOn(service, 'findOne').mockResolvedValue(user as never);
+
+    await service.update(
+      user.id,
+      { role: UserRole.School, schoolId: targetSchool.id },
+      { id: 'actor-id' } as never,
+    );
+
+    expect(manager.delete).toHaveBeenCalledWith(UserSchool, {
+      userId: 'displaced-user-id',
+    });
+    expect(save).toHaveBeenCalledWith(UserSchool, {
+      userId: user.id,
+      schoolId: targetSchool.id,
+    });
+    expect(save).toHaveBeenCalledWith(
+      SchoolUserAssignmentHistory,
+      expect.objectContaining({
+        schoolId: targetSchool.id,
+        previousUserId: 'displaced-user-id',
+        newUserId: user.id,
+        action: 'replaced',
+      }),
     );
   });
 

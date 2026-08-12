@@ -230,10 +230,12 @@ export class AdminUsersService {
       await this.dataSource.transaction(async (manager) => {
         const user = await manager.getRepository(User).findOne({
           where: { id },
-          relations: { userSchools: { school: true } },
           lock: { mode: 'pessimistic_write' },
         });
         if (!user) throw new NotFoundException('Usuario no encontrado.');
+        const currentAssociation = await manager.findOneBy(UserSchool, {
+          userId: id,
+        });
         if (actor.id === id && dto.role && dto.role !== UserRole.Admin) {
           throw new ForbiddenException(
             'No podés quitarte tu propio rol administrador.',
@@ -246,9 +248,12 @@ export class AdminUsersService {
           await this.assertUniqueEmail(manager, dto.email, id);
         }
 
-        const before = this.snapshot(user);
+        const before = {
+          ...this.snapshot(user),
+          schoolId: currentAssociation?.schoolId ?? null,
+        };
         const targetRole = dto.role ?? user.role;
-        const currentSchoolId = user.userSchools[0]?.schoolId;
+        const currentSchoolId = currentAssociation?.schoolId;
         const requestedSchoolId =
           targetRole === UserRole.Admin
             ? undefined
@@ -260,7 +265,16 @@ export class AdminUsersService {
           targetRole,
           requestedSchoolId,
           id,
+          true,
+          true,
         );
+        const displacedAssociation = school
+          ? await manager.findOneBy(UserSchool, { schoolId: school.id })
+          : null;
+        const displacedUserId =
+          displacedAssociation?.userId !== id
+            ? (displacedAssociation?.userId ?? null)
+            : null;
 
         user.firstName = dto.firstName
           ? this.cleanName(dto.firstName)
@@ -274,6 +288,16 @@ export class AdminUsersService {
         await this.assertActiveAdministratorRemains(manager, user, before);
         await manager.save(User, user);
         await manager.delete(UserSchool, { userId: id });
+        if (displacedUserId) {
+          await manager.delete(UserSchool, { userId: displacedUserId });
+          await this.audit(
+            manager,
+            actor.id,
+            'USER_SCHOOL_UNASSIGNED',
+            displacedUserId,
+            { schoolId: { from: school?.id ?? null, to: null } },
+          );
+        }
         if (school)
           await manager.save(UserSchool, { userId: id, schoolId: school.id });
         if (currentSchoolId !== school?.id) {
@@ -290,10 +314,10 @@ export class AdminUsersService {
             await this.assignmentHistory(
               manager,
               school.id,
-              null,
+              displacedUserId,
               id,
               actor.id,
-              'assigned',
+              displacedUserId ? 'replaced' : 'assigned',
             );
         }
 
@@ -424,6 +448,8 @@ export class AdminUsersService {
     role: UserRole,
     schoolId?: string,
     exceptUserId?: string,
+    allowUnassigned = false,
+    allowOccupied = false,
   ) {
     if (role === UserRole.Admin) {
       if (schoolId)
@@ -432,6 +458,7 @@ export class AdminUsersService {
         );
       return null;
     }
+    if (!schoolId && allowUnassigned) return null;
     if (!schoolId)
       throw new BadRequestException(
         'El rol Escuela requiere un establecimiento asociado.',
@@ -444,7 +471,11 @@ export class AdminUsersService {
     });
     if (!school.isActive && existingAssociation?.userId !== exceptUserId)
       throw new BadRequestException('El colegio seleccionado está inactivo.');
-    if (existingAssociation && existingAssociation.userId !== exceptUserId) {
+    if (
+      existingAssociation &&
+      existingAssociation.userId !== exceptUserId &&
+      !allowOccupied
+    ) {
       throw new ConflictException(
         'El colegio ya tiene un usuario asociado. Reemplazalo desde el detalle del colegio.',
       );
@@ -507,7 +538,7 @@ export class AdminUsersService {
     previousUserId: string | null,
     newUserId: string | null,
     actorUserId: string,
-    action: 'assigned' | 'unassigned',
+    action: 'assigned' | 'unassigned' | 'replaced',
   ) {
     return manager.save(SchoolUserAssignmentHistory, {
       schoolId,

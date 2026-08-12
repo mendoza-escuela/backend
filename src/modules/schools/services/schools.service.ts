@@ -142,20 +142,22 @@ export class SchoolsService {
     const builder = this.dataSource
       .getRepository(User)
       .createQueryBuilder('user')
-      .leftJoin('user.userSchools', 'assignment')
+      .leftJoinAndSelect('user.userSchools', 'assignment')
+      .leftJoinAndSelect('assignment.school', 'assignedSchool')
       .select([
         'user.id',
         'user.firstName',
         'user.lastName',
         'user.email',
         'user.isActive',
+        'assignment.userId',
+        'assignment.schoolId',
+        'assignedSchool.id',
+        'assignedSchool.cue',
+        'assignedSchool.name',
       ])
       .where('user.role = :role', { role: UserRole.School })
       .andWhere('user.isActive = true')
-      .andWhere(
-        '(assignment.userId IS NULL OR assignment.schoolId = :schoolId)',
-        { schoolId },
-      )
       .orderBy('user.lastName', 'ASC')
       .addOrderBy('user.firstName', 'ASC')
       .addOrderBy('user.id', 'ASC')
@@ -177,6 +179,13 @@ export class SchoolsService {
         lastName: user.lastName,
         email: user.email,
         isActive: user.isActive,
+        assignedSchool: user.userSchools?.[0]?.school
+          ? {
+              id: user.userSchools[0].school.id,
+              cue: user.userSchools[0].school.cue,
+              name: user.userSchools[0].school.name,
+            }
+          : null,
       })),
       pagination: {
         page: query.page,
@@ -896,7 +905,10 @@ export class SchoolsService {
       if (current?.userId === dto.userId) return;
       let next: User | null = null;
       if (dto.userId) {
-        next = await manager.findOneBy(User, { id: dto.userId });
+        next = await manager.getRepository(User).findOne({
+          where: { id: dto.userId },
+          lock: { mode: 'pessimistic_write' },
+        });
         if (!next || next.role !== UserRole.School)
           throw new BadRequestException(
             'Sólo puede asociarse un usuario con rol Colegio.',
@@ -908,10 +920,23 @@ export class SchoolsService {
         const otherAssignment = await manager.findOneBy(UserSchool, {
           userId: next.id,
         });
-        if (otherAssignment && otherAssignment.schoolId !== id)
-          throw new ConflictException(
-            'El usuario ya está asociado a otro colegio.',
+        if (otherAssignment && otherAssignment.schoolId !== id) {
+          await manager.delete(UserSchool, { userId: next.id });
+          await manager.save(SchoolUserAssignmentHistory, {
+            schoolId: otherAssignment.schoolId,
+            previousUserId: next.id,
+            newUserId: null,
+            actorUserId: actor.id,
+            action: 'unassigned',
+          });
+          await this.audit(
+            manager,
+            actor.id,
+            'SCHOOL_USER_UNASSIGNED',
+            otherAssignment.schoolId,
+            { userId: { from: next.id, to: null }, movedToSchoolId: id },
           );
+        }
       }
       if (current) await manager.delete(UserSchool, { schoolId: id });
       if (next)
