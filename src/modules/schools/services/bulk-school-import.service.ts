@@ -30,11 +30,6 @@ type ValidatedSchoolRow = {
   referentEmail: string;
   referentPhone: string;
   referentPosition: string;
-  healthReferentFirstName: string;
-  healthReferentLastName: string;
-  healthReferentPosition: string;
-  healthReferentEmail: string;
-  healthReferentPhone: string;
   enrollment: number | null;
   characteristics: Record<string, string | number | boolean | null>;
   isActive: boolean | null;
@@ -51,9 +46,9 @@ export class BulkSchoolImportService {
 
   template() {
     const headers =
-      'cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_cargo,referente_correo,referente_telefono,salud_referente_nombre,salud_referente_apellido,salud_referente_cargo,salud_referente_correo,salud_referente_telefono,matricula,caracteristicas,estado';
+      'cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_cargo,referente_correo,referente_telefono,matricula,caracteristicas,estado';
     const example =
-      '500012300,Escuela Ejemplo,María González,1-001,Capital,Mendoza,Av. Ejemplo 123,5500,Primario,Estatal,Urbano,Completa,2614000000,escuela@ejemplo.edu.ar,Ana,Pérez,Secretaria,ana.perez@ejemplo.edu.ar,2614000001,Laura,Gómez,Docente,laura.gomez@ejemplo.edu.ar,2614000002,350,"{""comedor"":true}",activo';
+      '500012300,Escuela Ejemplo,María González,1-001,Capital,Mendoza,Av. Ejemplo 123,5500,Primario,Estatal,Urbano,Completa,2614000000,escuela@ejemplo.edu.ar,Ana,Pérez,Secretaria,ana.perez@ejemplo.edu.ar,2614000001,350,"{""comedor"":true}",activo';
     return Buffer.from(`\uFEFF${headers}\r\n${example}`, 'utf8');
   }
 
@@ -63,7 +58,12 @@ export class BulkSchoolImportService {
 
   async import(file: Express.Multer.File, actor: AuthenticatedUser) {
     const rows = await this.readAndValidate(file);
-    const imported: Array<{ line: number; id: string; cue: string }> = [];
+    const imported: Array<{
+      line: number;
+      id: string;
+      cue: string;
+      invitationEmailSent: boolean;
+    }> = [];
     const errors = rows
       .filter((row) => row.errors.length)
       .map((row) => ({ line: row.line, cue: row.cue, errors: row.errors }));
@@ -98,18 +98,6 @@ export class BulkSchoolImportService {
                 email: row.referentEmail || undefined,
                 phone: row.referentPhone || undefined,
               },
-              ...(row.healthReferentFirstName
-                ? [
-                    {
-                      type: SchoolContactType.HealthPromotion,
-                      firstName: row.healthReferentFirstName,
-                      lastName: row.healthReferentLastName,
-                      position: row.healthReferentPosition || undefined,
-                      email: row.healthReferentEmail || undefined,
-                      phone: row.healthReferentPhone || undefined,
-                    },
-                  ]
-                : []),
             ],
             enrollment: row.enrollment!,
             characteristics: row.characteristics,
@@ -117,7 +105,13 @@ export class BulkSchoolImportService {
           },
           actor,
         );
-        imported.push({ line: row.line, id: school.id, cue: school.cue });
+        imported.push({
+          line: row.line,
+          id: school.id,
+          cue: school.cue,
+          invitationEmailSent:
+            school.responsibleUserInvitationEmailSent === true,
+        });
       } catch (error) {
         errors.push({
           line: row.line,
@@ -129,6 +123,12 @@ export class BulkSchoolImportService {
     return {
       totalRows: rows.length,
       importedCount: imported.length,
+      invitationEmailSentCount: imported.filter(
+        ({ invitationEmailSent }) => invitationEmailSent,
+      ).length,
+      invitationEmailPendingCount: imported.filter(
+        ({ invitationEmailSent }) => !invitationEmailSent,
+      ).length,
       errorCount: errors.length,
       imported,
       errors: errors.sort((a, b) => a.line - b.line),
@@ -208,20 +208,6 @@ export class BulkSchoolImportService {
         referentEmail: record.referente_correo.trim().toLowerCase(),
         referentPhone: record.referente_telefono.trim(),
         referentPosition: this.optional(record, 'referente_cargo'),
-        healthReferentFirstName: this.optional(
-          record,
-          'salud_referente_nombre',
-        ),
-        healthReferentLastName: this.optional(
-          record,
-          'salud_referente_apellido',
-        ),
-        healthReferentPosition: this.optional(record, 'salud_referente_cargo'),
-        healthReferentEmail: this.optional(
-          record,
-          'salud_referente_correo',
-        ).toLowerCase(),
-        healthReferentPhone: this.optional(record, 'salud_referente_telefono'),
         enrollment,
         characteristics: characteristics.value,
         isActive,
@@ -261,47 +247,15 @@ export class BulkSchoolImportService {
         if (value.length > max) row.errors.push(`${label} demasiado largo.`);
       if (row.email && (!isEmail(row.email) || row.email.length > 255))
         row.errors.push('Correo del colegio inválido.');
-      if (
-        row.referentEmail &&
-        (!isEmail(row.referentEmail) || row.referentEmail.length > 255)
-      )
-        row.errors.push('Correo del referente inválido.');
+      if (!row.referentEmail)
+        row.errors.push('El correo del referente responsable es obligatorio.');
+      else if (!isEmail(row.referentEmail) || row.referentEmail.length > 255)
+        row.errors.push('Correo del referente responsable inválido.');
       if (
         row.referentPosition &&
         (row.referentPosition.length < 2 || row.referentPosition.length > 160)
       )
         row.errors.push('Cargo del referente inválido.');
-      const hasHealthContact = [
-        row.healthReferentFirstName,
-        row.healthReferentLastName,
-        row.healthReferentPosition,
-        row.healthReferentEmail,
-        row.healthReferentPhone,
-      ].some(Boolean);
-      if (
-        hasHealthContact &&
-        (row.healthReferentFirstName.length < 2 ||
-          row.healthReferentLastName.length < 2)
-      )
-        row.errors.push(
-          'El referente de promoción de la salud requiere nombre y apellido.',
-        );
-      if (
-        row.healthReferentPosition &&
-        (row.healthReferentPosition.length < 2 ||
-          row.healthReferentPosition.length > 160)
-      )
-        row.errors.push(
-          'Cargo del referente de promoción de la salud inválido.',
-        );
-      if (
-        row.healthReferentEmail &&
-        (!isEmail(row.healthReferentEmail) ||
-          row.healthReferentEmail.length > 255)
-      )
-        row.errors.push(
-          'Correo del referente de promoción de la salud inválido.',
-        );
       if (enrollment === null || enrollment < 0 || enrollment > 1_000_000)
         row.errors.push('Matrícula inválida.');
       if (isActive === null)

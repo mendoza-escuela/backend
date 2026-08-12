@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import { DataSource, EntityManager, EntityTarget } from 'typeorm';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { User } from '../../users/entities/user.entity';
+import { AdminUsersService } from '../../users/services/admin-users.service';
 import { School } from '../entities/school.entity';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { SchoolRectification } from '../entities/school-rectification.entity';
@@ -311,12 +312,22 @@ describe('SchoolsService structured admin writes', () => {
           callback(manager as unknown as EntityManager),
       ),
     } as unknown as DataSource;
-    const service = new SchoolsService(dataSource);
+    const createInTransaction = jest.fn().mockResolvedValue({
+      id: 'responsible-user-id',
+      firstName: 'Ana',
+      lastName: 'Pérez',
+      email: 'ana@example.edu.ar',
+    });
+    const sendInvitation = jest.fn().mockResolvedValue(true);
+    const service = new SchoolsService(dataSource, {
+      createInTransaction,
+      sendInvitation,
+    } as unknown as AdminUsersService);
     jest
       .spyOn(service, 'findOne')
       .mockResolvedValue({ id: 'new-school-id' } as never);
 
-    await service.create(
+    const created = await service.create(
       {
         cue: '500012300',
         name: 'Escuela Uno',
@@ -332,6 +343,7 @@ describe('SchoolsService structured admin writes', () => {
         educationLevels: [{ levelId: level.id, enrollment: null }],
         referentFirstName: 'Ana',
         referentLastName: 'Pérez',
+        referentEmail: 'ana@example.edu.ar',
         enrollment: null,
         contacts: [
           {
@@ -365,6 +377,29 @@ describe('SchoolsService structured admin writes', () => {
           }),
         ],
       },
+    });
+    expect(createInTransaction).toHaveBeenCalledWith(
+      manager,
+      expect.objectContaining({
+        firstName: 'Ana',
+        lastName: 'Pérez',
+        email: 'ana@example.edu.ar',
+        role: UserRole.School,
+        schoolId: 'new-school-id',
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Jest tipa los asymmetric matchers como any.
+        temporaryPassword: expect.stringMatching(
+          /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{12,}$/,
+        ),
+      }),
+      { id: 'actor-id' },
+    );
+    expect(sendInvitation).toHaveBeenCalledWith(
+      'responsible-user-id',
+      expect.objectContaining({ email: 'ana@example.edu.ar' }),
+    );
+    expect(created).toMatchObject({
+      id: 'new-school-id',
+      responsibleUserInvitationEmailSent: true,
     });
   });
 });

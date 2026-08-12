@@ -38,6 +38,6 @@ import { MailModule } from '../mail/mail.module';
     PasswordChangeRequiredGuard,
     RolesGuard,
   ],
-  exports: [UsersService, SchoolAccessGuard, TypeOrmModule],
+  exports: [UsersService, AdminUsersService, SchoolAccessGuard, TypeOrmModule],
 })
 export class UsersModule {}

@@ -5,6 +5,7 @@ import { AuthSession } from '../auth/entities/auth-session.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UserSchool } from '../users/entities/user-school.entity';
 import { User } from '../users/entities/user.entity';
+import { UsersModule } from '../users/users.module';
 import { PasswordChangeRequiredGuard } from '../../common/guards/password-change-required.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { AdminSchoolsController } from './controllers/admin-schools.controller';
@@ -22,6 +23,7 @@ import { SchoolsService } from './services/schools.service';
 
 @Module({
   imports: [
+    UsersModule,
     TypeOrmModule.forFeature([
       School,
       SchoolContact,

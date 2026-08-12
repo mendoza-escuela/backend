@@ -3,9 +3,10 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { randomUUID } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import ExcelJS from 'exceljs';
 import { isEmail } from 'class-validator';
 import {
@@ -20,6 +21,7 @@ import { AuthenticatedUser } from '../../../common/types/authenticated-user.type
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { AuthSession } from '../../auth/entities/auth-session.entity';
 import { UserRole } from '../../users/entities/user-role.enum';
+import { AdminUsersService } from '../../users/services/admin-users.service';
 import { UserSchool } from '../../users/entities/user-school.entity';
 import { User } from '../../users/entities/user.entity';
 import { AssignSchoolUserDto } from '../dto/assign-school-user.dto';
@@ -56,7 +58,10 @@ type SelectedEducationLevel = {
 
 @Injectable()
 export class SchoolsService {
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    @Optional() private readonly adminUsersService?: AdminUsersService,
+  ) {}
 
   async list(query: ListSchoolsQueryDto) {
     const builder = this.filteredBuilder(query)
@@ -598,14 +603,22 @@ export class SchoolsService {
   }
 
   async create(dto: CreateSchoolDto, actor: AuthenticatedUser) {
+    if (!dto.referentEmail?.trim()) {
+      throw new BadRequestException({
+        code: 'RESPONSIBLE_EMAIL_REQUIRED',
+        field: 'referentEmail',
+        message: 'Ingresá el correo del referente responsable.',
+      });
+    }
     const normalized = this.normalize(dto);
     const requestedContacts = normalized.contacts;
     const requestedEducationLevels = normalized.educationLevels;
     delete (normalized as Partial<CreateSchoolDto>).contacts;
     delete (normalized as Partial<CreateSchoolDto>).educationLevels;
     this.validateCharacteristics(normalized.characteristics);
+    const temporaryPassword = this.generateTemporaryPassword();
     try {
-      const id = await this.dataSource.transaction(async (manager) => {
+      const created = await this.dataSource.transaction(async (manager) => {
         await this.assertCueUnique(manager, normalized.cue);
         const selectedShift = await this.resolveShift(
           manager,
@@ -646,9 +659,38 @@ export class SchoolsService {
             finalContacts,
           ),
         );
-        return school.id;
+        const responsibleUser = this.adminUsersService
+          ? await this.adminUsersService.createInTransaction(
+              manager,
+              {
+                firstName: normalized.referentFirstName,
+                lastName: normalized.referentLastName,
+                email: normalized.referentEmail!,
+                role: UserRole.School,
+                schoolId: school.id,
+                temporaryPassword,
+                isActive: normalized.isActive ?? true,
+              },
+              actor,
+            )
+          : null;
+        return { schoolId: school.id, responsibleUser };
       });
-      return this.findOne(id);
+      const invitationEmailSent = created.responsibleUser
+        ? await this.adminUsersService!.sendInvitation(
+            created.responsibleUser.id,
+            {
+              firstName: created.responsibleUser.firstName,
+              lastName: created.responsibleUser.lastName,
+              email: created.responsibleUser.email,
+              temporaryPassword,
+            },
+          )
+        : false;
+      return {
+        ...(await this.findOne(created.schoolId)),
+        responsibleUserInvitationEmailSent: invitationEmailSent,
+      };
     } catch (error) {
       this.rethrowUnique(error);
     }
@@ -947,14 +989,10 @@ export class SchoolsService {
       'Jornada',
       'Correo',
       'Teléfono',
-      'Referente respondente',
-      'Cargo respondente',
-      'Correo respondente',
-      'Teléfono respondente',
-      'Referente de promoción de la salud',
-      'Cargo promoción de la salud',
-      'Correo promoción de la salud',
-      'Teléfono promoción de la salud',
+      'Referente responsable',
+      'Cargo responsable',
+      'Correo responsable',
+      'Teléfono responsable',
       'Matrícula',
       'Estado',
       'Período de rectificación',
@@ -965,9 +1003,6 @@ export class SchoolsService {
       const schoolContacts = contactsBySchool.get(school.id) ?? [];
       const respondent = schoolContacts.find(
         ({ type }) => type === SchoolContactType.Respondent,
-      );
-      const healthPromotion = schoolContacts.find(
-        ({ type }) => type === SchoolContactType.HealthPromotion,
       );
       return [
         school.cue,
@@ -990,12 +1025,6 @@ export class SchoolsService {
         respondent?.position ?? '',
         respondent?.email ?? school.referentEmail ?? '',
         respondent?.phone ?? school.referentPhone ?? '',
-        healthPromotion
-          ? `${healthPromotion.lastName}, ${healthPromotion.firstName}`
-          : '',
-        healthPromotion?.position ?? '',
-        healthPromotion?.email ?? '',
-        healthPromotion?.phone ?? '',
         school.enrollment,
         school.isActive ? 'Activo' : 'Inactivo',
         currentYear,
@@ -1397,7 +1426,7 @@ export class SchoolsService {
       );
     if (!types.includes(SchoolContactType.Respondent))
       throw new BadRequestException(
-        'Debe informarse el referente respondente del establecimiento.',
+        'Debe informarse el referente responsable del establecimiento.',
       );
     await manager.delete(SchoolContact, { schoolId: school.id });
     const saved = contacts.length
@@ -1738,10 +1767,25 @@ export class SchoolsService {
     });
   }
   private rethrowUnique(error: unknown): never {
-    const db = error as { code?: string; driverError?: { code?: string } };
-    if (db?.code === '23505' || db?.driverError?.code === '23505')
+    const db = error as {
+      code?: string;
+      constraint?: string;
+      driverError?: { code?: string; constraint?: string };
+    };
+    const code = db?.code ?? db?.driverError?.code;
+    const constraint = db?.constraint ?? db?.driverError?.constraint;
+    if (code === '23505' && constraint === 'IDX_users_email_unique')
+      throw new ConflictException({
+        code: 'USER_EMAIL_CONFLICT',
+        field: 'referentEmail',
+        message: 'Ya existe un usuario con ese correo.',
+      });
+    if (code === '23505')
       throw new ConflictException('Ya existe un colegio con ese CUE.');
     throw error;
+  }
+  private generateTemporaryPassword() {
+    return `Mm9!${randomBytes(12).toString('base64url')}`;
   }
   private userSummary(user: User | null) {
     return user

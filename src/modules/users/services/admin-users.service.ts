@@ -141,54 +141,10 @@ export class AdminUsersService {
   }
 
   async create(dto: CreateUserDto, actor: AuthenticatedUser) {
-    assertStrongPassword(dto.temporaryPassword);
     let userId: string;
     try {
       userId = await this.dataSource.transaction(async (manager) => {
-        await this.assertUniqueEmail(manager, dto.email);
-        const school = await this.resolveSchool(
-          manager,
-          dto.role,
-          dto.schoolId,
-        );
-        const user = await manager.save(
-          User,
-          manager.create(User, {
-            firstName: this.cleanName(dto.firstName),
-            lastName: this.cleanName(dto.lastName),
-            email: dto.email.trim().toLowerCase(),
-            passwordHash: await bcrypt.hash(dto.temporaryPassword, 12),
-            role: dto.role,
-            isActive: dto.isActive ?? true,
-            mustChangePassword: true,
-            lastLoginAt: null,
-            failedLoginAttempts: 0,
-            lockedUntil: null,
-          }),
-        );
-        if (school) {
-          await manager.save(UserSchool, {
-            userId: user.id,
-            schoolId: school.id,
-          });
-          await this.assignmentHistory(
-            manager,
-            school.id,
-            null,
-            user.id,
-            actor.id,
-            'assigned',
-          );
-        }
-        await this.audit(manager, actor.id, 'USER_CREATED', user.id, {
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email,
-          role: user.role,
-          schoolId: school?.id ?? null,
-          isActive: user.isActive,
-          mustChangePassword: true,
-        });
+        const user = await this.createInTransaction(manager, dto, actor);
         return user.id;
       });
     } catch (error) {
@@ -205,6 +161,68 @@ export class AdminUsersService {
       temporaryPassword: dto.temporaryPassword,
     });
     return { ...user, invitationEmailSent };
+  }
+
+  /**
+   * Crea y, cuando corresponde, asocia un usuario dentro de una transacción
+   * administrada por el flujo llamador. Permite que el alta de colegio y su
+   * responsable se confirmen o reviertan como una sola operación.
+   */
+  async createInTransaction(
+    manager: EntityManager,
+    dto: CreateUserDto,
+    actor: AuthenticatedUser,
+  ): Promise<User> {
+    assertStrongPassword(dto.temporaryPassword);
+    await this.assertUniqueEmail(manager, dto.email);
+    const school = await this.resolveSchool(manager, dto.role, dto.schoolId);
+    const user = await manager.save(
+      User,
+      manager.create(User, {
+        firstName: this.cleanName(dto.firstName),
+        lastName: this.cleanName(dto.lastName),
+        email: dto.email.trim().toLowerCase(),
+        passwordHash: await bcrypt.hash(dto.temporaryPassword, 12),
+        role: dto.role,
+        isActive: dto.isActive ?? true,
+        mustChangePassword: true,
+        lastLoginAt: null,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      }),
+    );
+    if (school) {
+      await manager.save(UserSchool, {
+        userId: user.id,
+        schoolId: school.id,
+      });
+      await this.assignmentHistory(
+        manager,
+        school.id,
+        null,
+        user.id,
+        actor.id,
+        'assigned',
+      );
+    }
+    await this.audit(manager, actor.id, 'USER_CREATED', user.id, {
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      role: user.role,
+      schoolId: school?.id ?? null,
+      isActive: user.isActive,
+      mustChangePassword: true,
+    });
+    return user;
+  }
+
+  /** Envía las credenciales luego de confirmar la transacción de alta. */
+  sendInvitation(
+    userId: string,
+    account: Parameters<MailService['sendAccountWelcome']>[0],
+  ) {
+    return this.sendWelcomeEmail(userId, account);
   }
 
   async update(id: string, dto: UpdateUserDto, actor: AuthenticatedUser) {
