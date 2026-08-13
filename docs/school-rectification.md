@@ -49,7 +49,7 @@ salta en favor de otra anterior.
 
 ### Estado de confirmación y aptitud para evaluar
 
-Los contratos de detalle de escuela y de campañas disponibles separan dos
+Los contratos de detalle de escuela y de etapas disponibles separan dos
 conceptos que antes estaban combinados en `isRectified`:
 
 - `isConfirmed`: existe al menos una confirmación para el año en curso.

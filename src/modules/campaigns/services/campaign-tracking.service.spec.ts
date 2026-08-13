@@ -15,7 +15,7 @@ import { CampaignTrackingService } from './campaign-tracking.service';
 describe('CampaignTrackingService', () => {
   const campaign = {
     id: 'campaign-id',
-    name: 'Campaña 2026',
+    name: 'Etapa 2026',
     type: CampaignType.Annual,
     status: CampaignStatus.Active,
     startsAt: new Date('2026-07-01T03:00:00.000Z'),

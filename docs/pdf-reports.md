@@ -39,11 +39,11 @@ reciben los archivos oficiales y una licencia que autorice su redistribución.
 
 `ReportBrandingProvider` acepta únicamente imágenes PNG/JPEG existentes. Mientras
 se esperan los activos definitivos, usa por defecto los logos provisionales
-versionados de Gobierno de Mendoza y OMS/OPS:
+versionados de Gobierno de Mendoza y OPS:
 
 ```text
 assets/brand/official/mendoza/marca-gobierno-mendoza.png
-assets/brand/official/ops/oms-ops.jpg
+assets/brand/official/ops/ops-logo.jpeg
 ```
 
 `REPORT_LOGO_MENDOZA_PATH` y `REPORT_LOGO_OPS_PATH` permiten reemplazarlos sin
@@ -69,7 +69,7 @@ entregue las versiones definitivas.
 `GET /api/school/campaigns/:campaignId/submission/report.xlsx` descarga un
 único libro institucional con cuatro hojas:
 
-- `Resumen`: ficha, campaña, envío, resultado y trazabilidad del cálculo.
+- `Resumen`: ficha, etapa, envío, resultado y trazabilidad del cálculo.
 - `Dimensiones`: numerador, denominador, puntaje y criticidad persistidos.
 - `Respuestas`: sólo preguntas aplicables y sus respuestas declaradas.
 - `Exclusiones`: preguntas excluidas y motivo histórico, sin exponer una
@@ -92,4 +92,4 @@ respuestas en la auditoría.
 Todo texto dinámico pasa por `spreadsheetSafeCell`; también se neutralizan
 prefijos de fórmula precedidos por espacios, tabulaciones u otros caracteres de
 control. Las fechas visibles usan `America/Argentina/Mendoza`, evitando mostrar
-como día siguiente en UTC el cierre civil de una campaña.
+como día siguiente en UTC el cierre civil de una etapa.

@@ -62,7 +62,7 @@ export class SchoolResultsDashboardController {
       });
     if (!assigned)
       throw new NotFoundException(
-        'La campaña no está disponible para tu escuela.',
+        'La etapa no está disponible para tu escuela.',
       );
     const own = await this.dataSource.getRepository(EvaluationResult).findOne({
       select: { stars: true },
@@ -70,7 +70,7 @@ export class SchoolResultsDashboardController {
     });
     if (!own)
       throw new NotFoundException(
-        'La escuela todavía no posee un resultado para esta campaña.',
+        'La escuela todavía no posee un resultado para esta etapa.',
       );
     const scope = this.config.get<string>('SCHOOL_STAR_DISTRIBUTION_SCOPE');
     const distribution = await this.results.distribution({

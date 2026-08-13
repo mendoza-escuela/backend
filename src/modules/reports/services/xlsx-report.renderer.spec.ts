@@ -190,7 +190,7 @@ function reportView(): IndividualReportViewModel {
     },
     campaign: {
       id: 'campaign-id',
-      name: 'Campaña 2026',
+      name: 'Etapa 2026',
       startsAt: '2026-01-01T03:00:00.000Z',
       endsAt: '2026-09-01T02:59:59.999Z',
     },
@@ -264,7 +264,7 @@ function reportView(): IndividualReportViewModel {
     },
     branding: {
       programName: 'Escuelas Promotoras de Salud',
-      organizations: 'Gobierno de Mendoza · OPS/OMS',
+      organizations: 'Gobierno de Mendoza · OPS',
       logos: [],
       signer: null,
       signerPosition: null,

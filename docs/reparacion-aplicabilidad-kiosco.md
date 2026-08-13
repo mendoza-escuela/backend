@@ -14,13 +14,13 @@ verificado, la vista previa del conjunto exacto y la ejecución inicial en QA.
 
 Este procedimiento corrige exclusivamente presentaciones enviadas cuyo snapshot histórico declara `hasKiosk=false` y que conservan alguna decisión distinta de `excluded` para `p021` a `p027`.
 
-No modifica la ficha escolar actual, respuestas, versiones publicadas ni snapshots de otras campañas. El resultado se recalcula desde los datos históricos de la presentación dentro de la misma transacción.
+No modifica la ficha escolar actual, respuestas, versiones publicadas ni snapshots de otras etapas. El resultado se recalcula desde los datos históricos de la presentación dentro de la misma transacción.
 
 ## Comportamiento de versiones nuevas
 
 Los códigos `p021-p027` pertenecen únicamente al alcance histórico de esta
 reparación. El sistema no exige reglas para códigos concretos, no crea reglas
-automáticamente al importar y no bloquea campañas por la ausencia de esas
+automáticamente al importar y no bloquea etapas por la ausencia de esas
 reglas. Administración define desde el editor qué preguntas son condicionales.
 
 Backend continúa validando la estructura de cada regla que el usuario decida
@@ -31,19 +31,19 @@ versiones publicadas continúan siendo inmutables.
 
 No se debe insertar reglas directamente en una versión publicada ni desactivar
 sus triggers de protección. Si administración decide conservar esta regla en
-una campaña futura:
+una etapa futura:
 
 1. crear o importar una nueva versión oficial que persista la regla aprobada en
    `p021-p027`;
 2. validar la versión y las reglas configuradas;
 3. publicar la nueva versión;
-4. cerrar la campaña defectuosa y crear una campaña con la versión corregida;
+4. cerrar la etapa defectuosa y crear una etapa con la versión corregida;
 5. validar escuelas con y sin kiosco antes de habilitar el uso general.
 
-Una campaña conserva su `surveyVersionId`; no se cambia ese vínculo después de
-haber iniciado presentaciones. Los borradores de la campaña anterior tampoco
+Una etapa conserva su `surveyVersionId`; no se cambia ese vínculo después de
+haber iniciado presentaciones. Los borradores de la etapa anterior tampoco
 se migran automáticamente, porque hacerlo mezclaría dos definiciones del
-cuestionario bajo el mismo histórico. Cerrar y reemplazar una campaña activa es
+cuestionario bajo el mismo histórico. Cerrar y reemplazar una etapa activa es
 una acción operativa que requiere aprobación específica del responsable.
 
 ## Requisitos previos

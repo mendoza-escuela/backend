@@ -9,7 +9,10 @@ const DEFAULT_REPORT_LOGOS = {
     __dirname,
     '../../../../assets/brand/official/mendoza/marca-gobierno-mendoza.png',
   ),
-  ops: resolve(__dirname, '../../../../assets/brand/official/ops/oms-ops.jpg'),
+  ops: resolve(
+    __dirname,
+    '../../../../assets/brand/official/ops/ops-logo.jpeg',
+  ),
 } as const;
 
 @Injectable()
@@ -32,7 +35,7 @@ export class ReportBrandingProvider {
         'Escuelas Promotoras de Salud',
       organizations:
         this.config.get<string>('REPORT_ORGANIZATIONS') ||
-        'Gobierno de Mendoza · Salud · Dirección General de Escuelas · OPS/OMS',
+        'Gobierno de Mendoza · Salud · Dirección General de Escuelas · OPS',
       logos: logoPaths.flatMap((path) => {
         const image = this.image(path);
         return image ? [image] : [];

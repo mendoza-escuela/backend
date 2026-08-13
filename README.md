@@ -65,22 +65,22 @@ Primero debe ejecutarse la vista previa. La importación es parcial: crea las fi
 
 ## Administración de colegios
 
-Las rutas protegidas bajo `/admin/schools` permiten alta, listado paginado, búsqueda por CUE/nombre/número, filtros territoriales e institucionales, detalle, edición, activación y desactivación. El detalle incluye el usuario Colegio, accesos recientes, historial de asociaciones, auditoría, campañas asignadas y resultados disponibles; no se generan datos ficticios.
+Las rutas protegidas bajo `/admin/schools` permiten alta, listado paginado, búsqueda por CUE/nombre/número, filtros territoriales e institucionales, detalle, edición, activación y desactivación. El detalle incluye el usuario Colegio, accesos recientes, historial de asociaciones, auditoría, etapas asignadas y resultados disponibles; no se generan datos ficticios.
 
 Cada colegio admite un único usuario con rol `school`, y cada usuario sólo puede pertenecer a un colegio. Los reemplazos y desvinculaciones conservan un historial independiente. Un colegio inactivo conserva sus datos e historial, bloquea nuevos logins y cargas, y revoca transaccionalmente las sesiones escolares vigentes. La reactivación exige un login nuevo. El diseño, la concurrencia y los datos preservados se documentan en [`docs/school-deactivation.md`](docs/school-deactivation.md).
 
 `GET /api/admin/schools` pagina en PostgreSQL mediante `page` y `limit` y selecciona únicamente las columnas del listado. `GET /api/admin/schools/:id/assignable-users` busca y pagina usuarios disponibles para asociación en backend, evitando descargar cuentas ocupadas y filtrarlas en el navegador.
 
 `GET /api/admin/schools/:id` devuelve en `campaigns.items` sólo las
-asignaciones vigentes, ordenadas por inicio de campaña y fecha de asignación
-descendentes. Cada elemento incluye la campaña, la trazabilidad de asignación,
+asignaciones vigentes, ordenadas por inicio de etapa y fecha de asignación
+descendentes. Cada elemento incluye la etapa, la trazabilidad de asignación,
 el estado excluyente `not_started`, `draft` o `submitted`, la presentación y la
 disponibilidad del resultado. `evaluations.items` resume los resultados
 persistidos con `campaignId`, `submissionId`, puntaje, estrellas y fecha de
 cálculo. Ambos bloques usan `available: true`, incluso cuando no tienen filas;
 los IDs permiten construir enlaces de seguimiento y detalle sin exponer rutas
 del frontend desde la API. La consulta se resuelve con joins y no ejecuta una
-consulta adicional por campaña.
+consulta adicional por etapa.
 
 La importación acepta CSV/XLSX de hasta 2 MB y 500 filas, ofrece vista previa y realiza importación parcial. La plantilla se obtiene en `GET /admin/schools/import/template`. El padrón filtrado puede exportarse mediante `GET /admin/schools/export?format=csv` o `format=xlsx`; cada exportación queda auditada.
 
@@ -124,7 +124,7 @@ Endpoints de lectura protegidos para roles `admin` y `school`:
 - `GET /api/surveys/available`: lista cuestionarios activos con una versión publicada.
 - `GET /api/surveys/available/:code`: devuelve la última versión publicada con toda su estructura ordenada.
 
-Las versiones borrador no se exponen a las escuelas. Las campañas y respuestas pertenecen a los módulos `campaigns` y `submissions`; `surveys` conserva exclusivamente la definición versionada e inmutable.
+Las versiones borrador no se exponen a las escuelas. Las etapas y respuestas pertenecen a los módulos `campaigns` y `submissions`; `surveys` conserva exclusivamente la definición versionada e inmutable.
 
 ### Administración de cuestionarios
 
@@ -142,6 +142,8 @@ Las rutas bajo `/api/admin/surveys` requieren sesión válida, contraseña inici
 - `GET /api/admin/surveys/:surveyId/versions/:versionId/validation`: validación previa con todos los errores estructurales detectados.
 - `GET /api/admin/surveys/:surveyId/versions/compare`: comparación estructural mediante `fromVersionId` y `toVersionId`.
 
+Las reglas de aplicabilidad de una versión borrador pueden crearse para una pregunta individual o aplicarse a varias mediante `POST /api/admin/surveys/:surveyId/versions/:versionId/applicability-rules/bulk`. La operación múltiple es transaccional: valida primero todas las preguntas y agrega la regla al final de la prioridad propia de cada una; si un destino es inválido o tiene una acción predeterminada incompatible, no persiste cambios parciales. La edición, eliminación, reordenamiento y previsualización continúan siendo individuales para conservar trazabilidad clara.
+
 Los borradores pueden guardarse incompletos para permitir construcción progresiva. Antes de publicar se exige, como mínimo, una dimensión, una sección por dimensión, una pregunta por sección, opciones para las preguntas de selección y puntaje en cada opción. En todos los guardados se controlan códigos repetidos, tipos incompatibles con opciones, puntajes fuera de 0–100 y rangos de validación inconsistentes.
 
 La plantilla `official_dimensions` crea únicamente el esqueleto aprobado: nombres, descripciones, códigos internos y orden de las seis dimensiones. No precarga secciones ni preguntas. “Entorno Socioemocional” no se registra como una séptima dimensión; las preguntas 41, 42 y 43 quedan identificadas para su futura carga dentro de `salud_mental`.
@@ -158,27 +160,29 @@ Publicar es una operación irreversible: el servicio impide editar o eliminar la
 
 Cada cuestionario admite una sola versión vigente. Al publicar un borrador, el backend bloquea el cuestionario, archiva automáticamente la versión publicada anterior y publica la nueva dentro de la misma transacción. Ambas transiciones se auditan con un `publicationOperationId` común. La migración `EnforceSinglePublishedSurveyVersion1720375218000` detecta inconsistencias existentes y agrega un índice único parcial para impedir más de una fila `published` por cuestionario incluso ante escrituras concurrentes.
 
-El archivado manual se conserva para retirar una versión sin reemplazarla. Las campañas mantienen su `survey_version_id`: una versión archivada continúa disponible de forma inmutable para campañas, presentaciones y resultados históricos, pero no puede seleccionarse al crear una campaña nueva.
+El archivado manual se conserva para retirar una versión sin reemplazarla. Las etapas mantienen su `survey_version_id`: una versión archivada continúa disponible de forma inmutable para etapas, presentaciones y resultados históricos, pero no puede seleccionarse al crear una etapa nueva.
 
 Las altas, cambios, clonaciones, publicaciones y bajas se registran en `audit_logs` con usuario, fecha, entidad y resumen del cambio. No se guardan secretos ni contenido de respuestas.
 
-## Administración de campañas
+## Administración de etapas
 
-Las rutas bajo `/api/admin/campaigns` requieren rol `admin`. Permiten listar, crear, consultar, editar y eliminar campañas borrador, además de ejecutar el ciclo irreversible `draft → active → closed → archived`.
+Las rutas bajo `/api/admin/campaigns` requieren rol `admin`. Permiten listar, crear, consultar, editar y eliminar etapas borrador, además de ejecutar el ciclo irreversible `draft → active → closed → archived`.
 
-Cada campaña es anual o semestral y referencia obligatoriamente una versión publicada de un cuestionario activo. Al activarse, su configuración queda protegida; sólo los borradores pueden editarse o eliminarse. `GET /api/admin/campaigns/survey-versions` devuelve las versiones habilitadas para el selector administrativo.
+Cada etapa es anual o semestral y referencia obligatoriamente una versión publicada de un cuestionario activo. Al activarse, su configuración queda protegida; sólo los borradores pueden editarse o eliminarse. `GET /api/admin/campaigns/survey-versions` devuelve las versiones habilitadas para el selector administrativo.
 
-Las fechas ingresan como fechas civiles `AAAA-MM-DD`. El inicio se almacena a las `00:00:00` y el cierre a las `23:59:59.999` de Mendoza (`America/Argentina/Mendoza`, UTC-3). Un proceso periódico cierra las campañas activas vencidas y registra el evento en `audit_logs`; el valor de `closed_at` conserva el instante exacto configurado, aunque la detección ocurra unos segundos después.
+Una etapa puede ser independiente o integrar un recorrido mediante `workflowCycle` y `sequenceOrder`. Varias etapas del mismo recorrido pueden permanecer activas simultáneamente, pero cada escuela sólo puede iniciar, guardar o enviar una etapa cuando ya envió todas las etapas anteriores que tiene asignadas. Las etapas anteriores no asignadas a esa escuela se omiten. `GET /api/admin/campaigns/workflows` lista los recorridos existentes y su último orden; la combinación recorrido/orden es única sin distinguir mayúsculas. Las etapas existentes al aplicar la migración permanecen independientes para no crear dependencias históricas artificiales.
+
+Las fechas ingresan como fechas civiles `AAAA-MM-DD`. El inicio se almacena a las `00:00:00` y el cierre a las `23:59:59.999` de Mendoza (`America/Argentina/Mendoza`, UTC-3). Un proceso periódico cierra las etapas activas vencidas y registra el evento en `audit_logs`; el valor de `closed_at` conserva el instante exacto configurado, aunque la detección ocurra unos segundos después.
 
 La migración `AddCampaignManagement1720375211000` crea la tabla, enumeraciones, índice de estado/fechas y la relación protegida con `survey_versions`.
 
-### Selección de escuelas por campaña
+### Selección de escuelas por etapa
 
 Los endpoints `GET /api/admin/campaigns/:id/schools` y `/schools/options`
 ofrecen listados paginados. `POST /schools/preview` anticipa el alcance y
 `POST /schools/assign` aplica una selección manual, por filtros o masiva;
 `DELETE /schools/:schoolId` realiza una baja lógica. Estas operaciones están
-auditadas. Las altas y su vista previa están habilitadas en campañas borrador
+auditadas. Las altas y su vista previa están habilitadas en etapas borrador
 y activas no vencidas; durante una activa sólo se incorporan escuelas
 habilitadas. Las bajas continúan limitadas a borrador y una asignación con una
 presentación existente no puede quitarse. El detalle se documenta en
@@ -190,21 +194,23 @@ exportaciones parten siempre de `campaign_schools`.
 
 ## Presentaciones y borradores escolares
 
-`GET /api/school/campaigns` lista para el usuario Escuela sólo las campañas
+`GET /api/school/campaigns` lista para el usuario Escuela sólo las etapas
 activas, abiertas y asignadas explícitamente a su establecimiento mediante
 `campaign_schools`. La respuesta distingue si existe confirmación anual
 (`isConfirmed`) de si su snapshot está listo para evaluar
 (`isEvaluationReady`), informa `missingFields` para una confirmación incompleta
 y conserva `isRectified` temporalmente como alias de compatibilidad. El bloque
-`expiredDrafts` mantiene localizables los borradores de campañas finalizadas,
-incluso si la asignación fue retirada, y excluye campañas futuras y
+`expiredDrafts` mantiene localizables los borradores de etapas finalizadas,
+incluso si la asignación fue retirada, y excluye etapas futuras y
 presentaciones enviadas.
 
 El `GET` del workspace abre esos borradores en modo de sólo lectura: utiliza
 las decisiones de aplicabilidad congeladas o las reconstruye únicamente en
 memoria desde el snapshot histórico. No adopta una rectificación posterior ni
 actualiza respuestas, decisiones o auditoría. Los endpoints de guardado y
-envío continúan rechazando cualquier campaña fuera de su período operativo.
+envío continúan rechazando cualquier etapa fuera de su período operativo.
+
+Para etapas ordenadas, cada elemento operativo informa `workflowStatus`, `blockedBy` y `blockingReason`. La precedencia se valida nuevamente en backend al crear o recuperar la presentación, guardar un borrador y realizar el envío final; deshabilitar controles en el frontend no constituye la protección de negocio.
 
 El seguimiento administrativo se expone mediante
 `GET /api/admin/campaigns/:id/tracking/summary` y
@@ -223,17 +229,17 @@ El flujo escolar utiliza:
 
 La escuela se obtiene siempre de la asociación del usuario autenticado. El primer borrador exige establecimiento activo, confirmación anual y un snapshot listo para evaluar; posteriores usuarios asociados a la misma escuela recuperan ese borrador porque la unicidad se define por `school_id + campaign_id`. También se conserva un snapshot del usuario que inició la carga.
 
-Cada presentación referencia la versión publicada fijada por la campaña. Las respuestas enviadas son inmutables en el servicio y mediante triggers PostgreSQL. La migración `AddSurveySubmissions1720375212000` crea presentaciones, respuestas, índices, relaciones y protecciones de integridad.
+Cada presentación referencia la versión publicada fijada por la etapa. Las respuestas enviadas son inmutables en el servicio y mediante triggers PostgreSQL. La migración `AddSurveySubmissions1720375212000` crea presentaciones, respuestas, índices, relaciones y protecciones de integridad.
 
 ## Dashboard administrativo de participación
 
-Las rutas bajo `/api/admin/dashboard/participation` requieren rol `admin`. `GET /api/admin/dashboard/participation/filters` devuelve campañas activas, cerradas o archivadas y las opciones de las escuelas con asignación vigente en la campaña. Departamento y localidad limitan las localidades y escuelas disponibles.
+Las rutas bajo `/api/admin/dashboard/participation` requieren rol `admin`. `GET /api/admin/dashboard/participation/filters` devuelve etapas activas, cerradas o archivadas y las opciones de las escuelas con asignación vigente en la etapa. Departamento y localidad limitan las localidades y escuelas disponibles.
 
 `GET /api/admin/dashboard/participation?campaignId=:uuid` calcula en PostgreSQL, desde una única consulta agregada, el total de escuelas con asignación vigente, las no iniciadas, los borradores, los envíos y el porcentaje de envíos sobre ese universo. Los filtros territoriales, escolares, institucionales, de estado, estrellas y áreas críticas admiten multiselección; usan OR dentro de una categoría y AND entre categorías. Una escuela sin presentación se considera no iniciada; los estados persistidos `draft` y `submitted` determinan los otros dos grupos. Si el total es cero, el porcentaje devuelto es cero. El contrato, las claves plurales y la compatibilidad con las claves anteriores se documentan en [`docs/dashboard-multiselect-filters.md`](docs/dashboard-multiselect-filters.md).
 
-`GET /api/admin/dashboard/results/comparison` compara de dos a seis campañas en el orden solicitado, con filtros institucionales multiselección y denominadores independientes por período. Los filtros de estado, estrellas y áreas críticas se excluyen para no seleccionar la población por su propio resultado. Puntaje general y distribución de estrellas son las métricas históricas estandarizadas; la trayectoria dimensional se habilita sólo para una escuela y declara si es comparable o meramente descriptiva según la versión del cuestionario, algoritmo y configuración persistidos. El contrato y las decisiones funcionales se documentan en [`docs/dashboard-period-comparison.md`](docs/dashboard-period-comparison.md).
+`GET /api/admin/dashboard/results/comparison` compara de dos a seis etapas en el orden solicitado, con filtros institucionales multiselección y denominadores independientes por período. Los filtros de estado, estrellas y áreas críticas se excluyen para no seleccionar la población por su propio resultado. Puntaje general y distribución de estrellas son las métricas históricas estandarizadas; la trayectoria dimensional se habilita sólo para una escuela y declara si es comparable o meramente descriptiva según la versión del cuestionario, algoritmo y configuración persistidos. El contrato y las decisiones funcionales se documentan en [`docs/dashboard-period-comparison.md`](docs/dashboard-period-comparison.md).
 
-Las campañas en borrador quedan fuera del seguimiento. Los denominadores y
+Las etapas en borrador quedan fuera del seguimiento. Los denominadores y
 resultados comienzan en `campaign_schools`, por lo que conservan el universo
 administrativamente asignado y no incorporan todo el padrón activo.
 

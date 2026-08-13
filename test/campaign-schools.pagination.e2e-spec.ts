@@ -160,7 +160,7 @@ describeWithDatabase('Campaign schools pagination (PostgreSQL)', () => {
         `INSERT INTO campaigns
            (id, name, description, type, status, survey_version_id,
             starts_at, ends_at)
-         VALUES ($1, 'Campaña Schools E2E', NULL, 'annual', 'draft', $2,
+         VALUES ($1, 'Etapa Schools E2E', NULL, 'annual', 'draft', $2,
             now() - interval '1 day', now() + interval '30 days')`,
         [fixture.campaignId, fixture.surveyVersionId],
       );

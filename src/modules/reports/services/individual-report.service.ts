@@ -25,7 +25,7 @@ export class IndividualReportService {
       .findOne({ where: { campaignId, schoolId } });
     if (!assignment)
       throw new NotFoundException(
-        'La escuela no pertenece al universo de esta campaña.',
+        'La escuela no pertenece al universo de esta etapa.',
       );
     const [campaign, submission] = await Promise.all([
       this.dataSource.getRepository(Campaign).findOneBy({ id: campaignId }),

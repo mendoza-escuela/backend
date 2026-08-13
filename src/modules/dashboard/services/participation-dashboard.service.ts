@@ -31,17 +31,17 @@ export class ParticipationDashboardService {
 
   /**
    * Calcula todos los indicadores desde las asignaciones vigentes.
-   * La presentación es única por escuela y campaña, por lo que el LEFT JOIN no
+   * La presentación es única por escuela y etapa, por lo que el LEFT JOIN no
    * multiplica filas ni requiere descargar registros al cliente.
    */
   async metrics(query: ParticipationDashboardQueryDto) {
     const campaign = await this.dataSource.getRepository(Campaign).findOneBy({
       id: query.campaignId,
     });
-    if (!campaign) throw new NotFoundException('Campaña no encontrada.');
+    if (!campaign) throw new NotFoundException('Etapa no encontrada.');
     if (campaign.status === CampaignStatus.Draft)
       throw new ConflictException(
-        'Las campañas en borrador no poseen seguimiento de participación.',
+        'Las etapas en borrador no poseen seguimiento de participación.',
       );
 
     const builder = this.dataSource
@@ -107,7 +107,7 @@ export class ParticipationDashboardService {
     };
   }
 
-  /** Devuelve campañas consultables y opciones escolares dependientes. */
+  /** Devuelve etapas consultables y opciones escolares dependientes. */
   async filterOptions(query: ParticipationFilterOptionsQueryDto) {
     const campaigns = await this.dataSource
       .getRepository(Campaign)

@@ -4,6 +4,7 @@ import { isEmail } from 'class-validator';
 import ExcelJS from 'exceljs';
 import { DataSource } from 'typeorm';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
+import { EducationLevelCatalog } from '../entities/education-level-catalog.entity';
 import { School } from '../entities/school.entity';
 import { SchoolContactType } from '../entities/school-contact.entity';
 import { SchoolsService } from './schools.service';
@@ -31,6 +32,7 @@ type ValidatedSchoolRow = {
   referentPhone: string;
   referentPosition: string;
   enrollment: number | null;
+  educationLevels: Array<{ levelId: string; enrollment: number | null }>;
   characteristics: Record<string, string | number | boolean | null>;
   isActive: boolean | null;
   errors: string[];
@@ -46,9 +48,9 @@ export class BulkSchoolImportService {
 
   template() {
     const headers =
-      'cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_cargo,referente_correo,referente_telefono,matricula,caracteristicas,estado';
+      'cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,tipo_educacion,niveles_y_matriculas,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_cargo,referente_correo,referente_telefono,matricula_total,plurigrado,intercultural_bilingue,estado';
     const example =
-      '500012300,Escuela Ejemplo,María González,1-001,Capital,Mendoza,Av. Ejemplo 123,5500,Primario,Estatal,Urbano,Completa,2614000000,escuela@ejemplo.edu.ar,Ana,Pérez,Secretaria,ana.perez@ejemplo.edu.ar,2614000001,350,"{""comedor"":true}",activo';
+      '500012300,Escuela Ejemplo,María González,1-001,Capital,Mendoza,Av. Ejemplo 123,5500,Educación común,Inicial: 45 | Primario: 210,Estatal,Urbano,Completa,2614000000,escuela@ejemplo.edu.ar,Ana,Pérez,Secretaria,ana.perez@ejemplo.edu.ar,2614000001,255,no,no,activo';
     return Buffer.from(`\uFEFF${headers}\r\n${example}`, 'utf8');
   }
 
@@ -99,7 +101,8 @@ export class BulkSchoolImportService {
                 phone: row.referentPhone || undefined,
               },
             ],
-            enrollment: row.enrollment!,
+            enrollment: row.enrollment,
+            educationLevels: row.educationLevels,
             characteristics: row.characteristics,
             isActive: row.isActive!,
           },
@@ -166,6 +169,9 @@ export class BulkSchoolImportService {
   }
 
   private async validate(records: RawRecord[]): Promise<ValidatedSchoolRow[]> {
+    const educationLevelCatalogs = await this.dataSource
+      .getRepository(EducationLevelCatalog)
+      .find({ where: { isActive: true }, order: { order: 'ASC' } });
     const cues = records
       .map((record) => record.cue.trim().toUpperCase())
       .filter(Boolean);
@@ -184,9 +190,21 @@ export class BulkSchoolImportService {
       occurrences.set(cue, (occurrences.get(cue) ?? 0) + 1),
     );
     return records.map((record, index) => {
-      const enrollment = this.integer(record.matricula);
+      const usesStructuredFormat = 'niveles_y_matriculas' in record;
+      const enrollmentText = usesStructuredFormat
+        ? record.matricula_total
+        : record.matricula;
+      const enrollment = this.optionalInteger(enrollmentText);
+      const educationLevels = usesStructuredFormat
+        ? this.educationLevels(
+            record.niveles_y_matriculas,
+            educationLevelCatalogs,
+          )
+        : { value: [], errors: [] };
       const isActive = this.status(record.estado);
-      const characteristics = this.characteristics(record.caracteristicas);
+      const characteristics = usesStructuredFormat
+        ? this.structuredCharacteristics(record)
+        : this.characteristics(record.caracteristicas);
       const row: ValidatedSchoolRow = {
         line: index + 2,
         cue: record.cue.trim().toUpperCase(),
@@ -197,7 +215,7 @@ export class BulkSchoolImportService {
         locality: record.localidad.trim(),
         address: record.direccion.trim(),
         postalCode: record.codigo_postal.trim(),
-        educationLevel: record.nivel.trim(),
+        educationLevel: (record.tipo_educacion || record.nivel || '').trim(),
         managementType: record.gestion.trim(),
         scope: record.ambito.trim(),
         shift: record.jornada.trim(),
@@ -208,7 +226,8 @@ export class BulkSchoolImportService {
         referentEmail: record.referente_correo.trim().toLowerCase(),
         referentPhone: record.referente_telefono.trim(),
         referentPosition: this.optional(record, 'referente_cargo'),
-        enrollment,
+        enrollment: enrollment.value,
+        educationLevels: educationLevels.value,
         characteristics: characteristics.value,
         isActive,
         errors: [],
@@ -256,8 +275,8 @@ export class BulkSchoolImportService {
         (row.referentPosition.length < 2 || row.referentPosition.length > 160)
       )
         row.errors.push('Cargo del referente inválido.');
-      if (enrollment === null || enrollment < 0 || enrollment > 1_000_000)
-        row.errors.push('Matrícula inválida.');
+      if (enrollment.error) row.errors.push(enrollment.error);
+      row.errors.push(...educationLevels.errors);
       if (isActive === null)
         row.errors.push('Estado inválido; usá activo o inactivo.');
       if (characteristics.error) row.errors.push(characteristics.error);
@@ -282,6 +301,7 @@ export class BulkSchoolImportService {
         educationLevel: row.educationLevel,
         managementType: row.managementType,
         enrollment: row.enrollment,
+        educationLevels: row.educationLevels,
         isActive: row.isActive,
         errors: row.errors,
       })),
@@ -329,7 +349,7 @@ export class BulkSchoolImportService {
     return rows;
   }
   private assertHeaders(headers: string[]) {
-    const required = [
+    const commonRequired = [
       'cue',
       'nombre',
       'director',
@@ -338,7 +358,6 @@ export class BulkSchoolImportService {
       'localidad',
       'direccion',
       'codigo_postal',
-      'nivel',
       'gestion',
       'ambito',
       'jornada',
@@ -348,14 +367,29 @@ export class BulkSchoolImportService {
       'referente_apellido',
       'referente_correo',
       'referente_telefono',
-      'matricula',
-      'caracteristicas',
       'estado',
     ];
-    const missing = required.filter((header) => !headers.includes(header));
+    const newFormat = [
+      'tipo_educacion',
+      'niveles_y_matriculas',
+      'matricula_total',
+      'plurigrado',
+      'intercultural_bilingue',
+    ];
+    const legacyFormat = ['nivel', 'matricula', 'caracteristicas'];
+    const missing = commonRequired.filter(
+      (header) => !headers.includes(header),
+    );
     if (missing.length)
       throw new BadRequestException(
         `Faltan columnas obligatorias: ${missing.join(', ')}.`,
+      );
+    if (
+      !newFormat.every((header) => headers.includes(header)) &&
+      !legacyFormat.every((header) => headers.includes(header))
+    )
+      throw new BadRequestException(
+        'La plantilla debe incluir tipo_educacion, niveles_y_matriculas, matricula_total, plurigrado e intercultural_bilingue.',
       );
   }
   private header(value: string) {
@@ -405,9 +439,18 @@ export class BulkSchoolImportService {
     }
     return '';
   }
-  private integer(value: string) {
+  private optionalInteger(value = ''): {
+    value: number | null;
+    error?: string;
+  } {
+    if (!value.trim()) return { value: null };
     const number = Number(value);
-    return Number.isInteger(number) ? number : null;
+    return Number.isInteger(number) && number >= 0 && number <= 1_000_000
+      ? { value: number }
+      : {
+          value: null,
+          error: 'Matrícula total inválida; usá un entero entre 0 y 1000000.',
+        };
   }
   private optional(record: RawRecord, key: string) {
     return record[key]?.trim() ?? '';
@@ -449,6 +492,91 @@ export class BulkSchoolImportService {
     } catch {
       return { value: {}, error: 'Características no contiene JSON válido.' };
     }
+  }
+
+  private structuredCharacteristics(record: RawRecord): {
+    value: Record<string, string | number | boolean | null>;
+    error?: string;
+  } {
+    const multigrade = this.yesNo(record.plurigrado);
+    const intercultural = this.yesNo(record.intercultural_bilingue);
+    const invalid = [
+      multigrade.error ? 'plurigrado' : null,
+      intercultural.error ? 'intercultural_bilingue' : null,
+    ].filter(Boolean);
+    return {
+      value: {
+        isMultigrade: multigrade.value,
+        isInterculturalBilingual: intercultural.value,
+      },
+      ...(invalid.length
+        ? {
+            error: `${invalid.join(' e ')}: usá sí, no o dejá la celda vacía.`,
+          }
+        : {}),
+    };
+  }
+
+  private yesNo(value = ''): { value: boolean | null; error?: true } {
+    const normalized = this.normalized(value);
+    if (!normalized) return { value: null };
+    if (['si', 'true', '1'].includes(normalized)) return { value: true };
+    if (['no', 'false', '0'].includes(normalized)) return { value: false };
+    return { value: null, error: true };
+  }
+
+  private educationLevels(
+    value: string,
+    catalogs: EducationLevelCatalog[],
+  ): {
+    value: Array<{ levelId: string; enrollment: number | null }>;
+    errors: string[];
+  } {
+    const errors: string[] = [];
+    const selected: Array<{ levelId: string; enrollment: number | null }> = [];
+    if (!value.trim())
+      return {
+        value: [],
+        errors: ['Niveles y matrículas: informá al menos un nivel educativo.'],
+      };
+    for (const part of value.split('|').map((item) => item.trim())) {
+      if (!part) continue;
+      const separator = part.indexOf(':');
+      const levelText = (
+        separator >= 0 ? part.slice(0, separator) : part
+      ).trim();
+      const enrollmentText =
+        separator >= 0 ? part.slice(separator + 1).trim() : '';
+      const normalizedLevel = this.normalized(levelText);
+      const catalog = catalogs.find(
+        ({ code, label }) =>
+          this.normalized(code) === normalizedLevel ||
+          this.normalized(label) === normalizedLevel,
+      );
+      if (!catalog) {
+        errors.push(`Nivel educativo desconocido: “${levelText}”.`);
+        continue;
+      }
+      if (selected.some(({ levelId }) => levelId === catalog.id)) {
+        errors.push(`El nivel educativo “${catalog.label}” está repetido.`);
+        continue;
+      }
+      const enrollment = this.optionalInteger(enrollmentText);
+      if (enrollment.error) {
+        errors.push(`Matrícula de “${catalog.label}” inválida.`);
+        continue;
+      }
+      selected.push({ levelId: catalog.id, enrollment: enrollment.value });
+    }
+    return { value: selected, errors };
+  }
+
+  private normalized(value = '') {
+    return value
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
   }
   private publicError(error: unknown) {
     if (error instanceof HttpException) {

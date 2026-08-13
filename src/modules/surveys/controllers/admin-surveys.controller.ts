@@ -36,6 +36,7 @@ import { UpdateSurveyDto } from '../dto/update-survey.dto';
 import { AdminSurveysService } from '../services/admin-surveys.service';
 import { BulkSurveyImportService } from '../services/bulk-survey-import.service';
 import {
+  BulkCreateApplicabilityRuleDto,
   PreviewApplicabilityDto,
   ReorderApplicabilityRulesDto,
   WriteApplicabilityRuleDto,
@@ -239,6 +240,21 @@ export class AdminSurveysController {
       surveyId,
       versionId,
       questionId,
+      dto,
+      request.user,
+    );
+  }
+
+  @Post(':surveyId/versions/:versionId/applicability-rules/bulk')
+  createApplicabilityRuleBulk(
+    @Param('surveyId', ParseUUIDPipe) surveyId: string,
+    @Param('versionId', ParseUUIDPipe) versionId: string,
+    @Body() dto: BulkCreateApplicabilityRuleDto,
+    @Req() request: Request & { user: AuthenticatedUser },
+  ) {
+    return this.applicabilityRulesService.createBulk(
+      surveyId,
+      versionId,
       dto,
       request.user,
     );

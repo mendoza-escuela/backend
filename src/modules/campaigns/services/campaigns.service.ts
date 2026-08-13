@@ -11,6 +11,8 @@ import { AuthenticatedUser } from '../../../common/types/authenticated-user.type
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { SurveyVersionStatus } from '../../surveys/entities/survey-version-status.enum';
 import { SurveyVersion } from '../../surveys/entities/survey-version.entity';
+import { SubmissionStatus } from '../../submissions/entities/submission-status.enum';
+import { SurveySubmission } from '../../submissions/entities/survey-submission.entity';
 import { CreateCampaignDto } from '../dto/create-campaign.dto';
 import { ListCampaignsQueryDto } from '../dto/list-campaigns-query.dto';
 import { UpdateCampaignDto } from '../dto/update-campaign.dto';
@@ -112,7 +114,24 @@ export class CampaignsService {
     }));
   }
 
-  /** Devuelve campañas activas cuyo período está abierto en este instante. */
+  /** Recorridos existentes para evitar nombres divergentes al crear etapas. */
+  async workflowOptions() {
+    const rows = await this.dataSource
+      .getRepository(Campaign)
+      .createQueryBuilder('campaign')
+      .select('campaign.workflowCycle', 'name')
+      .addSelect('MAX(campaign.sequenceOrder)', 'lastSequenceOrder')
+      .where('campaign.workflowCycle IS NOT NULL')
+      .groupBy('campaign.workflowCycle')
+      .orderBy('campaign.workflowCycle', 'ASC')
+      .getRawMany<{ name: string; lastSequenceOrder: string }>();
+    return rows.map((row) => ({
+      name: row.name,
+      lastSequenceOrder: Number(row.lastSequenceOrder),
+    }));
+  }
+
+  /** Devuelve etapas activas cuyo período está abierto en este instante. */
   async operationalCampaigns(schoolId: string) {
     await this.closeExpiredCampaigns();
     const now = new Date();
@@ -130,9 +149,95 @@ export class CampaignsService {
       .where('campaign.status = :status', { status: CampaignStatus.Active })
       .andWhere('campaign.startsAt <= :now', { now })
       .andWhere('campaign.endsAt > :now', { now })
-      .orderBy('campaign.startsAt', 'ASC')
+      .orderBy('campaign.workflowCycle', 'ASC', 'NULLS FIRST')
+      .addOrderBy('campaign.sequenceOrder', 'ASC', 'NULLS FIRST')
+      .addOrderBy('campaign.startsAt', 'ASC')
       .addOrderBy('campaign.name', 'ASC')
       .getMany();
+  }
+
+  /**
+   * Devuelve, para cada etapa solicitada, la primera etapa anterior asignada
+   * al colegio que todavía no fue enviada. Las etapas no asignadas se omiten.
+   */
+  async workflowBlockers(
+    campaigns: Campaign[],
+    schoolId: string,
+    manager: EntityManager = this.dataSource.manager,
+  ) {
+    const cycles = [
+      ...new Set(
+        campaigns
+          .map((campaign) => campaign.workflowCycle?.toLocaleLowerCase())
+          .filter((cycle): cycle is string => Boolean(cycle)),
+      ),
+    ];
+    const blockers = new Map<
+      string,
+      { id: string; name: string; sequenceOrder: number }
+    >();
+    if (!cycles.length) return blockers;
+
+    const assignedStages = await manager
+      .getRepository(Campaign)
+      .createQueryBuilder('stage')
+      .innerJoin(
+        CampaignSchool,
+        'assignment',
+        'assignment.campaignId = stage.id AND assignment.schoolId = :schoolId AND assignment.removedAt IS NULL',
+        { schoolId },
+      )
+      .leftJoin(
+        SurveySubmission,
+        'submission',
+        'submission.campaignId = stage.id AND submission.schoolId = :schoolId',
+        { schoolId },
+      )
+      .select('stage.id', 'id')
+      .addSelect('stage.name', 'name')
+      .addSelect('LOWER(stage.workflowCycle)', 'cycle')
+      .addSelect('stage.sequenceOrder', 'sequenceOrder')
+      .addSelect('submission.status', 'submissionStatus')
+      .where('LOWER(stage.workflowCycle) IN (:...cycles)', { cycles })
+      .orderBy('stage.sequenceOrder', 'ASC')
+      .getRawMany<{
+        id: string;
+        name: string;
+        cycle: string;
+        sequenceOrder: string;
+        submissionStatus: SubmissionStatus | null;
+      }>();
+
+    for (const campaign of campaigns) {
+      if (!campaign.workflowCycle || campaign.sequenceOrder === null) continue;
+      const blocker = assignedStages.find(
+        (stage) =>
+          stage.cycle === campaign.workflowCycle!.toLocaleLowerCase() &&
+          Number(stage.sequenceOrder) < campaign.sequenceOrder! &&
+          stage.submissionStatus !== SubmissionStatus.Submitted,
+      );
+      if (blocker)
+        blockers.set(campaign.id, {
+          id: blocker.id,
+          name: blocker.name,
+          sequenceOrder: Number(blocker.sequenceOrder),
+        });
+    }
+    return blockers;
+  }
+
+  async assertWorkflowUnlocked(
+    campaign: Campaign,
+    schoolId: string,
+    manager: EntityManager = this.dataSource.manager,
+  ) {
+    const blocker = (
+      await this.workflowBlockers([campaign], schoolId, manager)
+    ).get(campaign.id);
+    if (blocker)
+      throw new ConflictException(
+        `Antes de continuar debés enviar la etapa anterior: ${blocker.name}.`,
+      );
   }
 
   /**
@@ -147,7 +252,7 @@ export class CampaignsService {
       where: { id },
       relations: { surveyVersion: { survey: true } },
     });
-    if (!campaign) throw new NotFoundException('Campaña no encontrada.');
+    if (!campaign) throw new NotFoundException('Etapa no encontrada.');
     const now = Date.now();
     if (
       campaign.status !== CampaignStatus.Active ||
@@ -155,7 +260,7 @@ export class CampaignsService {
       now > campaign.endsAt.getTime()
     )
       throw new ConflictException(
-        'La campaña no se encuentra abierta para recibir respuestas.',
+        'La etapa no se encuentra abierta para recibir respuestas.',
       );
     return campaign;
   }
@@ -163,6 +268,11 @@ export class CampaignsService {
   async create(dto: CreateCampaignDto, actor: AuthenticatedUser) {
     const dates = this.resolveDates(dto.startDate, dto.endDate);
     const id = await this.dataSource.transaction(async (manager) => {
+      const workflow = this.resolveWorkflow(
+        dto.workflowCycle,
+        dto.sequenceOrder,
+      );
+      await this.assertWorkflowOrderAvailable(manager, workflow);
       const version = await this.assertPublishedVersion(
         manager,
         dto.surveyVersionId,
@@ -174,6 +284,7 @@ export class CampaignsService {
           description: this.nullable(dto.description),
           type: dto.type,
           status: CampaignStatus.Draft,
+          ...workflow,
           surveyVersionId: version.id,
           ...dates,
           activatedAt: null,
@@ -203,6 +314,19 @@ export class CampaignsService {
       if (dto.description !== undefined)
         campaign.description = this.nullable(dto.description);
       if (dto.type !== undefined) campaign.type = dto.type;
+      if (dto.workflowCycle !== undefined || dto.sequenceOrder !== undefined) {
+        const workflow = this.resolveWorkflow(
+          dto.workflowCycle === undefined
+            ? campaign.workflowCycle
+            : dto.workflowCycle,
+          dto.sequenceOrder === undefined
+            ? campaign.sequenceOrder
+            : dto.sequenceOrder,
+        );
+        await this.assertWorkflowOrderAvailable(manager, workflow, campaign.id);
+        campaign.workflowCycle = workflow.workflowCycle;
+        campaign.sequenceOrder = workflow.sequenceOrder;
+      }
       if (dto.surveyVersionId !== undefined) {
         const version = await this.assertPublishedVersion(
           manager,
@@ -239,7 +363,7 @@ export class CampaignsService {
       if (campaign.status === nextStatus) return;
       if (!STATUS_TRANSITIONS[campaign.status].includes(nextStatus))
         throw new ConflictException(
-          `No se puede pasar una campaña de ${campaign.status} a ${nextStatus}.`,
+          `No se puede pasar una etapa de ${campaign.status} a ${nextStatus}.`,
         );
 
       if (nextStatus === CampaignStatus.Active) {
@@ -249,11 +373,11 @@ export class CampaignsService {
         });
         if (!assignedSchools)
           throw new ConflictException(
-            'No se puede activar una campaña sin escuelas asignadas.',
+            'No se puede activar una etapa sin escuelas asignadas.',
           );
         if (campaign.endsAt.getTime() <= Date.now())
           throw new ConflictException(
-            'No se puede activar una campaña cuya fecha de cierre ya venció.',
+            'No se puede activar una etapa cuya fecha de cierre ya venció.',
           );
         campaign.activatedAt = new Date();
       }
@@ -364,7 +488,7 @@ export class CampaignsService {
       !version.publishedAt
     )
       throw new ConflictException(
-        'La campaña sólo puede asociarse a una versión publicada.',
+        'La etapa sólo puede asociarse a una versión publicada.',
       );
     if (!version.survey.isActive)
       throw new ConflictException(
@@ -378,7 +502,7 @@ export class CampaignsService {
       where: { id },
       relations: { surveyVersion: { survey: true } },
     });
-    if (!campaign) throw new NotFoundException('Campaña no encontrada.');
+    if (!campaign) throw new NotFoundException('Etapa no encontrada.');
     return campaign;
   }
 
@@ -387,14 +511,14 @@ export class CampaignsService {
       where: { id },
       lock: { mode: 'pessimistic_write' },
     });
-    if (!campaign) throw new NotFoundException('Campaña no encontrada.');
+    if (!campaign) throw new NotFoundException('Etapa no encontrada.');
     return campaign;
   }
 
   private assertDraft(campaign: Campaign) {
     if (campaign.status !== CampaignStatus.Draft)
       throw new ConflictException(
-        'Sólo las campañas en borrador pueden editarse o eliminarse.',
+        'Sólo las etapas en borrador pueden editarse o eliminarse.',
       );
   }
 
@@ -405,6 +529,8 @@ export class CampaignsService {
       description: campaign.description,
       type: campaign.type,
       status: campaign.status,
+      workflowCycle: campaign.workflowCycle,
+      sequenceOrder: campaign.sequenceOrder,
       startDate: mendozaDateString(campaign.startsAt),
       endDate: mendozaDateString(campaign.endsAt),
       startsAt: campaign.startsAt,
@@ -434,6 +560,8 @@ export class CampaignsService {
       description: campaign.description,
       type: campaign.type,
       status: campaign.status,
+      workflowCycle: campaign.workflowCycle,
+      sequenceOrder: campaign.sequenceOrder,
       surveyVersionId: campaign.surveyVersionId,
       startsAt: campaign.startsAt,
       endsAt: campaign.endsAt,
@@ -443,6 +571,44 @@ export class CampaignsService {
   private nullable(value: string | null | undefined) {
     const normalized = value?.trim();
     return normalized ? normalized : null;
+  }
+
+  private resolveWorkflow(
+    cycle: string | null | undefined,
+    sequenceOrder: number | null | undefined,
+  ) {
+    const workflowCycle = cycle?.trim().replace(/\s+/g, ' ') || null;
+    const order = sequenceOrder ?? null;
+    if ((workflowCycle === null) !== (order === null))
+      throw new BadRequestException(
+        'Para ordenar una etapa debés indicar el recorrido y su número de orden.',
+      );
+    return { workflowCycle, sequenceOrder: order };
+  }
+
+  private async assertWorkflowOrderAvailable(
+    manager: EntityManager,
+    workflow: { workflowCycle: string | null; sequenceOrder: number | null },
+    excludedCampaignId?: string,
+  ) {
+    if (!workflow.workflowCycle || workflow.sequenceOrder === null) return;
+    const builder = manager
+      .getRepository(Campaign)
+      .createQueryBuilder('campaign')
+      .where('LOWER(campaign.workflowCycle) = LOWER(:cycle)', {
+        cycle: workflow.workflowCycle,
+      })
+      .andWhere('campaign.sequenceOrder = :sequenceOrder', {
+        sequenceOrder: workflow.sequenceOrder,
+      });
+    if (excludedCampaignId)
+      builder.andWhere('campaign.id <> :excludedCampaignId', {
+        excludedCampaignId,
+      });
+    if (await builder.getExists())
+      throw new ConflictException(
+        `El orden ${workflow.sequenceOrder} ya está ocupado en el recorrido ${workflow.workflowCycle}.`,
+      );
   }
 
   private audit(

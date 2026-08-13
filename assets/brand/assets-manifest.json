@@ -17,10 +17,10 @@
       "sha256": "a3bc1f65c9fa7dae63f25bd7ba719c6d3cbd5d316c371d4d6a7572f61d1f5980"
     },
     {
-      "organization": "OPS/OMS",
-      "path": "assets/brand/official/ops/oms-ops.jpg",
-      "originalFilename": "OMS-OPS2-1.jpg",
-      "sha256": "022476ce33a54bc1180e0f55aed3cda41775803f47caa47dc8ca3b43ee8c3948"
+      "organization": "OPS",
+      "path": "assets/brand/official/ops/ops-logo.jpeg",
+      "originalFilename": "OpsLogo.jpeg",
+      "sha256": "c7fc1650fc14b5992db6dd9f0cf9c477b0996ca60aadb47aafe8df3bd7188152"
     },
     {
       "organization": "OPS",

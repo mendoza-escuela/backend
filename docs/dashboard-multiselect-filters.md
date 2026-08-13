@@ -87,6 +87,6 @@ No se requiere migración de base de datos para este cambio.
 Los filtros territoriales e institucionales conservan el comportamiento
 existente y consultan la ficha escolar vigente. Esto permite incluir también
 escuelas no iniciadas, para las que no existe snapshot de envío. Si se requiere
-que una campaña histórica se reclasifique según la ficha que tenía la escuela
+que una etapa histórica se reclasifique según la ficha que tenía la escuela
 en ese período, el cliente debe definir la fecha de corte y la fuente histórica;
 esa reconstrucción no forma parte de DASH-04 y no se infiere silenciosamente.

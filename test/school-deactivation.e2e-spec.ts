@@ -333,7 +333,7 @@ describeWithDatabase('SCH-05 school deactivation (PostgreSQL)', () => {
         `INSERT INTO campaigns
              (name, description, type, status, survey_version_id, starts_at,
               ends_at, activated_at, closed_at)
-           VALUES ('Campaña histórica SCH-05', NULL, 'annual', 'closed', $1,
+           VALUES ('Etapa histórica SCH-05', NULL, 'annual', 'closed', $1,
               now() - interval '30 days', now() - interval '1 day',
               now() - interval '30 days', now() - interval '1 day')
            RETURNING id`,

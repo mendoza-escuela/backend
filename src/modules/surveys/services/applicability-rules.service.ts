@@ -14,6 +14,7 @@ import {
 import { EducationLevelCatalog } from '../../schools/entities/education-level-catalog.entity';
 import { SchoolShiftCatalog } from '../../schools/entities/school-shift-catalog.entity';
 import {
+  BulkCreateApplicabilityRuleDto,
   ReorderApplicabilityRulesDto,
   WriteApplicabilityRuleDto,
 } from '../dto/applicability-rule.dto';
@@ -131,6 +132,71 @@ export class ApplicabilityRulesService {
         },
       );
       return this.findRule(manager, rule.id);
+    });
+  }
+
+  /**
+   * Agrega una misma regla a varias preguntas de forma atómica.
+   *
+   * La prioridad se calcula independientemente para cada pregunta, porque
+   * cada una puede tener una cantidad distinta de reglas preexistentes.
+   */
+  async createBulk(
+    surveyId: string,
+    versionId: string,
+    dto: BulkCreateApplicabilityRuleDto,
+    actor: AuthenticatedUser,
+  ) {
+    return this.dataSource.transaction(async (manager) => {
+      this.validate(dto.rule);
+      for (const questionId of dto.questionIds) {
+        await this.assertMutableQuestion(
+          manager,
+          surveyId,
+          versionId,
+          questionId,
+        );
+        await this.assertDefaultAction(
+          manager,
+          questionId,
+          dto.rule.defaultAction,
+        );
+      }
+
+      const createdRuleIds: string[] = [];
+      for (const questionId of dto.questionIds) {
+        const lastRule = await manager.findOne(SurveyApplicabilityRule, {
+          where: { questionId },
+          order: { order: 'DESC' },
+        });
+        const rule = await manager.save(
+          SurveyApplicabilityRule,
+          manager.create(SurveyApplicabilityRule, {
+            questionId,
+            groupOperator: dto.rule.groupOperator,
+            action: dto.rule.action,
+            defaultAction: dto.rule.defaultAction,
+            order: (lastRule?.order ?? -1) + 1,
+          }),
+        );
+        await this.saveConditions(manager, rule.id, dto.rule);
+        createdRuleIds.push(rule.id);
+      }
+      await this.audit(
+        manager,
+        actor.id,
+        'APPLICABILITY_RULE_BULK_CREATED',
+        versionId,
+        {
+          surveyId,
+          versionId,
+          questionIds: dto.questionIds,
+          createdRuleIds,
+        },
+      );
+      return Promise.all(
+        createdRuleIds.map((ruleId) => this.findRule(manager, ruleId)),
+      );
     });
   }
 

@@ -60,7 +60,7 @@ export class CampaignTrackingService {
   constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
   /**
-   * Resume el padrón abierto de la campaña con tres estados excluyentes.
+   * Resume el padrón abierto de la etapa con tres estados excluyentes.
    *
    * El porcentaje general representa escuelas enviadas sobre el universo
    * incluido. Los borradores no reciben una ponderación parcial.
@@ -223,7 +223,7 @@ export class CampaignTrackingService {
     const campaign = await this.dataSource
       .getRepository(Campaign)
       .findOneBy({ id });
-    if (!campaign) throw new NotFoundException('La campaña no existe.');
+    if (!campaign) throw new NotFoundException('La etapa no existe.');
     return campaign;
   }
 

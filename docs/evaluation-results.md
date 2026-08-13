@@ -14,7 +14,7 @@ exportaciones ni modificación manual de puntajes.
 Se utiliza una combinación de datos normalizados y un snapshot JSONB:
 
 - `evaluation_results`: puntaje general, identificadores de presentación,
-  campaña, escuela y versión, versión del algoritmo, fecha y responsable del
+  etapa, escuela y versión, versión del algoritmo, fecha y responsable del
   cálculo.
 - `evaluation_dimension_results`: seis filas consultables por resultado con
   numerador, denominador, puntaje y criticidad por dimensión.
@@ -115,16 +115,16 @@ una presentación inexistente (`SUBMISSION_NOT_FOUND`), un borrador
 (`HISTORICAL_RESULT_INCOMPLETE`).
 
 El segundo endpoint lista los resultados históricos de la escuela para
-permitir su navegación aunque la campaña ya no esté activa. Ninguno de los dos
+permitir su navegación aunque la etapa ya no esté activa. Ninguno de los dos
 endpoints recalcula puntajes ni consulta la ficha, preguntas, opciones o reglas
-actuales. El nombre de campaña se obtiene de la campaña asociada, cuyos datos
+actuales. El nombre de etapa se obtiene de la etapa asociada, cuyos datos
 funcionales quedan protegidos después de activarse.
 
 ## Migración
 
 La migración `1720375215000-AddEvaluationResults.ts` crea ambas tablas, claves
 foráneas, controles de rango, la restricción única por presentación e índices
-para presentación, campaña, escuela, versión y dimensiones.
+para presentación, etapa, escuela, versión y dimensiones.
 
 La migración `1720375216000-AddCriticalityAndFutureStars.ts` agrega la
 criticidad normalizada, su índice y los campos reservados para estrellas. Los

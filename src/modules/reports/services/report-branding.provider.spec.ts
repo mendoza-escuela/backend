@@ -22,7 +22,7 @@ describe('ReportBrandingProvider', () => {
     mockedReadFileSync.mockReturnValue(Buffer.from('brand-image'));
   });
 
-  it('uses the bundled Mendoza and OMS/OPS assets when overrides are absent', () => {
+  it('uses the bundled Mendoza and OPS assets when overrides are absent', () => {
     const provider = new ReportBrandingProvider(config());
 
     const branding = provider.get();
@@ -36,7 +36,7 @@ describe('ReportBrandingProvider', () => {
     );
     expect(mockedExistsSync).toHaveBeenNthCalledWith(
       2,
-      resolve(__dirname, '../../../../assets/brand/official/ops/oms-ops.jpg'),
+      resolve(__dirname, '../../../../assets/brand/official/ops/ops-logo.jpeg'),
     );
     expect(branding.logos).toEqual([
       `data:image/png;base64,${Buffer.from('brand-image').toString('base64')}`,

@@ -11,7 +11,7 @@ import { AdminSchoolResultDetailService } from './admin-school-result-detail.ser
 describe('AdminSchoolResultDetailService', () => {
   const campaign = {
     id: 'campaign',
-    name: 'Campaña',
+    name: 'Etapa',
     type: 'annual',
     status: 'active',
     startsAt: new Date('2026-01-01'),
@@ -78,10 +78,10 @@ describe('AdminSchoolResultDetailService', () => {
     ).not.toMatch(/password|token|secret/i);
   });
 
-  it('rechaza campaña o escuela inexistente con errores funcionales', async () => {
+  it('rechaza etapa o escuela inexistente con errores funcionales', async () => {
     repositories.get(Campaign)?.findOneBy?.mockResolvedValueOnce(null);
     await expect(service.get('missing', school.id)).rejects.toThrow(
-      'La campaña no existe.',
+      'La etapa no existe.',
     );
     repositories.get(School)?.findOneBy?.mockResolvedValueOnce(null);
     await expect(service.get(campaign.id, 'missing')).rejects.toThrow(
@@ -92,7 +92,7 @@ describe('AdminSchoolResultDetailService', () => {
   it('rechaza una escuela posterior al cierre que no tiene historial', async () => {
     repositories.get(CampaignSchool)?.findOne?.mockResolvedValueOnce(null);
     await expect(service.get(campaign.id, school.id)).rejects.toThrow(
-      'La escuela no estaba incluida en el universo de esta campaña.',
+      'La escuela no estaba incluida en el universo de esta etapa.',
     );
   });
 

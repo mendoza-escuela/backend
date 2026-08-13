@@ -233,8 +233,8 @@ export class CriticalAlertsDashboardQueryDto extends ParticipationDashboardQuery
 }
 
 /**
- * Filtros para comparar campañas conservando exactamente la misma segmentación
- * escolar de DASH-04. Cada campaña mantiene su propio universo y denominadores.
+ * Filtros para comparar etapas conservando exactamente la misma segmentación
+ * escolar de DASH-04. Cada etapa mantiene su propio universo y denominadores.
  */
 export class ResultsComparisonDashboardQueryDto extends OmitType(
   ParticipationDashboardQueryDto,

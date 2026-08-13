@@ -15,7 +15,16 @@ import { CampaignType } from './campaign-type.enum';
 
 @Entity({ name: 'campaigns' })
 @Index('IDX_campaigns_status_dates', ['status', 'startsAt', 'endsAt'])
+@Index('IDX_campaigns_workflow_order', ['workflowCycle', 'sequenceOrder'])
 @Check('CHK_campaigns_date_range', '"ends_at" > "starts_at"')
+@Check(
+  'CHK_campaigns_workflow_pair',
+  '("workflow_cycle" IS NULL AND "sequence_order" IS NULL) OR ("workflow_cycle" IS NOT NULL AND "sequence_order" IS NOT NULL)',
+)
+@Check(
+  'CHK_campaigns_sequence_order_positive',
+  '"sequence_order" IS NULL OR "sequence_order" > 0',
+)
 export class Campaign {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -35,6 +44,19 @@ export class Campaign {
     default: CampaignStatus.Draft,
   })
   status: CampaignStatus;
+
+  /** Identifica el recorrido ordenado. Nulo para etapas independientes. */
+  @Column({
+    name: 'workflow_cycle',
+    type: 'varchar',
+    length: 120,
+    nullable: true,
+  })
+  workflowCycle: string | null;
+
+  /** Posición de la etapa dentro del recorrido del colegio. */
+  @Column({ name: 'sequence_order', type: 'smallint', nullable: true })
+  sequenceOrder: number | null;
 
   @Column({ name: 'survey_version_id', type: 'uuid' })
   surveyVersionId: string;

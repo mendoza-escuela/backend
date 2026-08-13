@@ -75,6 +75,8 @@ describe('SubmissionsService', () => {
   const campaignsService = {
     operationalCampaigns: jest.fn(),
     assertOperational: jest.fn(),
+    workflowBlockers: jest.fn(),
+    assertWorkflowUnlocked: jest.fn(),
   };
   const campaignSchoolsService = {
     assertAssigned: jest.fn(),
@@ -98,6 +100,8 @@ describe('SubmissionsService', () => {
     manager.find.mockReset();
     submissionRepository.find.mockReset();
     submissionRepository.findOneBy.mockReset();
+    campaignsService.workflowBlockers.mockResolvedValue(new Map());
+    campaignsService.assertWorkflowUnlocked.mockResolvedValue(undefined);
     service = new SubmissionsService(
       dataSource as unknown as DataSource,
       campaignsService as unknown as CampaignsService,
@@ -1139,7 +1143,7 @@ describe('SubmissionsService', () => {
       });
       campaignsService.assertOperational.mockRejectedValueOnce(
         new ConflictException(
-          'La campaña no se encuentra abierta para recibir respuestas.',
+          'La etapa no se encuentra abierta para recibir respuestas.',
         ),
       );
 

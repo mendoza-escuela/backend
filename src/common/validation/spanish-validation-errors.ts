@@ -2,7 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import type { ValidationError } from 'class-validator';
 
 const fieldLabels: Record<string, string> = {
-  campaignId: 'campaña',
+  campaignId: 'etapa',
   schoolId: 'escuela',
   surveyVersionId: 'versión del cuestionario',
   versionCode: 'código de versión',

@@ -4,30 +4,30 @@
 
 El universo se define explícitamente mediante `campaign_schools`. El
 seguimiento incluye sólo asignaciones vigentes (`removed_at IS NULL`) de la
-campaña seleccionada, incluso si la escuela fue desactivada posteriormente.
+etapa seleccionada, incluso si la escuela fue desactivada posteriormente.
 
-Mientras la campaña está en borrador se pueden incorporar, reactivar y quitar
+Mientras la etapa está en borrador se pueden incorporar, reactivar y quitar
 escuelas. No se permite quitar una escuela que ya tenga una presentación. Al
 activar se exige una versión publicada y al menos una escuela asignada.
 
-Durante una campaña activa el universo admite únicamente incorporaciones: una
+Durante una etapa activa el universo admite únicamente incorporaciones: una
 escuela habilitada puede agregarse de forma manual, masiva o por filtros y queda
 disponible inmediatamente dentro del período de carga. No se permiten bajas en
 este estado, de modo que una incorporación no puede retirar ni alterar el
-histórico de otra escuela. Las campañas cerradas o archivadas son de sólo
+histórico de otra escuela. Las etapas cerradas o archivadas son de sólo
 lectura; también se rechaza el alta si la fecha de cierre ya venció aunque el
 proceso periódico todavía no haya persistido el estado `closed`.
 
 Cada alta conserva en `campaign_schools` la fecha, el origen y el administrador
-responsable. La misma transacción registra en auditoría el estado de la campaña,
+responsable. La misma transacción registra en auditoría el estado de la etapa,
 las escuelas efectivamente incorporadas y las asignaciones reactivadas. La
-restricción única por campaña y escuela hace que una solicitud repetida sea
+restricción única por etapa y escuela hace que una solicitud repetida sea
 idempotente. Si la escuela es desactivada después, su asignación y su historial
 permanecen en el universo, aunque el acceso y las nuevas cargas queden
 bloqueados.
 
 La migración `AddCampaignSchoolsAndSchoolContacts1720375219000` conserva las
-campañas existentes: crea asignaciones para el universo histórico anterior y
+etapas existentes: crea asignaciones para el universo histórico anterior y
 para cualquier escuela con una presentación ya registrada.
 
 La fecha `inclusionCutoff` del resumen se mantiene como metadato histórico de
@@ -93,15 +93,15 @@ Si el snapshot histórico está incompleto, la fila no se elimina: se devuelve
 
 Las migraciones de seguimiento y asignación agregan índices para:
 
-- campaña y último guardado;
-- campaña y fecha de envío;
-- campaña y estado de presentación;
-- campaña y asignación vigente;
+- etapa y último guardado;
+- etapa y fecha de envío;
+- etapa y estado de presentación;
+- etapa y asignación vigente;
 - escuela y asignación vigente;
-- campaña, fecha de asignación y escuela para asignaciones no removidas.
+- etapa, fecha de asignación y escuela para asignaciones no removidas.
 
-Se reutilizan además los índices existentes de campaña/estado, unicidad
-escuela/campaña y búsqueda por CUE o nombre.
+Se reutilizan además los índices existentes de etapa/estado, unicidad
+escuela/etapa y búsqueda por CUE o nombre.
 
 ## Verificación con 2.500 escuelas
 
