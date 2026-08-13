@@ -142,6 +142,8 @@ Las rutas bajo `/api/admin/surveys` requieren sesión válida, contraseña inici
 - `GET /api/admin/surveys/:surveyId/versions/:versionId/validation`: validación previa con todos los errores estructurales detectados.
 - `GET /api/admin/surveys/:surveyId/versions/compare`: comparación estructural mediante `fromVersionId` y `toVersionId`.
 
+Las reglas de aplicabilidad de una versión borrador pueden crearse para una pregunta individual o aplicarse a varias mediante `POST /api/admin/surveys/:surveyId/versions/:versionId/applicability-rules/bulk`. La operación múltiple es transaccional: valida primero todas las preguntas y agrega la regla al final de la prioridad propia de cada una; si un destino es inválido o tiene una acción predeterminada incompatible, no persiste cambios parciales. La edición, eliminación, reordenamiento y previsualización continúan siendo individuales para conservar trazabilidad clara.
+
 Los borradores pueden guardarse incompletos para permitir construcción progresiva. Antes de publicar se exige, como mínimo, una dimensión, una sección por dimensión, una pregunta por sección, opciones para las preguntas de selección y puntaje en cada opción. En todos los guardados se controlan códigos repetidos, tipos incompatibles con opciones, puntajes fuera de 0–100 y rangos de validación inconsistentes.
 
 La plantilla `official_dimensions` crea únicamente el esqueleto aprobado: nombres, descripciones, códigos internos y orden de las seis dimensiones. No precarga secciones ni preguntas. “Entorno Socioemocional” no se registra como una séptima dimensión; las preguntas 41, 42 y 43 quedan identificadas para su futura carga dentro de `salud_mental`.

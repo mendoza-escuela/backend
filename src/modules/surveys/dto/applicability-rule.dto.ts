@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
+  ArrayUnique,
   IsArray,
   IsDefined,
   IsEnum,
@@ -56,6 +57,18 @@ export class ReorderApplicabilityRulesDto {
   @ArrayMinSize(1)
   @IsUUID('4', { each: true })
   ruleIds: string[];
+}
+
+export class BulkCreateApplicabilityRuleDto {
+  @IsArray()
+  @ArrayMinSize(2)
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  questionIds: string[];
+
+  @ValidateNested()
+  @Type(() => WriteApplicabilityRuleDto)
+  rule: WriteApplicabilityRuleDto;
 }
 
 export class PreviewApplicabilityDto {
