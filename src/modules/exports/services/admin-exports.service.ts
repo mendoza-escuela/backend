@@ -283,13 +283,13 @@ export class AdminExportsService {
       row.campaignName,
       snapshot?.survey.version.number ?? '',
       this.participationStatus(row.submissionStatus),
-      this.iso(row.submittedAt),
-      this.decimal(row.generalScore),
-      this.decimal(snapshot?.result.numerator),
+      this.dateTime(row.submittedAt),
+      this.roundedDecimal(row.generalScore),
+      this.roundedDecimal(snapshot?.result.numerator),
       this.decimal(snapshot?.result.denominator),
       this.decimal(row.stars),
       ...dimensions.map((score) => this.decimal(score)),
-      JSON.stringify(snapshot?.result.stars.alerts ?? []),
+      this.alerts(snapshot?.result.stars.alerts),
       applicable.length,
       answered.length,
       applicable.length === answered.length ? 'Completa' : 'Incompleta',
@@ -306,7 +306,7 @@ export class AdminExportsService {
           row.schoolName,
           row.campaignName,
           snapshot.survey.version.number,
-          this.iso(row.submittedAt),
+          this.dateTime(row.submittedAt),
           dimension.code,
           dimension.title,
           question.code,
@@ -383,8 +383,45 @@ export class AdminExportsService {
     return `"${value.replace(/"/g, '""')}"`;
   }
 
-  private iso(value: Date | string | null) {
-    return value ? new Date(value).toISOString() : '';
+  private dateTime(value: Date | string | null) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const parts = new Intl.DateTimeFormat('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+      timeZone: 'America/Argentina/Mendoza',
+    }).formatToParts(date);
+    const part = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((entry) => entry.type === type)?.value ?? '';
+    return `${part('day')}/${part('month')}/${part('year')} ${part('hour')}:${part('minute')}:${part('second')}`;
+  }
+
+  private roundedDecimal(
+    value: string | number | null | undefined,
+  ): number | '' {
+    const numeric = this.decimal(value);
+    return numeric === ''
+      ? ''
+      : Math.round((numeric + Number.EPSILON) * 100) / 100;
+  }
+
+  private alerts(
+    alerts:
+      | Array<{ code?: string | null; message?: string | null }>
+      | null
+      | undefined,
+  ) {
+    if (!alerts?.length) return 'Sin alertas';
+    return alerts
+      .map((alert) => alert.message?.trim() || alert.code?.trim())
+      .filter((alert): alert is string => Boolean(alert))
+      .join(' | ');
   }
 
   private decimal(value: string | number | null | undefined): number | '' {

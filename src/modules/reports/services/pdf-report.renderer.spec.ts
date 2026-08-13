@@ -40,6 +40,12 @@ describe('PdfReportRenderer', () => {
     expect(serialized).toContain('"headerRows":1');
     expect(serialized).toContain('"dontBreakRows":true');
     expect(serialized).toContain('"keepWithHeaderRows":1');
+    expect(serialized).toContain('Información del cálculo');
+    expect(serialized).toContain('Promedio de las preguntas aplicables');
+    expect(serialized).toContain('10/08/2026 09:00:01');
+    expect(serialized).not.toContain('evaluation-v1');
+    expect(serialized).not.toContain('stars-v1');
+    expect(serialized).not.toContain('Trazabilidad del cálculo');
     create.mockRestore();
   });
 
@@ -57,7 +63,7 @@ describe('PdfReportRenderer', () => {
       branding: {
         ...view.branding,
         organizations:
-          'Gobierno de Mendoza · Salud · Dirección General de Escuelas · OPS/OMS',
+          'Gobierno de Mendoza · Salud · Dirección General de Escuelas · OPS',
         logos: ['data:image/png;base64,bG9nbw=='],
       },
     };
@@ -66,7 +72,7 @@ describe('PdfReportRenderer', () => {
 
     const definition = create.mock.calls[0][0];
     expect(JSON.stringify(definition)).toContain(
-      'Gobierno de Mendoza · Salud · Dirección General de Escuelas · OPS/OMS',
+      'Gobierno de Mendoza · Salud · Dirección General de Escuelas · OPS',
     );
     create.mockRestore();
   });

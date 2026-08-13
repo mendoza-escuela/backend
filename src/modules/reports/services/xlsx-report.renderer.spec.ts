@@ -264,7 +264,7 @@ function reportView(): IndividualReportViewModel {
     },
     branding: {
       programName: 'Escuelas Promotoras de Salud',
-      organizations: 'Gobierno de Mendoza · OPS/OMS',
+      organizations: 'Gobierno de Mendoza · OPS',
       logos: [],
       signer: null,
       signerPosition: null,

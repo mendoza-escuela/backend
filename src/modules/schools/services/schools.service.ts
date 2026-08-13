@@ -996,11 +996,25 @@ export class SchoolsService {
           where: { schoolId: In(schools.map(({ id }) => id)) },
         })
       : [];
+    const educationLevels = schools.length
+      ? await this.dataSource.getRepository(SchoolEducationLevel).find({
+          where: { schoolId: In(schools.map(({ id }) => id)) },
+          relations: { level: true },
+          order: { order: 'ASC' },
+        })
+      : [];
     const contactsBySchool = new Map<string, SchoolContact[]>();
     contacts.forEach((contact) =>
       contactsBySchool.set(contact.schoolId, [
         ...(contactsBySchool.get(contact.schoolId) ?? []),
         contact,
+      ]),
+    );
+    const educationLevelsBySchool = new Map<string, SchoolEducationLevel[]>();
+    educationLevels.forEach((selection) =>
+      educationLevelsBySchool.set(selection.schoolId, [
+        ...(educationLevelsBySchool.get(selection.schoolId) ?? []),
+        selection,
       ]),
     );
     const rectifiedRows = schools.length
@@ -1035,7 +1049,9 @@ export class SchoolsService {
       'Localidad',
       'Dirección',
       'Código postal',
-      'Nivel',
+      'Tipo de educación',
+      'Niveles educativos',
+      'Matrícula por nivel',
       'Gestión',
       'Ámbito',
       'Jornada',
@@ -1045,7 +1061,7 @@ export class SchoolsService {
       'Cargo responsable',
       'Correo responsable',
       'Teléfono responsable',
-      'Matrícula',
+      'Matrícula total',
       'Estado',
       'Período de rectificación',
       'Rectificada',
@@ -1056,6 +1072,7 @@ export class SchoolsService {
       const respondent = schoolContacts.find(
         ({ type }) => type === SchoolContactType.Respondent,
       );
+      const selectedLevels = educationLevelsBySchool.get(school.id) ?? [];
       return [
         school.cue,
         school.name,
@@ -1066,6 +1083,13 @@ export class SchoolsService {
         school.address,
         school.postalCode ?? '',
         school.educationLevel,
+        selectedLevels.map(({ level }) => level.label).join(' | '),
+        selectedLevels
+          .map(
+            ({ level, enrollment }) =>
+              `${level.label}: ${enrollment ?? 'Sin informar'}`,
+          )
+          .join(' | '),
         school.managementType,
         school.scope ?? '',
         school.shift ?? '',
@@ -1077,11 +1101,11 @@ export class SchoolsService {
         respondent?.position ?? '',
         respondent?.email ?? school.referentEmail ?? '',
         respondent?.phone ?? school.referentPhone ?? '',
-        school.enrollment,
+        school.enrollment ?? '',
         school.isActive ? 'Activo' : 'Inactivo',
         currentYear,
         rectifiedBySchool.has(school.id) ? 'Sí' : 'No',
-        rectifiedBySchool.get(school.id)?.toISOString() ?? '',
+        this.mendozaDateTime(rectifiedBySchool.get(school.id)),
       ];
     });
     if (format === 'csv')
@@ -1117,6 +1141,26 @@ export class SchoolsService {
       mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       extension: 'xlsx',
     };
+  }
+
+  /** Formatea fechas administrativas en la zona horaria de Mendoza. */
+  private mendozaDateTime(value: Date | string | undefined) {
+    if (!value) return '';
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const parts = new Intl.DateTimeFormat('es-AR', {
+      timeZone: 'America/Argentina/Buenos_Aires',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(date);
+    const part = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((candidate) => candidate.type === type)?.value ?? '';
+    return `${part('day')}/${part('month')}/${part('year')} ${part('hour')}:${part('minute')}:${part('second')}`;
   }
 
   private filteredBuilder(

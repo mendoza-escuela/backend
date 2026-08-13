@@ -90,9 +90,15 @@ export class PdfReportRenderer {
           })),
           'No se registraron exclusiones.',
         ),
-        { text: 'Trazabilidad del cálculo', style: 'sectionTitle' },
+        { text: 'Información del cálculo', style: 'sectionTitle' },
         {
-          text: `Algoritmo ${view.algorithm.version}. Configuración de estrellas: ${view.result.stars.configuration?.versionCode ?? view.result.stars.ruleVersion ?? 'sin versión informada'}. Calculado el ${this.date(view.algorithm.calculatedAt)}.`,
+          text: 'Método: Promedio de las preguntas aplicables. Las preguntas excluidas por las reglas del cuestionario no afectan el resultado.',
+        },
+        {
+          text: 'Configuración de evaluación: Versión vigente al momento del cálculo.',
+        },
+        {
+          text: `Fecha de cálculo: ${this.compactDateTime(view.algorithm.calculatedAt)}.`,
         },
         ...this.signature(view),
       ],
@@ -404,5 +410,24 @@ export class PdfReportRenderer {
           timeZone: 'America/Argentina/Mendoza',
         }).format(new Date(value))
       : 'Sin fecha';
+  }
+
+  private compactDateTime(value: string | null) {
+    if (!value) return 'Sin fecha';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Sin fecha';
+    const parts = new Intl.DateTimeFormat('es-AR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+      timeZone: 'America/Argentina/Mendoza',
+    }).formatToParts(date);
+    const part = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((entry) => entry.type === type)?.value ?? '';
+    return `${part('day')}/${part('month')}/${part('year')} ${part('hour')}:${part('minute')}:${part('second')}`;
   }
 }

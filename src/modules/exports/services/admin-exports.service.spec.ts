@@ -150,10 +150,29 @@ describe('AdminExportsService XLSX', () => {
       '"Educación común","Primario [primario]"',
     );
     expect(results.buffer.toString('utf8')).toContain('"80","400","5","4"');
+    expect(results.buffer.toString('utf8')).toContain('"10/08/2026 09:00:00"');
+    expect(results.buffer.toString('utf8')).toContain('"Sin alertas"');
     expect(answers.buffer.toString('utf8')).toContain(
       '"p021","¿Pregunta?","","","No","Sí","La escuela no posee kiosco."',
     );
     expect(results.headers.get('content-type')).toBe('text/csv; charset=utf-8');
+  });
+
+  it('redondea el puntaje y el numerador general a dos decimales', async () => {
+    const snapshot = answerSnapshot(1);
+    snapshot.result.generalScore = '61.335';
+    snapshot.result.numerator = '184.004';
+    const row = exportRow(1, snapshot);
+    row.generalScore = '61.335';
+    const { service } = fixture([row]);
+
+    const results = await download(service, 'results');
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(results.buffer as unknown as ArrayBuffer);
+    const sheet = workbook.getWorksheet('Resultados');
+
+    expect(sheet?.getCell('N2').value).toBe(61.34);
+    expect(sheet?.getCell('O2').value).toBe(184);
   });
 
   it('preserves nulls, alerts and exclusions in workbooks read by ExcelJS', async () => {

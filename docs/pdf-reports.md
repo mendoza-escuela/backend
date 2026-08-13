@@ -39,11 +39,11 @@ reciben los archivos oficiales y una licencia que autorice su redistribución.
 
 `ReportBrandingProvider` acepta únicamente imágenes PNG/JPEG existentes. Mientras
 se esperan los activos definitivos, usa por defecto los logos provisionales
-versionados de Gobierno de Mendoza y OMS/OPS:
+versionados de Gobierno de Mendoza y OPS:
 
 ```text
 assets/brand/official/mendoza/marca-gobierno-mendoza.png
-assets/brand/official/ops/oms-ops.jpg
+assets/brand/official/ops/ops-logo.jpeg
 ```
 
 `REPORT_LOGO_MENDOZA_PATH` y `REPORT_LOGO_OPS_PATH` permiten reemplazarlos sin
