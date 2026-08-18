@@ -36,20 +36,22 @@ describe('ReportBrandingProvider', () => {
     );
     expect(mockedExistsSync).toHaveBeenNthCalledWith(
       2,
-      resolve(__dirname, '../../../../assets/brand/official/ops/ops-logo.jpeg'),
+      resolve(
+        __dirname,
+        '../../../../assets/brand/official/ops/ops-blue-horizontal.png',
+      ),
     );
     expect(branding.logos).toEqual([
       `data:image/png;base64,${Buffer.from('brand-image').toString('base64')}`,
-      `data:image/jpeg;base64,${Buffer.from('brand-image').toString('base64')}`,
+      `data:image/png;base64,${Buffer.from('brand-image').toString('base64')}`,
     ]);
+    expect(branding.organizations).toBe('Gobierno de Mendoza · OPS');
   });
 
-  it('prefers configured paths and preserves optional Health and DGE logos', () => {
+  it('prefers configured paths for Mendoza and OPS', () => {
     const provider = new ReportBrandingProvider(
       config({
         REPORT_LOGO_MENDOZA_PATH: ' /branding/mendoza.png ',
-        REPORT_LOGO_HEALTH_PATH: '/branding/salud.jpg',
-        REPORT_LOGO_DGE_PATH: '/branding/dge.jpeg',
         REPORT_LOGO_OPS_PATH: '/branding/ops.png',
       }),
     );
@@ -58,11 +60,9 @@ describe('ReportBrandingProvider', () => {
 
     expect(mockedExistsSync.mock.calls.map(([path]) => path)).toEqual([
       '/branding/mendoza.png',
-      '/branding/salud.jpg',
-      '/branding/dge.jpeg',
       '/branding/ops.png',
     ]);
-    expect(branding.logos).toHaveLength(4);
+    expect(branding.logos).toHaveLength(2);
   });
 
   it('keeps the textual fallback when an image is missing or unsupported', () => {

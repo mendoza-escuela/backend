@@ -1,44 +1,16 @@
 {
-  "status": "provisional-authorized",
+  "status": "authorized",
   "providedBy": "Cliente del proyecto",
-  "providedAt": "2026-08-11",
-  "usageTerms": "Uso provisional autorizado para reportes del Producto 1; reemplazar por los archivos definitivos cuando sean entregados.",
+  "providedAt": "2026-08-18",
+  "usageTerms": "Variantes oficiales autorizadas para la identidad institucional de OPS.",
   "files": [
-    {
-      "organization": "Gobierno de Mendoza",
-      "path": "assets/brand/official/mendoza/marca-gobierno-mendoza.png",
-      "originalFilename": "marca_gov.png",
-      "sha256": "0034ba6cd9fc9bbcb2f8008ab4134d83cb4ef32434a45ee238a9aacc3b229543"
-    },
-    {
-      "organization": "Gobierno de Mendoza",
-      "path": "assets/brand/official/mendoza/simbolo-mendoza.png",
-      "originalFilename": "SITIO-AC_200x200-1-300x300-1.png",
-      "sha256": "a3bc1f65c9fa7dae63f25bd7ba719c6d3cbd5d316c371d4d6a7572f61d1f5980"
-    },
-    {
-      "organization": "OPS",
-      "path": "assets/brand/official/ops/ops-logo.jpeg",
-      "originalFilename": "OpsLogo.jpeg",
-      "sha256": "c7fc1650fc14b5992db6dd9f0cf9c477b0996ca60aadb47aafe8df3bd7188152"
-    },
-    {
-      "organization": "OPS",
-      "path": "assets/brand/official/ops/ops-horizontal.png",
-      "originalFilename": "descarga.png",
-      "sha256": "ff1df926edb3e397056477c5e0d2c443d38d1d6957d2378022708d6b24449831"
-    }
-  ],
-  "notProvided": [
-    "Logo específico de Salud",
-    "Logo específico de la Dirección General de Escuelas",
-    "Archivos distribuibles de la familia tipográfica REM"
-  ],
-  "duplicatesOmitted": [
-    {
-      "originalFilename": "marca_gov (1).png",
-      "duplicateOf": "assets/brand/official/mendoza/marca-gobierno-mendoza.png",
-      "sha256": "0034ba6cd9fc9bbcb2f8008ab4134d83cb4ef32434a45ee238a9aacc3b229543"
-    }
+    { "organization": "Gobierno de Mendoza", "path": "assets/brand/official/mendoza/marca-gobierno-mendoza.png", "originalFilename": "marca_gov.png", "sha256": "0034ba6cd9fc9bbcb2f8008ab4134d83cb4ef32434a45ee238a9aacc3b229543" },
+    { "organization": "Gobierno de Mendoza", "path": "assets/brand/official/mendoza/simbolo-mendoza.png", "originalFilename": "SITIO-AC_200x200-1-300x300-1.png", "sha256": "a3bc1f65c9fa7dae63f25bd7ba719c6d3cbd5d316c371d4d6a7572f61d1f5980" },
+    { "organization": "OPS", "path": "assets/brand/official/ops/ops-blue-horizontal.png", "originalFilename": "2026-PAHObrand-blue-horiz-es.pdf", "surface": "light", "sha256": "571836e62b16ade6987cc3058edc9b00f224c4e651bffc477d4d4235f5d4d501", "usage": "Reportes sobre fondo claro" },
+    { "organization": "OPS", "path": "assets/brand/official/ops/ops-blue-stacked.png", "originalFilename": "2026-PAHObrand-blue-stacked-es.pdf", "surface": "light", "sha256": "c331259b96457fa5aa8d878b5d07af08cb94ac5953669466fecfd22cfd9216d4" },
+    { "organization": "OPS", "path": "assets/brand/official/ops/ops-white-horizontal.png", "originalFilename": "2026-PAHObrand-white-horiz-es.pdf", "surface": "dark", "sha256": "bf2cb254c738cbd9a9f62ea0bc942b900df35b3888d37f0e722bcefbb76a6b31" },
+    { "organization": "OPS", "path": "assets/brand/official/ops/ops-white-stacked.png", "originalFilename": "2026-PAHObrand-white-stacked-es.pdf", "surface": "dark", "sha256": "c5a015452d78fe79b6072fcb2faeb73b2c5a82b1a8262f10ba7db890d37e61c2" },
+    { "organization": "OPS", "path": "assets/brand/official/ops/ops-black-horizontal.png", "originalFilename": "2026-PAHObrand-black-horiz-es.pdf", "surface": "light-monochrome", "sha256": "7e662f6da16a9e9b77bf66e69e7f0855dead41569b3d4f371a5a5ebe121b0ad1" },
+    { "organization": "OPS", "path": "assets/brand/official/ops/ops-black-stacked.png", "originalFilename": "2026-PAHObrand-black-stacked-es.pdf", "surface": "light-monochrome", "sha256": "fef3cb94bd8ff01d730fe89fbde2d7d944e1e566427766fc0c323457591573cd" }
   ]
 }
