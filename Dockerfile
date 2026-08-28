@@ -6,7 +6,7 @@
 # ip-address), ninguno proveniente del código de la aplicación ni de sus
 # dependencias. La actualización de npm sólo hace falta donde se instalan
 # paquetes, así que ahora se aplica en los stages de build y no en el runtime.
-FROM node:22-alpine AS base
+FROM node:26-alpine AS base
 WORKDIR /app
 
 # Stage intermedio para todo lo que ejecuta npm ci / npm run build.
