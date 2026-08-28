@@ -20,7 +20,7 @@ updates:
     # mayoria de los paquetes maliciosos de supply chain se detectan y retiran
     # en los primeros dias. Sugerido por semgrep dependabot-missing-cooldown.
     cooldown:
-      default-days: 5
+      default-days: 7
     open-pull-requests-limit: 5
     labels: [dependencias, seguridad]
     commit-message:
@@ -52,7 +52,7 @@ updates:
     # mayoria de los paquetes maliciosos de supply chain se detectan y retiran
     # en los primeros dias. Sugerido por semgrep dependabot-missing-cooldown.
     cooldown:
-      default-days: 5
+      default-days: 7
     labels: [dependencias, docker, seguridad]
     commit-message:
       prefix: 'docker'
@@ -69,7 +69,7 @@ updates:
     # mayoria de los paquetes maliciosos de supply chain se detectan y retiran
     # en los primeros dias. Sugerido por semgrep dependabot-missing-cooldown.
     cooldown:
-      default-days: 5
+      default-days: 7
     labels: [dependencias, ci, seguridad]
     commit-message:
       prefix: 'ci'

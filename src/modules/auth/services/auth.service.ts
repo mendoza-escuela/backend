@@ -44,7 +44,7 @@ type NewAuthSession = Pick<
  * No corresponde a ninguna contraseña utilizable.
  */
 const DECOY_PASSWORD_HASH =
-  '$2b$12$g7eeKoS4WUaShPDTNFpFLu1lilN76as/VT35ijKJ7BsAWvRQRm02K';
+  '$2b$12$g7eeKoS4WUaShPDTNFpFLu1lilN76as/VT35ijKJ7BsAWvRQRm02K'; // nosemgrep: generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash -- SEC-EXC-004
 
 @Injectable()
 export class AuthService {

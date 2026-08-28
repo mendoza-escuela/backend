@@ -61,10 +61,10 @@ de versión sin avisar no es comparable entre ejecuciones.
 | Herramienta | Versión | Rol |
 | --- | --- | --- |
 | Semgrep | 1.145.0 | SAST + 11 reglas propias |
-| Trivy | 0.67.2 | Dependencias, imágenes, SBOM, misconfig |
+| Trivy | 0.74.0 | Dependencias, imágenes, SBOM, misconfig |
 | OSV-Scanner | v2.2.4 | Segunda fuente sobre los lockfiles |
 | Gitleaks | v8.30.0 | Secretos en el historial completo |
-| OWASP ZAP | 2.16.1 | DAST |
+| OWASP ZAP | 2.17.0 | DAST |
 | Nuclei | v3.4.10 | DAST complementario |
 | testssl.sh | 3.2 | TLS (sólo staging) |
 
