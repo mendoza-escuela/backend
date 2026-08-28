@@ -20,6 +20,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 REPORTS_DIR="${REPO_ROOT}/security/reports"
 CONFIG_DIR="${REPO_ROOT}/security/config"
+EDGE_NETWORK="${SECURITY_EDGE_NETWORK:-mendoza-security_sec-edge}"
+LOCAL_PROXY_URL="${SECURITY_LOCAL_PROXY_URL:-http://sec-proxy}"
 
 case "$(uname -s)" in
   MINGW* | MSYS* | CYGWIN*) export MSYS_NO_PATHCONV=1 ;;
@@ -41,6 +43,15 @@ ADMIN_PASSWORD="${SECURITY_ADMIN_PASSWORD:-CiSynthetic#Admin2026}"
 
 log()  { printf '\n\033[1m[%s]\033[0m %s\n' "$1" "$2"; }
 fail() { printf '\n\033[1;31m[ABORTADO]\033[0m %s\n' "$1" >&2; exit 1; }
+
+is_local_url() {
+  local host
+  host="$(printf '%s' "$1" | sed -E 's#^[a-zA-Z]+://##; s#[:/].*$##')"
+  case "${host}" in
+    localhost | 127.0.0.1 | ::1 | host.docker.internal) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 # -----------------------------------------------------------------------------
 # 1. Verificación de alcance — se ejecuta ANTES de cualquier petición
@@ -133,6 +144,10 @@ run_zap() {
   rm -f "${REPORTS_DIR}"/zap-report.* \
         "${REPORTS_DIR}"/zap-frontend-report.* \
         "${REPORTS_DIR}"/zap-api-report.*
+  # La imagen oficial de ZAP corre con un UID no-root. En runners Linux ese UID
+  # no coincide con el dueño del checkout y necesita poder crear zap.yaml y los
+  # informes dentro del único directorio de salida montado.
+  chmod a+rwx "${REPORTS_DIR}"
 
   if [ "${API_URL}" = "${TARGET_URL}" ]; then
     run_zap_target "${TARGET_URL}" "zap-report" "${zap_script}" 1
@@ -148,11 +163,16 @@ run_zap() {
 run_zap_target() {
   local target_url="$1" report_prefix="$2" zap_script="$3" use_auth="$4"
   local extra_args=()
+  local network_args=()
 
-  # ZAP corre en su propio contenedor: para alcanzar un servicio publicado en el
-  # loopback del host se usa host.docker.internal.
-  local zap_target="${target_url/localhost/host.docker.internal}"
-  zap_target="${zap_target/127.0.0.1/host.docker.internal}"
+  # En Linux, un puerto publicado sólo en 127.0.0.1 no es alcanzable desde otro
+  # contenedor mediante host.docker.internal. Para el entorno efímero, ZAP se
+  # une a la red edge y accede al proxy por DNS interno. Staging conserva su URL.
+  local zap_target="${target_url}"
+  if is_local_url "${target_url}"; then
+    zap_target="${LOCAL_PROXY_URL}"
+    network_args=(--network "${EDGE_NETWORK}")
+  fi
 
   if [ "${use_auth}" -eq 1 ] && [ -n "${AUTH_TOKEN}" ]; then
     # Cabecera de autorización para TODAS las peticiones del escáner.
@@ -170,7 +190,7 @@ run_zap_target() {
   fi
 
   docker run --rm \
-    --add-host=host.docker.internal:host-gateway \
+    "${network_args[@]}" \
     -v "${REPORTS_DIR}:/zap/wrk:rw" \
     -v "${CONFIG_DIR}/zap:/zap/config:ro" \
     "${ZAP_IMAGE}" \
@@ -198,10 +218,17 @@ run_zap_target() {
 # -----------------------------------------------------------------------------
 run_nuclei() {
   log NUCLEI "Plantillas medium/high/critical, ritmo limitado"
-  local nuclei_target="${TARGET_URL/localhost/host.docker.internal}"
-  nuclei_target="${nuclei_target/127.0.0.1/host.docker.internal}"
-  local nuclei_api_target="${API_URL/localhost/host.docker.internal}"
-  nuclei_api_target="${nuclei_api_target/127.0.0.1/host.docker.internal}"
+  local nuclei_target="${TARGET_URL}"
+  local nuclei_api_target="${API_URL}"
+  local network_args=()
+  if is_local_url "${TARGET_URL}"; then
+    nuclei_target="${LOCAL_PROXY_URL}"
+    network_args=(--network "${EDGE_NETWORK}")
+  fi
+  if is_local_url "${API_URL}"; then
+    nuclei_api_target="${LOCAL_PROXY_URL}"
+    network_args=(--network "${EDGE_NETWORK}")
+  fi
   local target_args=(-target "${nuclei_target}")
   if [ "${nuclei_api_target}" != "${nuclei_target}" ]; then
     target_args+=(-target "${nuclei_api_target}")
@@ -211,7 +238,7 @@ run_nuclei() {
   # en un volumen para las corridas siguientes. Sin esto Nuclei aborta con
   # "no templates provided for scan".
   docker run --rm \
-    --add-host=host.docker.internal:host-gateway \
+    "${network_args[@]}" \
     -v "${REPORTS_DIR}:/reports" \
     -v "${CONFIG_DIR}/nuclei:/config:ro" \
     -v nuclei-templates:/root/nuclei-templates \
