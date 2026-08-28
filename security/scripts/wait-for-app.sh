@@ -8,7 +8,7 @@
 # informe.
 #
 # Uso:
-#   ./security/scripts/wait-for-app.sh [URL_BASE] [TIMEOUT_SEGUNDOS]
+#   ./security/scripts/wait-for-app.sh [URL_FRONTEND] [TIMEOUT_SEGUNDOS] [URL_API]
 #
 # Salida: 0 si la aplicación responde; 1 si se agota el tiempo.
 # =============================================================================
@@ -16,6 +16,7 @@ set -euo pipefail
 
 BASE_URL="${1:-${SECURITY_APP_URL:-http://localhost:8081}}"
 TIMEOUT="${2:-180}"
+API_BASE_URL="${3:-${SECURITY_STAGING_API_URL:-${BASE_URL}}}"
 INTERVAL=3
 
 log() { printf '[wait-for-app] %s\n' "$1"; }
@@ -41,10 +42,10 @@ wait_for "el proxy" "${BASE_URL}/healthz" || exit 1
 
 # 2. La API sólo responde /api/health cuando las migraciones terminaron:
 #    start-production.cjs no arranca NestJS hasta completarlas.
-wait_for "la API (migraciones aplicadas)" "${BASE_URL}/api/health" || exit 1
+wait_for "la API (migraciones aplicadas)" "${API_BASE_URL}/api/health" || exit 1
 
 # 3. La conexión a la base debe estar viva de verdad, no sólo el proceso.
-wait_for "la base de datos" "${BASE_URL}/api/health/database" || exit 1
+wait_for "la base de datos" "${API_BASE_URL}/api/health/database" || exit 1
 
 # 4. La SPA es opcional: sólo existe con el perfil `full`.
 if curl -fsS --max-time 5 "${BASE_URL}/" >/dev/null 2>&1; then

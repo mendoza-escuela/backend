@@ -22,6 +22,20 @@ En Windows: `.\security\run-security.ps1`
 
 Resultado en `security/reports/summary.md`.
 
+Para analizar un staging donde frontend y API usan dominios separados:
+
+```bash
+SECURITY_STAGING_URL=https://frontend-staging.example \
+SECURITY_STAGING_API_URL=https://api-staging.example \
+SECURITY_ADMIN_EMAIL=security@example \
+SECURITY_ADMIN_PASSWORD='...' \
+./security/scripts/run-all.sh --full-dast
+```
+
+Las credenciales deben pertenecer a un administrador exclusivo del entorno de
+pruebas. Si `SECURITY_STAGING_API_URL` no se define, se asume que la API vive
+bajo el mismo origen que el frontend.
+
 ---
 
 ## Qué hace cada script

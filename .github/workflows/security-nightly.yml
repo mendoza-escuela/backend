@@ -17,7 +17,11 @@ on:
   workflow_dispatch:
     inputs:
       staging_url:
-        description: 'URL de staging para DAST activo y TLS (opcional)'
+        description: 'URL del frontend de staging (opcional)'
+        type: string
+        required: false
+      staging_api_url:
+        description: 'URL de la API de staging (opcional si comparte dominio)'
         type: string
         required: false
 
@@ -53,14 +57,19 @@ jobs:
           # Prioridad: el input manual, después el secreto del repositorio.
           INPUT_URL: ${{ inputs.staging_url }}
           SECRET_URL: ${{ secrets.SECURITY_STAGING_URL }}
+          INPUT_API_URL: ${{ inputs.staging_api_url }}
+          SECRET_API_URL: ${{ secrets.SECURITY_STAGING_API_URL }}
         run: |
           url="${INPUT_URL:-$SECRET_URL}"
+          api_url="${INPUT_API_URL:-$SECRET_API_URL}"
           if [ -z "$url" ]; then
             echo "staging=" >> "$GITHUB_OUTPUT"
+            echo "staging_api=" >> "$GITHUB_OUTPUT"
             echo "::notice::Sin staging configurado: el DAST activo y testssl.sh se ejecutan sólo contra el entorno efímero."
           else
             echo "staging=$url" >> "$GITHUB_OUTPUT"
-            echo "::notice::Staging configurado para DAST activo."
+            echo "staging_api=${api_url:-$url}" >> "$GITHUB_OUTPUT"
+            echo "::notice::Frontend y API de staging configurados para DAST activo."
           fi
 
       - name: Suite completa con ZAP full scan
@@ -69,6 +78,11 @@ jobs:
           # Si está vacío, run-dast.sh usa el entorno efímero local y marca
           # testssl.sh como SKIPPED en lugar de fallar.
           SECURITY_STAGING_URL: ${{ steps.target.outputs.staging }}
+          SECURITY_STAGING_API_URL: ${{ steps.target.outputs.staging_api }}
+          # Credenciales exclusivas del entorno de pruebas. GitHub enmascara
+          # estos valores y run-dast.sh mantiene el token sólo en memoria.
+          SECURITY_ADMIN_EMAIL: ${{ secrets.SECURITY_ADMIN_EMAIL }}
+          SECURITY_ADMIN_PASSWORD: ${{ secrets.SECURITY_ADMIN_PASSWORD }}
         run: bash security/scripts/run-all.sh --full-dast
 
       - name: Subir SARIF a Code Scanning

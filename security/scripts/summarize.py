@@ -275,6 +275,25 @@ def parse_zap(path: Path) -> ToolResult:
     return result
 
 
+def parse_zap_reports(reports_dir: Path) -> ToolResult:
+    """Consolida ZAP cuando frontend y API usan dominios separados."""
+    paths = sorted(reports_dir.glob("zap*-report.json"))
+    if not paths:
+        return ToolResult("OWASP ZAP")
+
+    combined = ToolResult("OWASP ZAP")
+    for path in paths:
+        partial = parse_zap(path)
+        if not partial.executed:
+            continue
+        combined.executed = True
+        combined.total += partial.total
+        combined.findings.extend(partial.findings)
+        for severity in SEVERITIES:
+            combined.counts[severity] += partial.counts[severity]
+    return combined
+
+
 def parse_nuclei(path: Path) -> ToolResult:
     result = ToolResult("Nuclei")
     rows = read_jsonl(path)
@@ -445,7 +464,7 @@ def main() -> int:
         "trivy_frontend": parse_trivy(
             reports_dir / "trivy-frontend-image.json", "Trivy imagen frontend"
         ),
-        "zap": parse_zap(reports_dir / "zap-report.json"),
+        "zap": parse_zap_reports(reports_dir),
         "nuclei": parse_nuclei(reports_dir / "nuclei.json"),
     }
 
