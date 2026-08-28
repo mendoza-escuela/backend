@@ -234,7 +234,7 @@ main() {
   assert_target_allowed
 
   log ESPERA "Comprobando que la aplicación responda"
-  if ! "${SCRIPT_DIR}/wait-for-app.sh" "${TARGET_URL}" 120; then
+  if ! bash "${SCRIPT_DIR}/wait-for-app.sh" "${TARGET_URL}" 120; then
     fail "La aplicación no responde en ${TARGET_URL}. Levantá el entorno antes del DAST."
   fi
 
