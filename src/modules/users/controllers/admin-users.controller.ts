@@ -1,3 +1,4 @@
+import { importFileFilter } from '../../../common/uploads/import-file.filter';
 import {
   Body,
   Controller,
@@ -61,6 +62,7 @@ export class AdminUsersController {
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+      fileFilter: importFileFilter,
     }),
   )
   preview(@UploadedFile() file: Express.Multer.File) {
@@ -71,6 +73,7 @@ export class AdminUsersController {
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+      fileFilter: importFileFilter,
     }),
   )
   importUsers(

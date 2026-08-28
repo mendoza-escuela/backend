@@ -19,6 +19,7 @@ import {
 } from 'typeorm';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
+import { spreadsheetSafeCell } from '../../exports/spreadsheet-cell.util';
 import { AuthSession } from '../../auth/entities/auth-session.entity';
 import { Campaign } from '../../campaigns/entities/campaign.entity';
 import {
@@ -1125,7 +1126,11 @@ export class SchoolsService {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Padrón');
     sheet.addRow(headers);
-    rows.forEach((row) => sheet.addRow(row));
+    // El padrón contiene texto cargado por usuarios (nombre de la escuela,
+    // dirección, referentes). Sin neutralizar, un valor que empiece con
+    // = + - @ se ejecuta como fórmula al abrir el archivo. La exportación CSV
+    // de este mismo endpoint ya lo hacía con csvCell(); el XLSX no.
+    rows.forEach((row) => sheet.addRow(row.map(spreadsheetSafeCell)));
     sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
     sheet.getRow(1).fill = {
       type: 'pattern',

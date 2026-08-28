@@ -1,0 +1,28 @@
+# Normalización de finales de línea.
+#
+# Sin esto, un script editado en Windows se commitea con CRLF y falla en los
+# runners de Linux con "bad interpreter: /usr/bin/env bash^M". Los scripts del
+# pipeline de seguridad DEBEN conservar LF en cualquier sistema.
+
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+Dockerfile text eol=lf
+*.conf text eol=lf
+
+# Los scripts de PowerShell son el único caso que conserva CRLF.
+*.ps1 text eol=crlf
+
+# Binarios: sin conversión.
+*.png binary
+*.jpg binary
+*.avif binary
+*.webp binary
+*.pdf binary
+*.xlsx binary
+*.docx binary
+*.zip binary

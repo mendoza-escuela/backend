@@ -1,3 +1,4 @@
+import { importFileFilter } from '../../../common/uploads/import-file.filter';
 import {
   Body,
   Controller,
@@ -95,6 +96,7 @@ export class AdminSurveysController {
           Number(process.env.SURVEY_IMPORT_MAX_FILE_MB ?? 5) * 1024 * 1024,
         files: 1,
       },
+      fileFilter: importFileFilter,
     }),
   )
   previewImport(
@@ -112,6 +114,7 @@ export class AdminSurveysController {
           Number(process.env.SURVEY_IMPORT_MAX_FILE_MB ?? 5) * 1024 * 1024,
         files: 1,
       },
+      fileFilter: importFileFilter,
     }),
   )
   importVersion(
