@@ -1,0 +1,79 @@
+{
+  "_comment": [
+    "Hallazgos YA CONOCIDOS y aceptados como deuda registrada, no ocultados.",
+    "Siguen apareciendo en summary.md con su severidad real; lo unico que cambia",
+    "es que no bloquean un PR que no los introdujo. Un hallazgo que NO este en",
+    "esta lista bloquea el pipeline: asi se detecta lo NUEVO.",
+    "",
+    "Para dar de baja una entrada: corregir el hallazgo y borrarla. Nunca agregar",
+    "una entrada para 'poner el build en verde' sin una decision documentada."
+  ],
+  "generated": "2026-08-28",
+  "project": "backend",
+  "review_before": "2026-09-30",
+  "known_findings": [
+    "CVE-2026-14456",
+    "CVE-2026-33630",
+    "CVE-2026-45186",
+    "CVE-2026-45447",
+    "CVE-2026-56408",
+    "CVE-2026-5773",
+    "CVE-2026-6276",
+    "CVE-2026-6732"
+  ],
+  "details": {
+    "CVE-2026-14456": {
+      "tool": "trivy",
+      "severidad": "HIGH",
+      "imagen": "node:22-alpine (alpine 3.24.1)",
+      "paquetes": [
+        "libcrypto3 3.5.7-r0",
+        "libssl3 3.5.7-r0"
+      ],
+      "fix_disponible": "3.5.8-r0",
+      "finding": [
+        "OpenSSL: denegacion de servicio por crecimiento de memoria no acotado",
+        "en el servidor QUIC. Proviene de la imagen base de Node, no del codigo",
+        "de la aplicacion ni de sus dependencias."
+      ],
+      "status": "ESPERANDO_IMAGEN_BASE",
+      "por_que_no_se_corrige_ahora": [
+        "El parche existe en Alpine 3.24, pero la imagen oficial node:22-alpine",
+        "todavia no lo incorpora. Actualizar el paquete a mano en el Dockerfile",
+        "(apk upgrade) romperia la reproducibilidad: cada build daria una imagen",
+        "distinta y se perderia el pinning de version."
+      ],
+      "trabajo_ya_realizado": [
+        "Se movio `npm install -g npm@11.6.1` fuera de la imagen de runtime: ese",
+        "npm global aportaba 28 de los 30 hallazgos CRITICAL/HIGH.",
+        "Resultado medido: CRITICAL 1 -> 0, HIGH 29 -> 2."
+      ],
+      "aplicabilidad_real": [
+        "La API no expone un servidor QUIC: escucha HTTP/1.1 detras del reverse",
+        "proxy. El vector concreto de esta CVE no es alcanzable en este",
+        "despliegue."
+      ],
+      "compensating_control": [
+        "El contenedor corre como usuario `node`, con read_only, cap_drop ALL y",
+        "no-new-privileges. No publica puertos: solo es alcanzable desde el",
+        "reverse proxy, que ademas aplica rate limiting.",
+        "El escaneo nocturno vuelve a analizar la imagen todos los dias: en",
+        "cuanto se publique una imagen base parcheada el hallazgo desaparecera",
+        "solo y habra que borrar esta entrada."
+      ],
+      "revision": "Revisar antes del 2026-09-30."
+    },
+    "_imagen_frontend": {
+      "nota": "Este repositorio construye y analiza TAMBIEN la imagen del frontend (run-container-scan.sh). Los CVE de esa imagen estan documentados en frontend/security/baseline/known-findings.json y se replican aca para que el gate del backend no los reporte como nuevos.",
+      "cves": [
+        "CVE-2026-33630",
+        "CVE-2026-45186",
+        "CVE-2026-45447",
+        "CVE-2026-56408",
+        "CVE-2026-5773",
+        "CVE-2026-6276",
+        "CVE-2026-6732"
+      ]
+    }
+  }
+}
