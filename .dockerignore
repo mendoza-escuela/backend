@@ -1,6 +1,10 @@
 node_modules
 dist
 coverage
+# GitHub Actions clona el repositorio frontend dentro del workspace del
+# backend. Se construye con su propio contexto mediante
+# SECURITY_FRONTEND_CONTEXT y nunca debe entrar en la imagen de la API.
+frontend-repo
 .env
 .env.*
 !.env.example
