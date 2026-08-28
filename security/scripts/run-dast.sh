@@ -301,7 +301,7 @@ run_testssl_target() {
     "${TESTSSL_IMAGE}" \
     --jsonfile "/reports/testssl-${label}.json" \
     --quiet --color 0 \
-    --protocols --ciphers --headers --vulnerable \
+    --protocols --std --headers --vulnerable \
     "${url}"
 }
 
