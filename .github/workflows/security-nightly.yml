@@ -36,12 +36,12 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Checkout del frontend
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mendoza-escuela/frontend
           ref: develop
@@ -73,7 +73,7 @@ jobs:
 
       - name: Subir SARIF a Code Scanning
         if: always() && hashFiles('security/reports/semgrep.sarif') != ''
-        uses: github/codeql-action/upload-sarif@f09c1c0a94de965c15400f5634aa42fac8fb8f88 # v3.27.5
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: security/reports/semgrep.sarif
           category: semgrep-nightly
@@ -84,7 +84,7 @@ jobs:
 
       - name: Guardar informes completos
         if: always()
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: security-nightly-${{ github.run_id }}
           path: |
@@ -100,6 +100,10 @@ jobs:
 
       - name: Avisar si el escaneo nocturno falla
         if: failure()
+        env:
+          # Se pasa por env en lugar de interpolar ${{ }} dentro del script:
+          # interpolar en un `run:` permite inyección de comandos.
+          RUN_ID: ${{ github.run_id }}
         run: |
           {
             echo "## El escaneo nocturno de seguridad falló"
@@ -107,5 +111,5 @@ jobs:
             echo "Puede deberse a una vulnerabilidad NUEVA publicada sin que"
             echo "cambiara el código, o a una excepción de seguridad vencida."
             echo ""
-            echo "Revisá el artifact security-nightly-${{ github.run_id }}."
+            echo "Revisá el artifact security-nightly-$RUN_ID."
           } >> "$GITHUB_STEP_SUMMARY"

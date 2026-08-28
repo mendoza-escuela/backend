@@ -91,3 +91,41 @@ exceptions:
     owner: valentin
     created: 2026-08-28
     expires: 2026-11-26
+
+  - id: SEC-EXC-004
+    tool: semgrep
+    finding: generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash
+    reason: >-
+      La regla marca DECOY_PASSWORD_HASH en auth.service.ts:47. No es una
+      credencial: es un hash bcrypt senuelo, generado a proposito con el mismo
+      coste (12 rondas) que los reales, contra el que se compara cuando la
+      cuenta no existe. Sirve para que el login tarde lo mismo exista o no el
+      usuario y no se pueda enumerar cuentas midiendo el tiempo de respuesta
+      (hallazgo H-06). No corresponde a ninguna contrasena utilizable y no
+      concede acceso a nada.
+    compensating_control: >-
+      Test de integracion que verifica que el mensaje de error sea identico para
+      una cuenta inexistente y para una contrasena incorrecta
+      (security-access-control.e2e-spec.ts, "no revela si una cuenta existe").
+      Si alguien reemplazara el senuelo por un hash real, el comportamiento no
+      cambiaria pero la revision de codigo del PR lo detectaria.
+    owner: valentin
+    created: 2026-08-28
+    expires: 2026-11-26
+
+  - id: SEC-EXC-005
+    tool: semgrep
+    finding: nginx.conf excluido del analisis de p/security-audit
+    reason: >-
+      semgrep-core termina con SIGSEGV (exit -11) al analizar archivos de
+      configuracion de nginx con las reglas del pack p/security-audit. Se aislo
+      la causa archivo por archivo. Es un defecto de la herramienta, no un
+      hallazgo, y hacia fallar el job de SAST en GitHub Actions.
+    compensating_control: >-
+      La configuracion de nginx sigue cubierta por Trivy con el scanner
+      misconfig y por OWASP ZAP, que verifica las cabeceras reales que entrega
+      el servidor en ejecucion. El resto del repositorio se analiza con el pack
+      completo.
+    owner: valentin
+    created: 2026-08-28
+    expires: 2026-11-26

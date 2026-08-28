@@ -4,7 +4,8 @@ Validación de seguridad reproducible, ejecutable en una notebook y en CI con el
 mismo resultado. Todas las herramientas corren en contenedores con versión
 fijada: **no hace falta instalar nada más que Docker**.
 
-Documentación completa en [`docs/security/`](../docs/security/).
+Documentación completa en `mendoza/docs/security/` (raíz del workspace, fuera
+de este repositorio: los informes no son parte del código de la aplicación).
 
 ---
 
@@ -126,7 +127,7 @@ security/
 
 ## Antes de entregar a Ciberseguridad
 
-Completar [`docs/security/SECURITY_RELEASE_CHECKLIST.md`](../docs/security/SECURITY_RELEASE_CHECKLIST.md).
+Completar `mendoza/docs/security/SECURITY_RELEASE_CHECKLIST.md`.
 
 **"Sin vulnerabilidades detectadas" no significa "aplicación segura".** Este
 pipeline automatiza lo automatizable; el checklist enumera las ocho pruebas que

@@ -417,6 +417,17 @@ def main() -> int:
         action="store_true",
         help="Trata cualquier HIGH como bloqueante, no solo los nuevos.",
     )
+    parser.add_argument(
+        "--partial",
+        action="store_true",
+        help=(
+            "El informe cubre solo una parte de la suite (un job de CI que "
+            "ejecuta algunas herramientas). Las ausentes se marcan como "
+            "'fuera de alcance' en lugar de NOT_EXECUTED, para no dar a "
+            "entender que una herramienta fallo cuando simplemente no le "
+            "tocaba correr en ese job."
+        ),
+    )
     args = parser.parse_args()
 
     reports_dir = Path(args.reports)
@@ -546,7 +557,15 @@ def main() -> int:
         lines.append("")
 
     not_executed = [result.name for result in results.values() if not result.executed]
-    if not_executed:
+    if not_executed and args.partial:
+        lines += [
+            "## Fuera del alcance de este job",
+            "",
+            "Estas herramientas no corresponden a este job del pipeline. El "
+            "veredicto consolidado se calcula al final, con todos los informes.",
+            "",
+        ]
+    elif not_executed:
         lines += [
             "## No ejecutado",
             "",

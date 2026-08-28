@@ -20,7 +20,10 @@ scan:
     - secret
     - license
   skip-dirs:
-    - "**/node_modules/.cache"
+    # node_modules completo: las dependencias ya se analizan a partir de
+    # package-lock.json. Escanearlo ademas multiplica por 20 el tiempo del
+    # scanner de secretos sin aportar informacion nueva.
+    - "**/node_modules"
     - /src/security/reports
     - "**/security/reports/**"
 

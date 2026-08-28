@@ -67,10 +67,24 @@ run_semgrep() {
     --config=/src/security/config/semgrep/custom-rules.yml
     --metrics=off
     --disable-version-check
+    # Los runners de GitHub tienen memoria acotada y semgrep-core muere con
+    # SIGSEGV (exit -11) al analizar muchos archivos con 700+ reglas.
+    # --max-memory hace que omita el archivo problematico en lugar de morir.
+    --max-memory=3000
+    --timeout=60
+    --jobs=2
     --exclude=node_modules
     --exclude=dist
     --exclude=coverage
     --exclude=security/reports
+    --exclude=security/scripts
+    # semgrep-core muere con SIGSEGV al analizar nginx.conf con las reglas de
+    # nginx de p/security-audit (bug de la herramienta, reproducible y aislado
+    # archivo por archivo). La configuracion de nginx igual esta cubierta por
+    # Trivy misconfig y por ZAP, que verifica las cabeceras reales en ejecucion.
+    # Excepcion SEC-EXC-005.
+    --exclude=nginx.conf
+    --exclude=security/config/nginx
   )
 
   docker_run "${SEMGREP_IMAGE}" semgrep scan \

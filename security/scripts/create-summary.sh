@@ -41,29 +41,26 @@ META_ARG=(
   --branch "$(git_meta rev-parse --abbrev-ref HEAD)"
 )
 
-run_with_host_python() {
-  # No basta `command -v`: en Windows python3 es un alias de la Store que
-  # falla al ejecutarse. Se comprueba que el intérprete realmente funcione.
-  python3 -c "import sys" >/dev/null 2>&1 || return 1
-  (cd "${REPO_ROOT}" && python3 security/scripts/summarize.py "${BASELINE_ARG[@]}" "${META_ARG[@]}" "$@")
-}
-
-run_with_docker_python() {
-  docker run --rm \
-    -v "${REPO_ROOT}:/src" \
-    -w /src \
-    "${PYTHON_IMAGE}" \
-    python security/scripts/summarize.py "${BASELINE_ARG[@]}" "${META_ARG[@]}" "$@"
-}
-
-if run_with_host_python "$@"; then
-  exit 0
-else
-  status=$?
-  # 1 = veredicto FAIL (resultado legítimo). Otro código = no había Python.
-  if [ "${status}" -eq 1 ] && command -v python3 >/dev/null 2>&1; then
-    exit 1
-  fi
+# Se decide PRIMERO por qué vía se ejecuta y DESPUÉS se ejecuta una sola vez.
+#
+# La versión anterior intentaba el host y usaba el código de salida para decidir
+# si reintentar en Docker, pero no podía distinguir "no hay Python" (1) de
+# "veredicto FAIL" (1). En Windows, donde `command -v python3` encuentra el
+# alias de la Microsoft Store que no ejecuta nada, el resultado era el peor
+# posible: el script devolvía FAIL sin haber generado ni evaluado el resumen.
+#
+# `python3 -c "import sys"` comprueba que el intérprete realmente funcione, no
+# sólo que exista una entrada en el PATH.
+if python3 -c "import sys" >/dev/null 2>&1; then
+  cd "${REPO_ROOT}" || exit 2
+  exec python3 security/scripts/summarize.py \
+    "${BASELINE_ARG[@]}" "${META_ARG[@]}" "$@"
 fi
 
-run_with_docker_python "$@"
+echo "Python no disponible en el host: se usa ${PYTHON_IMAGE}." >&2
+exec docker run --rm \
+  -v "${REPO_ROOT}:/src" \
+  -w /src \
+  "${PYTHON_IMAGE}" \
+  python security/scripts/summarize.py \
+  "${BASELINE_ARG[@]}" "${META_ARG[@]}" "$@"

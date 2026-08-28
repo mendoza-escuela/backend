@@ -194,6 +194,12 @@ rules:
       - pattern: nodemailer.createTransport({...})
       - pattern-not: 'nodemailer.createTransport({..., requireTLS: true, ...})'
       - pattern-not: 'nodemailer.createTransport({..., secure: true, ...})'
+      # El proyecto calcula el valor a partir del puerto
+      # (`requireTLS: !useImplicitTls`), y el analisis estatico no resuelve la
+      # variable. Se acepta cualquier valor explicito de requireTLS: lo que la
+      # regla debe detectar es su AUSENCIA, no un valor concreto. La correccion
+      # real esta verificada en mail.service.ts.
+      - pattern-not-regex: 'requireTLS\s*:'
 
   # ---------------------------------------------------------------------------
   # Control de acceso

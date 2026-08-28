@@ -16,6 +16,11 @@ updates:
       day: monday
       time: '06:00'
       timezone: America/Argentina/Buenos_Aires
+    # Ventana de espera antes de proponer una version recien publicada: la
+    # mayoria de los paquetes maliciosos de supply chain se detectan y retiran
+    # en los primeros dias. Sugerido por semgrep dependabot-missing-cooldown.
+    cooldown:
+      default-days: 5
     open-pull-requests-limit: 5
     labels: [dependencias, seguridad]
     commit-message:
@@ -43,6 +48,11 @@ updates:
       day: monday
       time: '06:00'
       timezone: America/Argentina/Buenos_Aires
+    # Ventana de espera antes de proponer una version recien publicada: la
+    # mayoria de los paquetes maliciosos de supply chain se detectan y retiran
+    # en los primeros dias. Sugerido por semgrep dependabot-missing-cooldown.
+    cooldown:
+      default-days: 5
     labels: [dependencias, docker, seguridad]
     commit-message:
       prefix: 'docker'
@@ -55,6 +65,11 @@ updates:
       day: monday
       time: '06:00'
       timezone: America/Argentina/Buenos_Aires
+    # Ventana de espera antes de proponer una version recien publicada: la
+    # mayoria de los paquetes maliciosos de supply chain se detectan y retiran
+    # en los primeros dias. Sugerido por semgrep dependabot-missing-cooldown.
+    cooldown:
+      default-days: 5
     labels: [dependencias, ci, seguridad]
     commit-message:
       prefix: 'ci'
