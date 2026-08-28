@@ -1,0 +1,93 @@
+# =============================================================================
+# Excepciones de seguridad temporalmente aceptadas
+#
+# REGLAS (las valida security/scripts/validate-exceptions.py y el pipeline
+# falla si no se cumplen):
+#
+#   1. Toda excepción DEBE tener los ocho campos completos.
+#   2. `expires` es obligatorio y no puede superar los 90 días desde `created`.
+#      Una excepción vencida rompe el build: es deliberado. Las excepciones
+#      permanentes no existen; si algo se acepta para siempre, es una decisión
+#      de arquitectura y va documentada en SECURITY_CONTROLS.md.
+#   3. Prohibido `ignore: "*"`, patrones comodín y excepciones sin justificación.
+#   4. `compensating_control` debe describir un control real y verificable,
+#      no una intención.
+#   5. `owner` es una persona identificable, no un equipo genérico.
+#
+# RELACIÓN CON LOS ARCHIVOS NATIVOS DE CADA HERRAMIENTA:
+#   Este archivo es la ÚNICA fuente de verdad. Los formatos propios de cada
+#   herramienta (.trivyignore, security/config/zap/*.conf, la clave `paths.ignore`
+#   de Semgrep) se derivan de acá y deben citar el `id` correspondiente en un
+#   comentario. Una supresión en una herramienta sin su entrada en este archivo
+#   es un hallazgo del propio pipeline.
+#
+# Campos:
+#   id                    identificador estable, formato SEC-EXC-NNN
+#   tool                  semgrep | trivy | osv | gitleaks | zap | nuclei | testssl
+#   finding               regla/CVE exacto, sin ambigüedad
+#   reason                por qué se acepta hoy
+#   compensating_control  qué mitiga el riesgo mientras tanto
+#   owner                 responsable de resolverla
+#   created               AAAA-MM-DD
+#   expires               AAAA-MM-DD (máximo 90 días después de `created`)
+# =============================================================================
+
+exceptions:
+  # ---------------------------------------------------------------------------
+  # Falsos positivos confirmados por revisión manual (Fase 1).
+  # Documentados en docs/security/REPOSITORY_SECURITY_ANALYSIS.md sección 2.13.
+  # ---------------------------------------------------------------------------
+  - id: SEC-EXC-001
+    tool: semgrep
+    finding: javascript.typeorm.security.audit.typeorm-sqli.typeorm-sqli
+    reason: >-
+      Semgrep marca la interpolación de nombres de columna en QueryBuilder
+      (schools.service.ts:1143 y 1164-1166, dashboard-query-filters.ts:84,
+      participation-dashboard.service.ts:265-267, campaign-schools.service.ts:379,
+      campaign-tracking.service.ts:274-296). Se auditaron los seis puntos uno por
+      uno: los identificadores provienen de arrays literales `as const` y de
+      uniones de tipo definidas en el propio código, nunca de entrada del
+      usuario. Todos los VALORES van parametrizados. No es inyectable.
+    compensating_control: >-
+      Test de integración security/tests/sql-injection.e2e-spec.ts que envía
+      cargas de inyección por los filtros de búsqueda y ordenamiento y verifica
+      que se rechacen o se traten como literales. Revisión manual obligatoria en
+      cualquier PR que toque los archivos citados.
+    owner: valentin
+    created: 2026-08-28
+    expires: 2026-11-26
+
+  - id: SEC-EXC-002
+    tool: semgrep
+    finding: mendoza-raw-sql-template-interpolation
+    reason: >-
+      La regla marca las migraciones de TypeORM, que construyen DDL interpolando
+      constantes declaradas en el propio archivo: bucles sobre arrays literales
+      de nombres de columna (AddSchoolManagement.ts:72,137,161) y el helper
+      normalized() (SeedOfficialSchoolCatalogs.ts:95,114). Se revisaron los cinco
+      casos uno por uno en la Fase 3. Las migraciones no reciben entrada de
+      usuario: se ejecutan al desplegar con datos del propio codigo.
+    compensating_control: >-
+      La exclusion se limita a src/migrations/**; el resto del codigo sigue
+      cubierto por la regla. Toda migracion nueva pasa por revision de codigo
+      obligatoria y las migraciones no son alcanzables desde ningun endpoint.
+    owner: valentin
+    created: 2026-08-28
+    expires: 2026-11-26
+
+  - id: SEC-EXC-003
+    tool: semgrep
+    finding: mendoza-auth-cookie-without-httponly
+    reason: >-
+      Falso positivo por limitacion del analisis estatico. La cookie de sesion
+      se emite con los atributos centralizados en el helper cookieOptions()
+      aplicado por spread, y Semgrep no puede resolver el contenido del spread.
+      El helper fija httpOnly: true, secure y sameSite (auth.controller.ts:113-126),
+      verificado en la Fase 2 leyendo la cabecera Set-Cookie real del entorno.
+    compensating_control: >-
+      Test de integracion que hace login contra el entorno efimero y verifica que
+      la cabecera Set-Cookie incluya HttpOnly, Secure y SameSite. Si alguien
+      quitara el atributo del helper, el test falla aunque Semgrep no lo detecte.
+    owner: valentin
+    created: 2026-08-28
+    expires: 2026-11-26

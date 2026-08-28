@@ -1,0 +1,6 @@
+# Los informes de seguridad son artefactos de ejecución, no código fuente.
+# En un repositorio PÚBLICO además publicarían el mapa de vulnerabilidades.
+# Se conservan como artifacts de GitHub Actions con retención acotada.
+*
+!.gitignore
+!.gitkeep

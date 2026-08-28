@@ -51,11 +51,31 @@ export class CsrfProtectionGuard implements CanActivate {
     }
 
     const origin = request.header('origin');
-    if (origin && !this.isAllowedOrigin(origin)) {
-      throw this.invalidRequest();
+    if (origin) {
+      if (!this.isAllowedOrigin(origin)) throw this.invalidRequest();
+      return true;
     }
 
-    return true;
+    // Sin Origin sólo se acepta si además coincide el Referer. Los navegadores
+    // adjuntan Origin en toda mutación (same-site incluido), así que su ausencia
+    // indica un cliente no estándar. Antes se dejaba pasar con la sola cabecera
+    // personalizada, lo que debilitaba la defensa ante cualquier vector capaz de
+    // omitir Origin (hallazgo H-02). ASVS 5.0 V4.2.2.
+    const referer = request.header('referer');
+    if (referer && this.isAllowedReferer(referer)) {
+      return true;
+    }
+
+    throw this.invalidRequest();
+  }
+
+  /** Compara sólo el origen del Referer: la ruta y la query no son relevantes. */
+  private isAllowedReferer(referer: string): boolean {
+    try {
+      return new URL(referer).origin === this.allowedOrigin;
+    } catch {
+      return false;
+    }
   }
 
   private usesBearerTokenWithoutAuthCookie(request: Request): boolean {

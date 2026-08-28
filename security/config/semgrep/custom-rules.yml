@@ -1,0 +1,222 @@
+# Reglas Semgrep propias del proyecto.
+#
+# Complementan los packs públicos (p/security-audit, p/owasp-top-ten, etc.)
+# con controles específicos de ESTA aplicación, derivados del análisis de la
+# Fase 1 (docs/security/REPOSITORY_SECURITY_ANALYSIS.md).
+#
+# Cada regla apunta a un control que la aplicación ya implementa: su función es
+# impedir que una regresión lo desactive sin que nadie lo note.
+
+rules:
+  # ---------------------------------------------------------------------------
+  # Autenticación y sesiones
+  # ---------------------------------------------------------------------------
+  - id: mendoza-auth-cookie-without-httponly
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      La cookie se emite sin httpOnly. El JWT de esta aplicación viaja en cookie
+      y depende de httpOnly para no quedar expuesto a JavaScript (XSS).
+      Ver auth.controller.ts:107-125.
+    metadata:
+      category: security
+      cwe: "CWE-1004: Sensitive Cookie Without HttpOnly Flag"
+      asvs: "3.4.1"
+      confidence: HIGH
+    patterns:
+      - pattern: $RES.cookie($NAME, $VALUE, {...})
+      - pattern-not: '$RES.cookie($NAME, $VALUE, {..., httpOnly: true, ...})'
+      # El proyecto centraliza los atributos en un helper y los aplica con
+      # spread (`...this.cookieOptions()`), que el análisis estático no puede
+      # resolver. El helper SÍ fija httpOnly: true (auth.controller.ts:113-126)
+      # y está cubierto por un test dedicado. Excepción SEC-EXC-003.
+      - pattern-not-regex: '\.\.\.(this\.)?cookieOptions\(\)'
+
+  - id: mendoza-jwt-strategy-without-algorithms
+    languages: [typescript]
+    severity: WARNING
+    message: >-
+      La estrategia JWT no declara `algorithms`. Sin lista blanca explícita se
+      acepta el algoritmo indicado en el header del token. ASVS 5.0 exige fijar
+      el algoritmo esperado (hallazgo H-01).
+    metadata:
+      category: security
+      cwe: "CWE-757: Selection of Less-Secure Algorithm During Negotiation"
+      asvs: "3.5.3"
+      confidence: MEDIUM
+    patterns:
+      - pattern: |
+          super({..., secretOrKey: $SECRET, ...})
+      - pattern-not: |
+          super({..., algorithms: [...], ...})
+
+  - id: mendoza-hardcoded-jwt-secret
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      El secreto JWT no puede estar en el código: debe provenir exclusivamente
+      del entorno (ConfigService / process.env).
+    metadata:
+      category: security
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      asvs: "2.10.4"
+      confidence: HIGH
+    patterns:
+      - pattern-regex: 'secretOrKey\s*:\s*[''"`][^''"`$]{8,}[''"`]'
+
+  # ---------------------------------------------------------------------------
+  # Inyección SQL
+  # ---------------------------------------------------------------------------
+  - id: mendoza-raw-sql-template-interpolation
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      Interpolación directa dentro de una consulta SQL cruda. Usar parámetros
+      ($1, :param) en lugar de construir la cadena. Las consultas legítimas del
+      proyecto interpolan sólo identificadores de columna de origen estático
+      (ver REPOSITORY_SECURITY_ANALYSIS.md 2.13); cualquier caso nuevo debe
+      justificarse.
+    metadata:
+      category: security
+      cwe: "CWE-89: SQL Injection"
+      asvs: "5.3.4"
+      confidence: MEDIUM
+    patterns:
+      - pattern-regex: '\.(query|rawQuery)\(\s*`[^`]*\$\{'
+    paths:
+      # Las migraciones interpolan constantes declaradas en el propio archivo
+      # (nombres de columna en bucles `for...of [..]` y helpers como
+      # `normalized('"label"')`). Verificado uno por uno en la Fase 3:
+      # AddSchoolManagement.ts:72,137,161 y SeedOfficialSchoolCatalogs.ts:95,114.
+      # No reciben entrada del usuario. Excepción SEC-EXC-002.
+      exclude:
+        - "/src/migrations/**"
+
+  - id: mendoza-querybuilder-interpolated-value
+    languages: [typescript]
+    severity: WARNING
+    message: >-
+      Comparación construida por interpolación en QueryBuilder. El VALOR debe ir
+      siempre como parámetro (:param). Interpolar sólo es aceptable para
+      identificadores de columna tomados de una lista cerrada definida en código.
+    metadata:
+      category: security
+      cwe: "CWE-89: SQL Injection"
+      asvs: "5.3.4"
+      confidence: LOW
+    patterns:
+      - pattern-regex: '\.(where|andWhere|orWhere|having)\(\s*`[^`]*=\s*[''"]?\$\{'
+
+  # ---------------------------------------------------------------------------
+  # Validación de entrada
+  # ---------------------------------------------------------------------------
+  - id: mendoza-validationpipe-without-whitelist
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      ValidationPipe sin `whitelist: true`. Sin whitelist las propiedades no
+      declaradas en el DTO llegan al servicio y habilitan mass assignment.
+    metadata:
+      category: security
+      cwe: "CWE-915: Improperly Controlled Modification of Dynamically-Determined Object Attributes"
+      asvs: "5.1.2"
+      confidence: HIGH
+    patterns:
+      - pattern: new ValidationPipe({...})
+      - pattern-not: 'new ValidationPipe({..., whitelist: true, ...})'
+
+  # ---------------------------------------------------------------------------
+  # Frontend
+  # ---------------------------------------------------------------------------
+  - id: mendoza-react-dangerously-set-inner-html
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      dangerouslySetInnerHTML inyecta HTML sin escapar (XSS). Hoy la aplicación
+      no lo usa en ningún archivo: mantener esa propiedad.
+    metadata:
+      category: security
+      cwe: "CWE-79: Cross-site Scripting"
+      asvs: "5.3.3"
+      confidence: HIGH
+    patterns:
+      - pattern-regex: 'dangerouslySetInnerHTML'
+
+  - id: mendoza-token-in-browser-storage
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Guardar credenciales o tokens en localStorage/sessionStorage los expone a
+      cualquier XSS. Esta aplicación usa cookie httpOnly a propósito y no debe
+      volver al almacenamiento del navegador.
+    metadata:
+      category: security
+      cwe: "CWE-522: Insufficiently Protected Credentials"
+      asvs: "3.4.1"
+      confidence: HIGH
+    patterns:
+      - pattern-regex: '(localStorage|sessionStorage)\.setItem\(\s*[''"`][^''"`]*(token|jwt|auth|password|secret|credential)'
+
+  # ---------------------------------------------------------------------------
+  # Criptografía y aleatoriedad
+  # ---------------------------------------------------------------------------
+  - id: mendoza-insecure-randomness-for-secrets
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Math.random() no es criptográficamente seguro. Para tokens, contraseñas o
+      identificadores de sesión usar crypto.randomBytes / crypto.randomUUID,
+      como ya hace auth.service.ts.
+    metadata:
+      category: security
+      cwe: "CWE-338: Use of Cryptographically Weak PRNG"
+      asvs: "6.3.1"
+      confidence: MEDIUM
+    patterns:
+      - pattern-regex: '(?i)(token|secret|password|salt|nonce|otp|code)[^\n;]{0,40}Math\.random\s*\('
+
+  # ---------------------------------------------------------------------------
+  # Correo
+  # ---------------------------------------------------------------------------
+  - id: mendoza-smtp-without-require-tls
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      Transporte SMTP sin `requireTLS: true`. En el puerto 587, si el servidor
+      no anuncia STARTTLS, nodemailer envía las credenciales y el mensaje en
+      claro (hallazgo H-05).
+    metadata:
+      category: security
+      cwe: "CWE-319: Cleartext Transmission of Sensitive Information"
+      asvs: "9.1.1"
+      confidence: MEDIUM
+    patterns:
+      - pattern: nodemailer.createTransport({...})
+      - pattern-not: 'nodemailer.createTransport({..., requireTLS: true, ...})'
+      - pattern-not: 'nodemailer.createTransport({..., secure: true, ...})'
+
+  # ---------------------------------------------------------------------------
+  # Control de acceso
+  # ---------------------------------------------------------------------------
+  - id: mendoza-controller-without-guards
+    languages: [typescript]
+    severity: WARNING
+    message: >-
+      Controlador sin @UseGuards a nivel de clase. Todos los controladores de
+      negocio aplican JwtAuthGuard + PasswordChangeRequiredGuard + RolesGuard.
+      Las excepciones conocidas son health.controller (público a propósito) y
+      auth.controller (protege por método).
+    metadata:
+      category: security
+      cwe: "CWE-306: Missing Authentication for Critical Function"
+      asvs: "4.1.1"
+      confidence: LOW
+    patterns:
+      - pattern: |
+          @Controller($ROUTE)
+          class $CLASS {...}
+      - pattern-not: |
+          @Controller($ROUTE)
+          @UseGuards(...)
+          class $CLASS {...}
+      - pattern-not-regex: 'class (Health|Auth)Controller'

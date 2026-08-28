@@ -1,0 +1,53 @@
+# Configuración de Nuclei para el entorno efímero de CI y para staging autorizado.
+#
+# ALCANCE PERMITIDO: únicamente el entorno levantado por compose.security.yml
+# (127.0.0.1) o la URL declarada en SECURITY_STAGING_URL. run-dast.sh verifica
+# el destino antes de ejecutar y aborta si apunta a otro host.
+#
+# NUNCA contra producción ni contra sistemas de terceros.
+
+# Sólo severidades accionables: el ruido informativo entierra los hallazgos reales.
+severity:
+  - medium
+  - high
+  - critical
+
+# Familias de plantillas pertinentes para una SPA + API REST detrás de un proxy.
+tags:
+  - exposure
+  - misconfig
+  - xss
+  - sqli
+  - lfi
+  - ssrf
+  - redirect
+  - cve
+  - default-login
+  - auth-bypass
+
+# Se excluyen las plantillas intrusivas: el objetivo es detectar, no explotar.
+exclude-tags:
+  - dos
+  - fuzz
+  - intrusive
+  - brute-force
+
+# Ritmo deliberadamente conservador. El entorno de pruebas comparte máquina con
+# la base de datos y una tormenta de peticiones produciría timeouts que se
+# confundirían con hallazgos.
+rate-limit: 20
+bulk-size: 10
+concurrency: 10
+timeout: 10
+retries: 1
+
+# Sin seguimiento de redirecciones fuera del host objetivo.
+max-redirects: 3
+
+# Silencia la telemetría y el banner para que el log del pipeline sea legible.
+# Las plantillas se descargan la primera vez y quedan en el volumen
+# nuclei-templates. NO se desactiva la actualización: un motor de DAST con
+# plantillas congeladas deja de detectar vulnerabilidades nuevas.
+disable-update-check: false
+no-color: true
+stats: true

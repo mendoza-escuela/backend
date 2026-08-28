@@ -1,0 +1,253 @@
+#!/usr/bin/env bash
+# =============================================================================
+# DAST: OWASP ZAP + Nuclei contra el entorno efímero (o un staging autorizado).
+#
+# SALVAGUARDA DE ALCANCE: sólo se permite atacar 127.0.0.1/localhost o la URL
+# declarada en SECURITY_STAGING_URL. Cualquier otro destino aborta la ejecución.
+# Nunca se ejecuta contra producción.
+#
+# Modos:
+#   ./security/scripts/run-dast.sh                 baseline (pull requests)
+#   ./security/scripts/run-dast.sh --full          full scan (main/nightly)
+#
+# El escaneo autenticado obtiene un token real en cada corrida: no hay tokens
+# escritos en ningún archivo.
+# =============================================================================
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REPORTS_DIR="${REPO_ROOT}/security/reports"
+CONFIG_DIR="${REPO_ROOT}/security/config"
+
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) export MSYS_NO_PATHCONV=1 ;;
+esac
+
+# shellcheck source=/dev/null
+set -a && . "${CONFIG_DIR}/tool-versions.env" && set +a
+
+mkdir -p "${REPORTS_DIR}"
+
+MODE="baseline"
+[ "${1:-}" = "--full" ] && MODE="full"
+
+TARGET_URL="${SECURITY_STAGING_URL:-${SECURITY_APP_URL:-http://localhost:8081}}"
+
+ADMIN_EMAIL="${SECURITY_ADMIN_EMAIL:-security_admin@ci.local}"
+ADMIN_PASSWORD="${SECURITY_ADMIN_PASSWORD:-CiSynthetic#Admin2026}"
+
+log()  { printf '\n\033[1m[%s]\033[0m %s\n' "$1" "$2"; }
+fail() { printf '\n\033[1;31m[ABORTADO]\033[0m %s\n' "$1" >&2; exit 1; }
+
+# -----------------------------------------------------------------------------
+# 1. Verificación de alcance — se ejecuta ANTES de cualquier petición
+# -----------------------------------------------------------------------------
+assert_target_allowed() {
+  local host
+  host="$(printf '%s' "${TARGET_URL}" | sed -E 's#^[a-zA-Z]+://##; s#[:/].*$##')"
+
+  case "${host}" in
+    localhost | 127.0.0.1 | ::1 | host.docker.internal)
+      log ALCANCE "Destino local autorizado: ${TARGET_URL}"
+      return 0
+      ;;
+  esac
+
+  if [ -n "${SECURITY_STAGING_URL:-}" ] && [ "${TARGET_URL}" = "${SECURITY_STAGING_URL}" ]; then
+    log ALCANCE "Staging declarado explícitamente: ${TARGET_URL}"
+    return 0
+  fi
+
+  fail "El destino ${TARGET_URL} no está autorizado.
+  Sólo se permite el entorno efímero local o la URL de SECURITY_STAGING_URL.
+  Este script nunca debe ejecutarse contra producción."
+}
+
+# -----------------------------------------------------------------------------
+# 2. Autenticación: token real obtenido en esta misma corrida
+# -----------------------------------------------------------------------------
+AUTH_TOKEN=""
+
+obtain_token() {
+  log AUTH "Autenticando como ${ADMIN_EMAIL}"
+  local login_output response
+
+  # Los encabezados se capturan con `-D -` (a stdout), sin archivo temporal.
+  # Motivo: este script exporta MSYS_NO_PATHCONV=1 para los montajes de Docker,
+  # y con esa variable el curl nativo de Windows no resuelve rutas como /tmp,
+  # con lo que -D dejaba el archivo vacío y la autenticación fallaba en silencio.
+  login_output="$(curl -s -D - -o /dev/null -w '\nHTTP_STATUS:%{http_code}' \
+    -X POST "${TARGET_URL}/api/auth/login" \
+    -H 'Content-Type: application/json' \
+    -H 'X-CSRF-Protection: 1' \
+    -H "Origin: ${TARGET_URL}" \
+    -d "{\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\"}")"
+
+  response="$(printf '%s' "${login_output}" |
+    sed -n 's/^HTTP_STATUS:\([0-9]*\).*/\1/p' | tail -n 1)"
+
+  if [ "${response}" != "200" ]; then
+    log AUTH "AVISO: el login devolvió ${response:-sin respuesta}. El DAST correrá SIN autenticar."
+    log AUTH "Creá los datos sintéticos con: docker compose -f compose.security.yml --profile seed run --rm sec-seed"
+    return 1
+  fi
+
+  # El token se lee del encabezado Set-Cookie: la cookie se emite con el
+  # atributo Secure y el entorno de CI es HTTP, así que ningún cliente que
+  # respete el estándar la conservaría. Se usa como Bearer, transporte
+  # alternativo que la API acepta (jwt.strategy.ts). Vive sólo en memoria.
+  AUTH_TOKEN="$(printf '%s' "${login_output}" |
+    sed -n 's/.*[Ss]et-[Cc]ookie: *access_token=\([^;]*\).*/\1/p' | head -n 1)"
+
+  if [ -z "${AUTH_TOKEN}" ]; then
+    log AUTH "AVISO: no se pudo extraer el token. El DAST correrá SIN autenticar."
+    return 1
+  fi
+
+  log AUTH "Token obtenido (${#AUTH_TOKEN} caracteres). No se escribe en disco."
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# 3. OWASP ZAP
+# -----------------------------------------------------------------------------
+run_zap() {
+  local zap_script="zap-baseline.py"
+  local extra_args=()
+
+  if [ "${MODE}" = "full" ]; then
+    zap_script="zap-full-scan.py"
+    log ZAP "FULL SCAN — activo e intrusivo. Sólo contra CI o staging autorizado."
+  else
+    log ZAP "BASELINE — pasivo, apto para pull requests."
+  fi
+
+  # ZAP corre en su propio contenedor: para alcanzar un servicio publicado en el
+  # loopback del host se usa host.docker.internal.
+  local zap_target="${TARGET_URL/localhost/host.docker.internal}"
+  zap_target="${zap_target/127.0.0.1/host.docker.internal}"
+
+  if [ -n "${AUTH_TOKEN}" ]; then
+    # Cabecera de autorización para TODAS las peticiones del escáner.
+    extra_args+=(-z "-config replacer.full_list(0).description=auth \
+-config replacer.full_list(0).enabled=true \
+-config replacer.full_list(0).matchtype=REQ_HEADER \
+-config replacer.full_list(0).matchstr=Authorization \
+-config replacer.full_list(0).regex=false \
+-config replacer.full_list(0).replacement=Bearer|${AUTH_TOKEN}")
+    log ZAP "Escaneo AUTENTICADO (Bearer)."
+    log ZAP "NOTA: con Bearer y sin cookie, el guard CSRF se salta por diseño."
+    log ZAP "      La protección CSRF se valida en test/security-access-control.e2e-spec.ts."
+  else
+    log ZAP "Escaneo NO autenticado: sólo se cubre la superficie pública."
+  fi
+
+  docker run --rm \
+    --add-host=host.docker.internal:host-gateway \
+    -v "${REPORTS_DIR}:/zap/wrk:rw" \
+    -v "${CONFIG_DIR}/zap:/zap/config:ro" \
+    "${ZAP_IMAGE}" \
+    "${zap_script}" \
+    -t "${zap_target}" \
+    -c /zap/config/baseline-rules.conf \
+    -J zap-report.json \
+    -r zap-report.html \
+    -w zap-report.md \
+    -I \
+    "${extra_args[@]}"
+
+  # ZAP: 0 = sin avisos, 1 = FAIL segun reglas, 2 = WARN. >2 es error real.
+  local exit_code=$?
+  if [ "${exit_code}" -le 2 ]; then
+    log ZAP "Finalizado (código ${exit_code}). Informes: zap-report.{json,html,md}"
+    return 0
+  fi
+  log ZAP "ERROR de ejecución (código ${exit_code})"
+  return 1
+}
+
+# -----------------------------------------------------------------------------
+# 4. Nuclei
+# -----------------------------------------------------------------------------
+run_nuclei() {
+  log NUCLEI "Plantillas medium/high/critical, ritmo limitado"
+  local nuclei_target="${TARGET_URL/localhost/host.docker.internal}"
+  nuclei_target="${nuclei_target/127.0.0.1/host.docker.internal}"
+
+  # Las plantillas no vienen en la imagen: se descargan la primera vez y quedan
+  # en un volumen para las corridas siguientes. Sin esto Nuclei aborta con
+  # "no templates provided for scan".
+  docker run --rm \
+    --add-host=host.docker.internal:host-gateway \
+    -v "${REPORTS_DIR}:/reports" \
+    -v "${CONFIG_DIR}/nuclei:/config:ro" \
+    -v nuclei-templates:/root/nuclei-templates \
+    -v nuclei-config:/root/.config/nuclei \
+    "${NUCLEI_IMAGE}" \
+    -target "${nuclei_target}" \
+    -config /config/config.yaml \
+    -jsonl -output /reports/nuclei.json \
+    -no-interactsh
+
+  local exit_code=$?
+  # Nuclei devuelve 0 tanto con hallazgos como sin ellos; el archivo manda.
+  if [ "${exit_code}" -eq 0 ]; then
+    [ -f "${REPORTS_DIR}/nuclei.json" ] || : > "${REPORTS_DIR}/nuclei.json"
+    log NUCLEI "Finalizado. Informe: nuclei.json"
+    return 0
+  fi
+  log NUCLEI "ERROR de ejecución (código ${exit_code})"
+  return 1
+}
+
+# -----------------------------------------------------------------------------
+# 5. TLS — sólo si hay staging HTTPS declarado
+# -----------------------------------------------------------------------------
+run_testssl() {
+  if [ -z "${SECURITY_STAGING_URL:-}" ]; then
+    log TESTSSL "SKIPPED: no hay SECURITY_STAGING_URL definida."
+    log TESTSSL "El entorno efímero es HTTP a propósito; analizar su TLS no tendría sentido."
+    return 0
+  fi
+  case "${SECURITY_STAGING_URL}" in
+    https://*) ;;
+    *)
+      log TESTSSL "SKIPPED: SECURITY_STAGING_URL no usa HTTPS."
+      return 0
+      ;;
+  esac
+
+  log TESTSSL "Analizando TLS de ${SECURITY_STAGING_URL}"
+  docker run --rm \
+    -v "${REPORTS_DIR}:/reports" \
+    "${TESTSSL_IMAGE}" \
+    --jsonfile /reports/testssl.json \
+    --quiet --color 0 \
+    --protocols --ciphers --headers --vulnerable \
+    "${SECURITY_STAGING_URL}"
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+main() {
+  assert_target_allowed
+
+  log ESPERA "Comprobando que la aplicación responda"
+  if ! "${SCRIPT_DIR}/wait-for-app.sh" "${TARGET_URL}" 120; then
+    fail "La aplicación no responde en ${TARGET_URL}. Levantá el entorno antes del DAST."
+  fi
+
+  obtain_token || true
+
+  local status=0
+  run_zap    || status=1
+  run_nuclei || status=1
+  run_testssl
+
+  printf '\n=== DAST finalizado (modo %s) ===\n' "${MODE}"
+  printf 'Informes en security/reports/\n'
+  return "${status}"
+}
+
+main "$@"

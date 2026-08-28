@@ -1,0 +1,111 @@
+name: Seguridad (nocturno)
+
+# Escaneo profundo programado.
+#
+# POR QUÉ EXISTE: una vulnerabilidad puede publicarse sin que cambie una sola
+# línea del código. Un pipeline que sólo corre en cada PR no detecta un CVE
+# aparecido después del último merge. Este workflow vuelve a analizar las mismas
+# dependencias e imágenes todos los días.
+#
+# CRON: 03:17 UTC = 00:17 en Argentina (UTC-3). El minuto 17 evita el pico de
+# runners que se produce en las horas y medias horas exactas.
+# Para cambiar el horario, editar la expresión de abajo (siempre en UTC).
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      staging_url:
+        description: 'URL de staging para DAST activo y TLS (opcional)'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-nightly
+  cancel-in-progress: false
+
+jobs:
+  deep-scan:
+    name: Escaneo profundo
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Checkout del frontend
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: mendoza-escuela/frontend
+          ref: develop
+          path: frontend-repo
+
+      - name: Resolver el destino del DAST
+        id: target
+        env:
+          # Prioridad: el input manual, después el secreto del repositorio.
+          INPUT_URL: ${{ inputs.staging_url }}
+          SECRET_URL: ${{ secrets.SECURITY_STAGING_URL }}
+        run: |
+          url="${INPUT_URL:-$SECRET_URL}"
+          if [ -z "$url" ]; then
+            echo "staging=" >> "$GITHUB_OUTPUT"
+            echo "::notice::Sin staging configurado: el DAST activo y testssl.sh se ejecutan sólo contra el entorno efímero."
+          else
+            echo "staging=$url" >> "$GITHUB_OUTPUT"
+            echo "::notice::Staging configurado para DAST activo."
+          fi
+
+      - name: Suite completa con ZAP full scan
+        env:
+          SECURITY_FRONTEND_CONTEXT: ${{ github.workspace }}/frontend-repo
+          # Si está vacío, run-dast.sh usa el entorno efímero local y marca
+          # testssl.sh como SKIPPED en lugar de fallar.
+          SECURITY_STAGING_URL: ${{ steps.target.outputs.staging }}
+        run: bash security/scripts/run-all.sh --full-dast
+
+      - name: Subir SARIF a Code Scanning
+        if: always() && hashFiles('security/reports/semgrep.sarif') != ''
+        uses: github/codeql-action/upload-sarif@f09c1c0a94de965c15400f5634aa42fac8fb8f88 # v3.27.5
+        with:
+          sarif_file: security/reports/semgrep.sarif
+          category: semgrep-nightly
+
+      - name: Publicar resumen
+        if: always()
+        run: cat security/reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Guardar informes completos
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: security-nightly-${{ github.run_id }}
+          path: |
+            security/reports/*.json
+            security/reports/*.sarif
+            security/reports/*.html
+            security/reports/*.md
+          retention-days: 14
+
+      - name: Limpiar el entorno
+        if: always()
+        run: docker compose -f compose.security.yml --profile full --profile seed --profile tests down -v
+
+      - name: Avisar si el escaneo nocturno falla
+        if: failure()
+        run: |
+          {
+            echo "## El escaneo nocturno de seguridad falló"
+            echo ""
+            echo "Puede deberse a una vulnerabilidad NUEVA publicada sin que"
+            echo "cambiara el código, o a una excepción de seguridad vencida."
+            echo ""
+            echo "Revisá el artifact security-nightly-${{ github.run_id }}."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,44 @@
+# Configuración de Trivy para el escaneo de filesystem e imágenes.
+# Se pasa con `--config security/config/trivy.yaml`.
+#
+# Se reportan TODAS las severidades a propósito. La política de bloqueo se
+# aplica después, al interpretar el JSON (security/scripts/create-summary.sh):
+# un informe que sólo muestra CRITICAL oculta la tendencia y no sirve como
+# evidencia ante una revisión formal.
+
+severity:
+  - UNKNOWN
+  - LOW
+  - MEDIUM
+  - HIGH
+  - CRITICAL
+
+scan:
+  scanners:
+    - vuln
+    - misconfig
+    - secret
+    - license
+  skip-dirs:
+    - "**/node_modules/.cache"
+    - /src/security/reports
+    - "**/security/reports/**"
+
+# Las vulnerabilidades sin parche disponible SIGUEN apareciendo en el informe.
+# `ignore-unfixed: false` es explícito para dejar constancia de la decisión:
+# ocultarlas daría una falsa sensación de cobertura.
+vulnerability:
+  ignore-unfixed: false
+
+# El informe incluye el inventario completo de paquetes, no sólo los vulnerables.
+# Es lo que permite comparar dos ejecuciones y detectar vulnerabilidades NUEVAS.
+list-all-pkgs: true
+
+db:
+  # No falla si la base de vulnerabilidades no puede actualizarse: usa la caché
+  # y lo deja registrado. Un corte de red no debe invalidar el pipeline entero,
+  # pero el resumen avisa si los datos no son frescos.
+  skip-update: false
+
+misconfiguration:
+  include-non-failures: false

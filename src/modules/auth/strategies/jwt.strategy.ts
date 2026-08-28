@@ -29,6 +29,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       jwtFromRequest: extractAccessToken,
       ignoreExpiration: false,
       secretOrKey: configService.getOrThrow<string>('JWT_SECRET'),
+      // Lista blanca explícita de algoritmos: sin ella se acepta el algoritmo
+      // declarado en el header del propio token. Los tokens se firman con el
+      // secreto HMAC de JWT_SECRET, por lo que HS256 es el único válido.
+      // ASVS 5.0 V3.5.3 (hallazgo H-01).
+      algorithms: ['HS256'],
     });
   }
 

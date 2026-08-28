@@ -1,0 +1,60 @@
+version: 2
+
+# Actualizaciones automáticas de dependencias.
+#
+# Incluye github-actions a propósito: las actions están pineadas por SHA en los
+# workflows (para que un tag no pueda reapuntarse a código distinto), y sin
+# Dependabot esos SHA quedarían congelados para siempre, incluso ante un parche
+# de seguridad de la propia action.
+
+updates:
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: America/Argentina/Buenos_Aires
+    open-pull-requests-limit: 5
+    labels: [dependencias, seguridad]
+    commit-message:
+      prefix: 'deps'
+      prefix-development: 'deps-dev'
+    groups:
+      # Los parches de desarrollo se agrupan para no inundar de PRs.
+      desarrollo:
+        dependency-type: development
+        update-types: [minor, patch]
+      produccion-patch:
+        dependency-type: production
+        update-types: [patch]
+    ignore:
+      # Los saltos de versión mayor se evalúan a mano: pueden traer cambios
+      # incompatibles que un merge automático no debería introducir.
+      - dependency-name: '*'
+        update-types: [version-update:semver-major]
+
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: America/Argentina/Buenos_Aires
+    labels: [dependencias, docker, seguridad]
+    commit-message:
+      prefix: 'docker'
+
+  # ---------------------------------------------------------------------------
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: America/Argentina/Buenos_Aires
+    labels: [dependencias, ci, seguridad]
+    commit-message:
+      prefix: 'ci'

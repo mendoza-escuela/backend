@@ -37,6 +37,15 @@ type NewAuthSession = Pick<
   'tokenId' | 'userId' | 'expiresAt' | 'revokedAt'
 >;
 
+/**
+ * Hash señuelo con el mismo coste (12 rondas) que los reales. Se compara contra
+ * él cuando la cuenta no existe para que el login tarde lo mismo en ambos casos
+ * y no se pueda enumerar usuarios midiendo el tiempo de respuesta.
+ * No corresponde a ninguna contraseña utilizable.
+ */
+const DECOY_PASSWORD_HASH =
+  '$2b$12$g7eeKoS4WUaShPDTNFpFLu1lilN76as/VT35ijKJ7BsAWvRQRm02K';
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -74,11 +83,20 @@ export class AuthService {
       'Correo o contraseña incorrectos.',
     );
 
-    if (!user || !user.isActive) throw invalidCredentials;
+    if (!user || !user.isActive) {
+      // Se compara igual contra un hash señuelo para que el tiempo de respuesta
+      // no delate si la cuenta existe. Sin esto, la ausencia de bcrypt.compare
+      // hace que la respuesta vuelva mucho antes y permite enumerar usuarios
+      // (hallazgo H-06). ASVS 5.0 V2.2.1.
+      await bcrypt.compare(password, DECOY_PASSWORD_HASH);
+      throw invalidCredentials;
+    }
     if (user.lockedUntil && user.lockedUntil > new Date()) {
-      throw new UnauthorizedException(
-        'La cuenta está bloqueada temporalmente. Intentá más tarde.',
-      );
+      // Mensaje idéntico al de credenciales inválidas: informar el bloqueo
+      // confirmaba la existencia de la cuenta a cualquiera que probara cinco
+      // veces un correo. El usuario legítimo recupera el acceso por el flujo de
+      // contraseña olvidada o esperando el desbloqueo.
+      throw invalidCredentials;
     }
 
     if (!(await bcrypt.compare(password, user.passwordHash))) {
