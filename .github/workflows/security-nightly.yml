@@ -1,19 +1,19 @@
 name: Seguridad (nocturno)
 
-# Escaneo profundo programado.
+# Escaneo profundo semanal programado.
 #
 # POR QUÉ EXISTE: una vulnerabilidad puede publicarse sin que cambie una sola
 # línea del código. Un pipeline que sólo corre en cada PR no detecta un CVE
 # aparecido después del último merge. Este workflow vuelve a analizar las mismas
-# dependencias e imágenes todos los días.
+# dependencias e imágenes una vez por semana.
 #
-# CRON: 03:17 UTC = 00:17 en Argentina (UTC-3). El minuto 17 evita el pico de
+# CRON: lunes 03:17 UTC = lunes 00:17 en Argentina (UTC-3). El minuto 17 evita el pico de
 # runners que se produce en las horas y medias horas exactas.
 # Para cambiar el horario, editar la expresión de abajo (siempre en UTC).
 
 on:
   schedule:
-    - cron: '17 3 * * *'
+    - cron: '17 3 * * 1'
   workflow_dispatch:
     inputs:
       staging_url:
