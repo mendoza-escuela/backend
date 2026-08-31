@@ -547,7 +547,6 @@ export class SchoolsService {
         );
         const selectedLevels = await this.resolveEducationLevels(
           manager,
-          schoolId,
           dto.educationLevels,
           currentStructured.educationLevels,
         );
@@ -665,7 +664,6 @@ export class SchoolsService {
         );
         const selectedLevels = await this.resolveEducationLevels(
           manager,
-          '',
           requestedEducationLevels,
           [],
         );
@@ -768,7 +766,6 @@ export class SchoolsService {
         );
         const selectedLevels = await this.resolveEducationLevels(
           manager,
-          id,
           requestedEducationLevels,
           currentStructured.educationLevels,
         );
@@ -1598,7 +1595,6 @@ export class SchoolsService {
 
   private async resolveEducationLevels(
     manager: EntityManager,
-    schoolId: string,
     requested:
       Array<{ levelId: string; enrollment?: number | null }> | undefined,
     current: SelectedEducationLevel[],

@@ -8,7 +8,7 @@ import {
 export type SurveyImportRawRecord = Record<string, string>;
 export type SurveyImportTemplateFormat = 'csv' | 'xlsx';
 
-export const SURVEY_IMPORT_HEADERS = [
+const SURVEY_IMPORT_HEADERS = [
   'dimension',
   'seccion',
   'codigo_pregunta',

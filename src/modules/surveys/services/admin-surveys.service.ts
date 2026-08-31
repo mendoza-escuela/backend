@@ -1007,19 +1007,6 @@ export class AdminSurveysService {
     };
   }
 
-  private async loadCounts(
-    manager: EntityManager,
-    surveyId: string,
-    versionId: string,
-  ) {
-    const version = await this.getVersionWithContent(
-      surveyId,
-      versionId,
-      manager,
-    );
-    return this.structureCounts(version);
-  }
-
   private versionSummary(version: SurveyVersion) {
     return {
       id: version.id,

@@ -17,14 +17,14 @@ import type { Request } from 'express';
 /** Tipos MIME que los navegadores y Excel envían para XLSX y CSV. */
 const ALLOWED_MIME_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
-  'application/vnd.ms-excel', // .xls y algunos .csv de Excel
+  'application/vnd.ms-excel', // algunos .csv de Excel
   'text/csv',
   'application/csv',
   'text/plain', // varios navegadores envían esto para .csv
   'application/octet-stream', // cliente que no declara tipo; la extensión decide
 ]);
 
-const ALLOWED_EXTENSIONS = ['.xlsx', '.xls', '.csv'];
+const ALLOWED_EXTENSIONS = ['.xlsx', '.csv'];
 
 const MAX_FILENAME_LENGTH = 255;
 

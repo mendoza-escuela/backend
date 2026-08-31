@@ -57,10 +57,6 @@ import { SurveyApplicabilityService } from './services/survey-applicability.serv
     SurveyApplicabilityService,
     SurveyEvaluationService,
   ],
-  exports: [
-    SurveysService,
-    SurveyApplicabilityService,
-    SurveyEvaluationService,
-  ],
+  exports: [SurveyApplicabilityService, SurveyEvaluationService],
 })
 export class SurveysModule {}
