@@ -4,14 +4,26 @@ API NestJS con PostgreSQL y TypeORM.
 
 Todos los endpoints HTTP se publican bajo el prefijo `/api` (por ejemplo, `POST /api/auth/login`).
 
+## Requisitos
+
+- Node.js 22.23.2 (versión operativa fijada en `.nvmrc` y en la imagen Docker).
+- npm 11.6.1.
+
+El contrato admitido por `package.json` es Node.js `>=22.13.0 <23` y npm
+`11.6.1`. Con nvm, ejecutar `nvm use` desde este directorio selecciona la
+versión operativa del proyecto.
+
 ## Puesta en marcha local
 
-1. Copiar `.env.example` a `.env` y completar secretos.
-2. Iniciar PostgreSQL con `npm run db:up`.
-3. Ejecutar `npm run migration:run`.
-4. Completar `INITIAL_ADMIN_EMAIL` e `INITIAL_ADMIN_PASSWORD` en `.env`.
-5. Crear el administrador inicial con `npm run seed:admin`.
-6. Iniciar la API con `npm run start:dev`.
+1. Seleccionar Node.js 22.23.2 con `nvm use` (o instalar esa versión por otro medio).
+2. Activar la versión de npm del proyecto con `npm install --global npm@11.6.1`.
+3. Instalar las dependencias reproducibles con `npm ci`.
+4. Copiar `.env.example` a `.env` y completar secretos.
+5. Iniciar PostgreSQL con `npm run db:up`.
+6. Ejecutar `npm run migration:run`.
+7. Completar `INITIAL_ADMIN_EMAIL` e `INITIAL_ADMIN_PASSWORD` en `.env`.
+8. Crear el administrador inicial con `npm run seed:admin`.
+9. Iniciar la API con `npm run start:dev`.
 
 El seed es idempotente, asigna el rol `admin` y obliga a cambiar la contraseña en el primer acceso. La contraseña inicial debe tener al menos 12 caracteres, mayúscula, minúscula, número y símbolo.
 
@@ -22,6 +34,18 @@ El seed es idempotente, asigna el rol `admin` y obliga a cambiar la contraseña 
 Si una migración falla, el proceso termina con error y la API no arranca con un esquema incompleto. Las migraciones deben mantener operaciones compatibles con despliegues graduales cuando se ejecuten varias réplicas de la aplicación.
 
 El seed del administrador no forma parte del arranque automático: debe ejecutarse una sola vez mediante `npm run seed:admin`.
+
+### URLs de frontend y API
+
+`FRONTEND_URL` pertenece al entorno de ejecución del backend. Debe contener el
+origen HTTP(S) exacto del frontend —esquema, host y puerto, sin `/api` ni otras
+rutas— y se utiliza para CORS, protección CSRF y enlaces enviados por correo.
+
+`VITE_API_URL` pertenece exclusivamente al entorno de compilación del frontend
+y define la base usada por su cliente HTTP. No debe agregarse al `.env` del
+backend. Puede ser `/api` cuando un proxy del mismo origen enruta las solicitudes,
+o una URL absoluta terminada en `/api` cuando la API se publica en otro host. Un
+cambio de `VITE_API_URL` requiere volver a compilar el frontend.
 
 ## Seguridad de autenticación
 
@@ -84,18 +108,22 @@ consulta adicional por etapa.
 
 La importación acepta CSV/XLSX de hasta 2 MB y 500 filas, ofrece vista previa y realiza importación parcial. La plantilla se obtiene en `GET /admin/schools/import/template`. El padrón filtrado puede exportarse mediante `GET /admin/schools/export?format=csv` o `format=xlsx`; cada exportación queda auditada.
 
-Columnas de la plantilla de colegios (los campos del segundo referente son
-opcionales):
+La plantilla vigente de colegios utiliza exactamente estas columnas:
 
 ```text
-cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_cargo,referente_correo,referente_telefono,salud_referente_nombre,salud_referente_apellido,salud_referente_cargo,salud_referente_correo,salud_referente_telefono,matricula,caracteristicas,estado
+cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,tipo_educacion,niveles_y_matriculas,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_cargo,referente_correo,referente_telefono,matricula_total,plurigrado,intercultural_bilingue,estado
 ```
 
-`caracteristicas` debe ser un objeto JSON con hasta 30 valores simples, por ejemplo `{"comedor":true}`.
-Los referentes se guardan en `school_contacts` como `RESPONDENT` y
-`HEALTH_PROMOTION`; no son usuarios ni reciben credenciales automáticamente.
-Las columnas históricas del referente principal se mantienen temporalmente
-sincronizadas para compatibilidad.
+- `niveles_y_matriculas` exige al menos un nivel activo, identificado por código
+  o nombre del catálogo. Se separan los niveles con `|` y la matrícula opcional
+  de cada uno con `:`, por ejemplo `Inicial: 45 | Primario: 210`.
+- `matricula_total` puede quedar vacía o contener un entero entre 0 y 1.000.000;
+  es un dato independiente y no se infiere sumando las matrículas por nivel.
+- `plurigrado` e `intercultural_bilingue` aceptan `sí`, `no` o una celda vacía.
+  Se almacenan como características ternarias del colegio.
+- La plantilla crea un único contacto responsable (`RESPONDENT`) con los campos
+  `referente_*`; `referente_cargo` es opcional. El contacto no es un usuario ni
+  recibe credenciales automáticamente.
 
 ## Portal del establecimiento
 

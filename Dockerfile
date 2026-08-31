@@ -6,7 +6,7 @@
 # ip-address), ninguno proveniente del código de la aplicación ni de sus
 # dependencias. La actualización de npm sólo hace falta donde se instalan
 # paquetes, así que ahora se aplica en los stages de build y no en el runtime.
-FROM node:22-alpine AS base
+FROM node:22.23.2-alpine3.24 AS base
 WORKDIR /app
 # La etiqueta de Node puede quedar unos días detrás de los repositorios de
 # seguridad de Alpine. Aplicamos únicamente actualizaciones compatibles con la
