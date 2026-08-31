@@ -4,16 +4,13 @@ Validación de seguridad reproducible, ejecutable en una notebook y en CI con el
 mismo resultado. Todas las herramientas corren en contenedores con versión
 fijada: **no hace falta instalar nada más que Docker**.
 
-Documentación completa en `mendoza/docs/security/` (raíz del workspace, fuera
-de este repositorio: los informes no son parte del código de la aplicación).
-
 ---
 
 ## Uso rápido
 
 ```bash
 ./security/scripts/run-all.sh                 # suite completa (~20 min)
-./security/scripts/run-all.sh --static-only   # sólo estático (~5 min)
+./security/scripts/run-all.sh --static-only   # estático + imágenes, sin stack/DAST
 ./security/scripts/run-all.sh --full-dast     # ZAP full scan
 ./security/scripts/run-all.sh --keep-env      # deja el entorno levantado
 ```
@@ -35,6 +32,10 @@ SECURITY_ADMIN_PASSWORD='...' \
 Las credenciales deben pertenecer a un administrador exclusivo del entorno de
 pruebas. Si `SECURITY_STAGING_API_URL` no se define, se asume que la API vive
 bajo el mismo origen que el frontend.
+
+En CI, el checkout cruzado conserva una pareja coherente: los PR usan la rama
+objetivo (`main` o `develop`) del frontend y los workflows de `main`/nocturno
+usan frontend `main`. Así los informes no mezclan ramas con destinos distintos.
 
 ---
 
@@ -79,12 +80,15 @@ de versión sin avisar no es comparable entre ejecuciones.
 3. HIGH **nuevo** respecto del baseline.
 4. Alerta de riesgo alto en ZAP.
 5. Excepción **vencida**.
-6. Herramienta que debía correr y falló.
+6. Informe requerido ausente, vacío o inválido.
+7. SBOM o metadato obligatorio ausente o vacío.
 
 **PASS WITH WARNINGS**: MEDIUM/LOW y HIGH ya conocidos en el baseline.
 
 > `NOT_EXECUTED` **no** equivale a `PASS`. Si una herramienta no dejó informe,
-> el resumen lo dice.
+> el gate falla. Los jobs parciales declaran su alcance con
+> `--partial --require-group static|container|dast`; sin grupo explícito, el
+> consolidador rechaza la ejecución.
 
 ---
 
@@ -139,10 +143,5 @@ security/
 
 ---
 
-## Antes de entregar a Ciberseguridad
-
-Completar `mendoza/docs/security/SECURITY_RELEASE_CHECKLIST.md`.
-
 **"Sin vulnerabilidades detectadas" no significa "aplicación segura".** Este
-pipeline automatiza lo automatizable; el checklist enumera las ocho pruebas que
-siguen requiriendo revisión manual.
+pipeline automatiza lo automatizable y no reemplaza la revisión manual.

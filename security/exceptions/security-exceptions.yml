@@ -34,8 +34,8 @@
 
 exceptions:
   # ---------------------------------------------------------------------------
-  # Falsos positivos confirmados por revisión manual (Fase 1).
-  # Documentados en docs/security/REPOSITORY_SECURITY_ANALYSIS.md sección 2.13.
+  # Falsos positivos confirmados por revisión manual. La evidencia y el control
+  # compensatorio verificable quedan documentados en cada excepción.
   # ---------------------------------------------------------------------------
   - id: SEC-EXC-001
     tool: semgrep

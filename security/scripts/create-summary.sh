@@ -11,6 +11,8 @@
 #
 # Uso:
 #   ./security/scripts/create-summary.sh [--strict-high]
+#   ./security/scripts/create-summary.sh --partial --require-group static
+# Grupos parciales: static, container, dast. --require-group es repetible.
 # =============================================================================
 set -uo pipefail
 

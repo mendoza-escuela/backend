@@ -11,7 +11,7 @@
 #
 # Uso:
 #   ./security/scripts/run-all.sh                 suite completa
-#   ./security/scripts/run-all.sh --static-only   sólo estático (sin Docker Compose)
+#   ./security/scripts/run-all.sh --static-only   estático + imágenes, sin stack/DAST
 #   ./security/scripts/run-all.sh --full-dast     ZAP full scan en lugar de baseline
 #   ./security/scripts/run-all.sh --keep-env      no destruye el entorno al terminar
 #
@@ -23,6 +23,12 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 COMPOSE_FILE="${REPO_ROOT}/compose.security.yml"
+CONFIG_DIR="${REPO_ROOT}/security/config"
+
+# Compose expande las imágenes base desde esta misma fuente versionada que usan
+# los scanners. `set -a` las exporta para que la centralización sea efectiva.
+# shellcheck source=/dev/null
+set -a && . "${CONFIG_DIR}/tool-versions.env" && set +a
 
 STATIC_ONLY=0
 FULL_DAST=0
@@ -60,6 +66,9 @@ skip_stage() {
 compose() { docker compose -f "${COMPOSE_FILE}" "$@"; }
 
 cleanup_env() {
+  if [ "${STATIC_ONLY}" -eq 1 ]; then
+    return
+  fi
   if [ "${KEEP_ENV}" -eq 1 ]; then
     printf '\nEntorno conservado (--keep-env). Para destruirlo:\n'
     printf '  docker compose -f compose.security.yml --profile full down -v\n'
@@ -116,7 +125,12 @@ fi
 
 # --- 6. Resumen --------------------------------------------------------------
 printf '\n\033[1;34m======== Resumen y política de gates ========\033[0m\n'
-bash "${SCRIPT_DIR}/create-summary.sh"
+if [ "${STATIC_ONLY}" -eq 1 ]; then
+  bash "${SCRIPT_DIR}/create-summary.sh" \
+    --partial --require-group static --require-group container
+else
+  bash "${SCRIPT_DIR}/create-summary.sh"
+fi
 GATE_RESULT=$?
 
 cleanup_env

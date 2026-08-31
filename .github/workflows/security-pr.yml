@@ -75,6 +75,11 @@ jobs:
       - name: Validar excepciones de seguridad
         run: python3 security/scripts/validate-exceptions.py
 
+      - name: Regresiones del consolidador
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s security/scripts/tests -p 'test_*.py' -v
+
       - name: Análisis estático completo
         run: bash security/scripts/run-static.sh
 
@@ -87,7 +92,7 @@ jobs:
 
       - name: Consolidar resultados
         if: always()
-        run: bash security/scripts/create-summary.sh --partial
+        run: bash security/scripts/create-summary.sh --partial --require-group static
 
       - name: Publicar resumen en el PR
         if: always()
@@ -117,17 +122,25 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Checkout del frontend
-        # Repositorio público: no hace falta credencial.
+        # Se audita la misma rama objetivo que recibirá este PR (main/develop).
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mendoza-escuela/frontend
-          ref: develop
+          ref: ${{ github.base_ref }}
           path: frontend-repo
 
       - name: Construir y analizar imágenes
         env:
           SECURITY_FRONTEND_CONTEXT: ${{ github.workspace }}/frontend-repo
         run: bash security/scripts/run-container-scan.sh
+
+      - name: Consolidar resultados
+        if: always()
+        run: bash security/scripts/create-summary.sh --partial --require-group container
+
+      - name: Publicar resumen
+        if: always()
+        run: cat security/reports/summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Guardar metadatos del escaneo
         if: always()
@@ -146,11 +159,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Checkout del frontend
+        # Se audita la misma rama objetivo que recibirá este PR (main/develop).
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mendoza-escuela/frontend
-          ref: develop
+          ref: ${{ github.base_ref }}
           path: frontend-repo
+
+      - name: Cargar versiones centralizadas del stack
+        run: sed -n '/^[A-Z_][A-Z0-9_]*=/p' security/config/tool-versions.env >> "$GITHUB_ENV"
 
       - name: Levantar el entorno efímero
         env:
@@ -170,7 +187,7 @@ jobs:
 
       - name: Consolidar resultados
         if: always()
-        run: bash security/scripts/create-summary.sh --partial
+        run: bash security/scripts/create-summary.sh --partial --require-group dast
 
       - name: Publicar resumen
         if: always()
