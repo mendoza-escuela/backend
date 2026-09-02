@@ -1,6 +1,7 @@
 import { DataSource } from 'typeorm';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
+import { PasswordResetToken } from '../../auth/entities/password-reset-token.entity';
 import { MailService } from '../../mail/services/mail.service';
 import { School } from '../../schools/entities/school.entity';
 import { SchoolUserAssignmentHistory } from '../../schools/entities/school-user-assignment-history.entity';
@@ -264,6 +265,7 @@ describe('AdminUsersService', () => {
       getRepository: jest.fn(() => ({
         findOne: jest.fn().mockResolvedValue(user),
       })),
+      query: jest.fn().mockResolvedValue([]),
       findOneBy: jest.fn((entity: unknown, criteria: { userId?: string }) =>
         Promise.resolve(
           entity === UserSchool && criteria.userId === user.id
@@ -319,6 +321,7 @@ describe('AdminUsersService', () => {
     const save = jest.fn().mockResolvedValue({});
     const manager = {
       getRepository: jest.fn(() => ({ findOne: findUser })),
+      query: jest.fn().mockResolvedValue([]),
       findOneBy: jest.fn((entity: unknown) =>
         Promise.resolve(entity === School ? targetSchool : null),
       ),
@@ -382,6 +385,7 @@ describe('AdminUsersService', () => {
       getRepository: jest.fn(() => ({
         findOne: jest.fn().mockResolvedValue(user),
       })),
+      query: jest.fn().mockResolvedValue([]),
       findOneBy: jest.fn(
         (entity: unknown, criteria: { userId?: string; schoolId?: string }) => {
           if (entity === School) return Promise.resolve(targetSchool);
@@ -476,11 +480,14 @@ describe('AdminUsersService', () => {
     };
     const update = jest.fn().mockResolvedValue({ affected: 1 });
     const save = jest.fn().mockResolvedValue({});
-    const manager = {
-      findOneBy: jest.fn().mockResolvedValue({
+    const userRepository = {
+      findOne: jest.fn().mockResolvedValue({
         id: 'user-id',
         mustChangePassword: false,
       }),
+    };
+    const manager = {
+      getRepository: jest.fn(() => userRepository),
       update,
       createQueryBuilder: jest.fn(() => queryBuilder),
       save,
@@ -507,6 +514,22 @@ describe('AdminUsersService', () => {
         lockedUntil: null,
       }),
     );
+    expect(userRepository.findOne).toHaveBeenCalledWith({
+      where: { id: 'user-id' },
+      lock: { mode: 'pessimistic_write' },
+    });
+    expect(update).toHaveBeenNthCalledWith(
+      2,
+      PasswordResetToken,
+      expect.objectContaining({ userId: 'user-id' }),
+      expect.objectContaining({}),
+    );
+    const tokenUpdate = update.mock.calls[1] as unknown as [
+      typeof PasswordResetToken,
+      { userId: string; usedAt: unknown },
+      { usedAt: unknown },
+    ];
+    expect(tokenUpdate[2].usedAt).toBeInstanceOf(Date);
     expect(execute).toHaveBeenCalledTimes(1);
     expect(save).toHaveBeenCalledWith(
       AuditLog,
@@ -514,7 +537,105 @@ describe('AdminUsersService', () => {
     );
   });
 
+  it('invalidates recovery links when an administrator changes the account email', async () => {
+    const user = {
+      id: 'user-id',
+      firstName: 'Ana',
+      lastName: 'Pérez',
+      email: 'anterior@example.com',
+      role: UserRole.Admin,
+      isActive: true,
+      mustChangePassword: false,
+      userSchools: [],
+    } as User;
+    const emailQuery = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getExists: jest.fn().mockResolvedValue(false),
+    };
+    const sessionQuery = {
+      update: jest.fn().mockReturnThis(),
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    const update = jest.fn().mockResolvedValue({ affected: 1 });
+    const userRepository = {
+      findOne: jest.fn().mockResolvedValue(user),
+      createQueryBuilder: jest.fn(() => emailQuery),
+    };
+    const manager = {
+      getRepository: jest.fn(() => userRepository),
+      findOneBy: jest.fn().mockResolvedValue(null),
+      save: jest.fn().mockResolvedValue({}),
+      delete: jest.fn().mockResolvedValue({ affected: 0 }),
+      update,
+      createQueryBuilder: jest.fn(() => sessionQuery),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (transactionManager: typeof manager) => Promise<void>) =>
+          callback(manager),
+      ),
+    } as unknown as DataSource;
+    const service = new AdminUsersService(dataSource);
+    jest.spyOn(service, 'findOne').mockResolvedValue(user as never);
+
+    await service.update(user.id, { email: 'nuevo@example.com' }, {
+      id: 'actor-id',
+    } as never);
+
+    expect(userRepository.findOne).toHaveBeenCalledWith({
+      where: { id: user.id },
+      lock: { mode: 'pessimistic_write' },
+    });
+    expect(update).toHaveBeenCalledWith(
+      PasswordResetToken,
+      expect.objectContaining({ userId: user.id }),
+      expect.objectContaining({}),
+    );
+    expect(sessionQuery.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidates recovery links when a blocked account is reactivated', async () => {
+    const user = {
+      id: 'user-id',
+      firstName: 'Ana',
+      lastName: 'Pérez',
+      email: 'ana@example.com',
+      role: UserRole.School,
+      isActive: false,
+      mustChangePassword: false,
+      userSchools: [],
+    } as User;
+    const update = jest.fn().mockResolvedValue({ affected: 1 });
+    const userRepository = { findOne: jest.fn().mockResolvedValue(user) };
+    const manager = {
+      getRepository: jest.fn(() => userRepository),
+      save: jest.fn().mockResolvedValue({}),
+      update,
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (transactionManager: typeof manager) => Promise<void>) =>
+          callback(manager),
+      ),
+    } as unknown as DataSource;
+    const service = new AdminUsersService(dataSource);
+    jest.spyOn(service, 'findOne').mockResolvedValue(user as never);
+
+    await service.setStatus(user.id, true, { id: 'actor-id' } as never);
+
+    expect(update).toHaveBeenCalledWith(
+      PasswordResetToken,
+      expect.objectContaining({ userId: user.id }),
+      expect.objectContaining({}),
+    );
+  });
+
   it('prevents blocking the last active administrator', async () => {
+    const query = jest.fn().mockResolvedValue([]);
     const repository = {
       findOne: jest.fn().mockResolvedValue({
         id: 'admin-id',
@@ -525,6 +646,7 @@ describe('AdminUsersService', () => {
     };
     const manager = {
       getRepository: jest.fn(() => repository),
+      query,
       countBy: jest.fn().mockResolvedValue(1),
     };
     const dataSource = {
@@ -539,5 +661,92 @@ describe('AdminUsersService', () => {
         id: 'other-admin-id',
       } as never),
     ).rejects.toBeInstanceOf(BadRequestException);
+    expect(query).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))',
+      ['admin-users.active-administrator-invariant.v1'],
+    );
+    expect(query.mock.invocationCallOrder[0]).toBeLessThan(
+      repository.findOne.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('uses the same serialized invariant when demoting an active administrator', async () => {
+    const user = {
+      id: 'admin-id',
+      firstName: 'Ana',
+      lastName: 'Pérez',
+      email: 'ana@example.com',
+      role: UserRole.Admin,
+      isActive: true,
+      userSchools: [],
+    } as User;
+    const query = jest.fn().mockResolvedValue([]);
+    const manager = {
+      getRepository: jest.fn(() => ({
+        findOne: jest.fn().mockResolvedValue(user),
+      })),
+      findOneBy: jest.fn().mockResolvedValue(null),
+      query,
+      countBy: jest.fn().mockResolvedValue(1),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (transactionManager: typeof manager) => Promise<void>) =>
+          callback(manager),
+      ),
+    } as unknown as DataSource;
+
+    await expect(
+      new AdminUsersService(dataSource).update(
+        user.id,
+        { role: UserRole.School, schoolId: null },
+        { id: 'other-admin-id' } as never,
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(query).toHaveBeenCalledWith(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))',
+      ['admin-users.active-administrator-invariant.v1'],
+    );
+    const userLookup = manager.getRepository.mock.results[0]?.value as {
+      findOne: jest.Mock;
+    };
+    expect(query.mock.invocationCallOrder[0]).toBeLessThan(
+      userLookup.findOne.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('serializes an isActive update before locking the target administrator', async () => {
+    const user = {
+      id: 'admin-id',
+      firstName: 'Ana',
+      lastName: 'Pérez',
+      email: 'ana@example.com',
+      role: UserRole.Admin,
+      isActive: true,
+      userSchools: [],
+    } as User;
+    const findOne = jest.fn().mockResolvedValue(user);
+    const query = jest.fn().mockResolvedValue([]);
+    const manager = {
+      getRepository: jest.fn(() => ({ findOne })),
+      findOneBy: jest.fn().mockResolvedValue(null),
+      query,
+      countBy: jest.fn().mockResolvedValue(1),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (transactionManager: typeof manager) => Promise<void>) =>
+          callback(manager),
+      ),
+    } as unknown as DataSource;
+
+    await expect(
+      new AdminUsersService(dataSource).update(user.id, { isActive: false }, {
+        id: 'other-admin-id',
+      } as never),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(query.mock.invocationCallOrder[0]).toBeLessThan(
+      findOne.mock.invocationCallOrder[0],
+    );
   });
 });

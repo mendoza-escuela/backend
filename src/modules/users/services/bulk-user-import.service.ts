@@ -1,8 +1,11 @@
 import { BadRequestException, HttpException, Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { isEmail } from 'class-validator';
-import ExcelJS from 'exceljs';
 import { DataSource } from 'typeorm';
+import {
+  readCsvImportRecords,
+  readXlsxImportRecords,
+} from '../../../common/spreadsheets/spreadsheet-import.util';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { assertStrongPassword } from '../../auth/utils/password-policy';
 import { School } from '../../schools/entities/school.entity';
@@ -142,47 +145,18 @@ export class BulkUserImportService {
   }
 
   private readCsv(buffer: Buffer): Array<Record<string, string>> {
-    const text = buffer.toString('utf8').replace(/^\uFEFF/, '');
-    const lines = text.split(/\r?\n/).filter((line) => line.trim());
-    if (lines.length < 2) return [];
-    const headers = this.parseCsvLine(lines[0]).map((header) =>
-      this.normalizeHeader(header),
-    );
-    this.assertHeaders(headers);
-    return lines.slice(1).map((line) => {
-      const values = this.parseCsvLine(line);
-      return Object.fromEntries(
-        headers.map((header, index) => [header, values[index]?.trim() ?? '']),
-      );
+    return readCsvImportRecords(buffer, {
+      assertHeaders: (headers) => this.assertHeaders(headers),
+      unterminatedQuoteMessage: 'El archivo CSV contiene comillas sin cerrar.',
     });
   }
 
   private async readWorkbook(
     buffer: Buffer,
   ): Promise<Array<Record<string, string>>> {
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
-    const worksheet = workbook.worksheets[0];
-    if (!worksheet || worksheet.rowCount < 2) return [];
-    const headers = (worksheet.getRow(1).values as unknown[])
-      .slice(1)
-      .map((value) => this.normalizeHeader(this.cellToString(value)));
-    this.assertHeaders(headers);
-    const rows: Array<Record<string, string>> = [];
-    worksheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return;
-      const values = (row.values as unknown[]).slice(1);
-      if (values.every((value) => !this.cellToString(value).trim())) return;
-      rows.push(
-        Object.fromEntries(
-          headers.map((header, index) => [
-            header,
-            this.cellToString(values[index]).trim(),
-          ]),
-        ),
-      );
+    return readXlsxImportRecords(buffer, {
+      assertHeaders: (headers) => this.assertHeaders(headers),
     });
-    return rows;
   }
 
   private async validate(
@@ -345,15 +319,6 @@ export class BulkUserImportService {
       );
   }
 
-  private normalizeHeader(value: string) {
-    return value
-      .trim()
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/\s+/g, '_');
-  }
-
   private parseRole(value: string): UserRole | null {
     const normalized = value.trim().toLowerCase().replace(/\s+/g, ' ');
     if (
@@ -376,57 +341,6 @@ export class BulkUserImportService {
     )
       return false;
     return null;
-  }
-
-  private parseCsvLine(line: string): string[] {
-    const values: string[] = [];
-    let value = '';
-    let quoted = false;
-    for (let index = 0; index < line.length; index += 1) {
-      const character = line[index];
-      if (character === '"' && quoted && line[index + 1] === '"') {
-        value += '"';
-        index += 1;
-      } else if (character === '"') quoted = !quoted;
-      else if (character === ',' && !quoted) {
-        values.push(value);
-        value = '';
-      } else value += character;
-    }
-    values.push(value);
-    if (quoted) {
-      throw new BadRequestException(
-        'El archivo CSV contiene comillas sin cerrar.',
-      );
-    }
-    return values;
-  }
-
-  private cellToString(value: unknown): string {
-    if (value === null || value === undefined) return '';
-    if (
-      typeof value === 'string' ||
-      typeof value === 'number' ||
-      typeof value === 'boolean'
-    ) {
-      return String(value);
-    }
-    if (value instanceof Date) return value.toISOString();
-    if (typeof value === 'object') {
-      const cell = value as {
-        text?: unknown;
-        result?: unknown;
-        richText?: Array<{ text?: unknown }>;
-      };
-      if (typeof cell.text === 'string') return cell.text;
-      if (cell.result !== undefined) return this.cellToString(cell.result);
-      if (Array.isArray(cell.richText)) {
-        return cell.richText
-          .map((part) => this.cellToString(part.text))
-          .join('');
-      }
-    }
-    return '';
   }
 
   private publicError(error: unknown): string {

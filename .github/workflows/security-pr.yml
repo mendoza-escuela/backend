@@ -1,0 +1,197 @@
+name: Seguridad (Pull Request)
+
+# Puerta de seguridad de cada PR. Prioriza velocidad: análisis estático en
+# paralelo y, sólo si todo pasa, entorno efímero + tests + ZAP baseline.
+#
+# Se usa `pull_request` y NUNCA `pull_request_target`: este último ejecuta el
+# workflow del branch base con acceso a los secretos del repositorio mientras
+# hace checkout del código del PR, lo que permite a cualquiera exfiltrar
+# secretos desde un fork.
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+# Permisos mínimos. Cada job que necesite más los declara explícitamente.
+permissions:
+  contents: read
+
+concurrency:
+  group: security-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  # Este repositorio es PÚBLICO: los artifacts son descargables por cualquiera.
+  # Por eso en los PR sólo se publica el resumen agregado, sin el detalle
+  # explotable de cada hallazgo. Los informes crudos quedan en los workflows
+  # manuales y nocturnos, con retención corta.
+  ARTIFACT_RETENTION_DAYS: 7
+
+jobs:
+  # ---------------------------------------------------------------------------
+  quality:
+    name: Calidad y tests unitarios
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Usar npm declarado por el proyecto
+        run: bash security/scripts/setup-project-npm.sh
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Compilación
+        run: npm run build
+      - name: Tests unitarios
+        # app.module.spec.ts importa AppModule, que valida el entorno al
+        # cargarse: sin estas variables la suite no arranca. Son valores
+        # sintéticos y no dan acceso a nada; no hay base de datos en este job.
+        env:
+          JWT_SECRET: ci-unit-tests-secret-not-used-anywhere-0123456789
+          JWT_EXPIRES_IN: 8h
+          FRONTEND_URL: http://localhost:5173
+          DATABASE_HOST: localhost
+          DATABASE_PORT: '5432'
+          DATABASE_USER: ci
+          DATABASE_PASSWORD: ci-unit-tests-not-a-secret
+          DATABASE_NAME: ci
+        run: npm test
+
+  # ---------------------------------------------------------------------------
+  static-analysis:
+    name: SAST, SCA, secretos y SBOM
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write # subida del SARIF de Semgrep
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Historial completo: Gitleaks debe ver los commits anteriores, no
+          # sólo el árbol actual. Un secreto borrado sigue estando en el log.
+          fetch-depth: 0
+
+      - name: Validar excepciones de seguridad
+        run: python3 security/scripts/validate-exceptions.py
+
+      - name: Regresiones del consolidador
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s security/scripts/tests -p 'test_*.py' -v
+
+      - name: Análisis estático completo
+        run: bash security/scripts/run-static.sh
+
+      - name: Subir SARIF a Code Scanning
+        if: always() && hashFiles('security/reports/semgrep.sarif') != ''
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: security/reports/semgrep.sarif
+          category: semgrep
+
+      - name: Consolidar resultados
+        if: always()
+        run: bash security/scripts/create-summary.sh --partial --require-group static
+
+      - name: Publicar resumen en el PR
+        if: always()
+        run: cat security/reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Guardar SBOM
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-${{ github.sha }}
+          path: security/reports/sbom.cyclonedx.json
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+      - name: Guardar resumen
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-summary-${{ github.sha }}
+          path: security/reports/summary.md
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+  # ---------------------------------------------------------------------------
+  container-scan:
+    name: Build y escaneo de imágenes
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Checkout del frontend
+        # Se audita la misma rama objetivo que recibirá este PR (main/develop).
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mendoza-escuela/frontend
+          ref: ${{ github.base_ref }}
+          path: frontend-repo
+
+      - name: Construir y analizar imágenes
+        env:
+          SECURITY_FRONTEND_CONTEXT: ${{ github.workspace }}/frontend-repo
+        run: bash security/scripts/run-container-scan.sh
+
+      - name: Consolidar resultados
+        if: always()
+        run: bash security/scripts/create-summary.sh --partial --require-group container
+
+      - name: Publicar resumen
+        if: always()
+        run: cat security/reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Guardar metadatos del escaneo
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: container-scan-metadata-${{ github.sha }}
+          path: security/reports/container-scan-metadata.json
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+  # ---------------------------------------------------------------------------
+  dast:
+    name: Entorno efímero, control de acceso y ZAP baseline
+    runs-on: ubuntu-24.04
+    needs: [quality, static-analysis]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Checkout del frontend
+        # Se audita la misma rama objetivo que recibirá este PR (main/develop).
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mendoza-escuela/frontend
+          ref: ${{ github.base_ref }}
+          path: frontend-repo
+
+      - name: Levantar el entorno efímero
+        env:
+          SECURITY_FRONTEND_CONTEXT: ${{ github.workspace }}/frontend-repo
+        run: |
+          ./security/scripts/security-compose.sh --profile full up -d --build
+          bash security/scripts/wait-for-app.sh
+
+      - name: Datos sintéticos
+        run: ./security/scripts/security-compose.sh --profile seed run --rm sec-seed
+
+      - name: Tests de control de acceso, CSRF, CORS y uploads
+        run: ./security/scripts/security-compose.sh --profile tests run --rm sec-tests
+
+      - name: ZAP baseline autenticado
+        run: bash security/scripts/run-dast.sh
+
+      - name: Consolidar resultados
+        if: always()
+        run: bash security/scripts/create-summary.sh --partial --require-group dast
+
+      - name: Publicar resumen
+        if: always()
+        run: cat security/reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Destruir el entorno y sus datos
+        if: always()
+        run: ./security/scripts/security-compose.sh --profile full --profile seed --profile tests down -v

@@ -1,3 +1,4 @@
+import { importFileFilter } from '../../../common/uploads/import-file.filter';
 import {
   Body,
   Controller,
@@ -19,7 +20,7 @@ import { Roles } from '../../../common/decorators/roles.decorator';
 import { PasswordChangeRequiredGuard } from '../../../common/guards/password-change-required.guard';
 import { RolesGuard } from '../../../common/guards/roles.guard';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { JwtAuthGuard } from '../../../common/guards/jwt-auth.guard';
 import { UserRole } from '../entities/user-role.enum';
 import { AdminResetPasswordDto } from '../dto/admin-reset-password.dto';
 import { CreateUserDto } from '../dto/create-user.dto';
@@ -61,6 +62,7 @@ export class AdminUsersController {
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+      fileFilter: importFileFilter,
     }),
   )
   preview(@UploadedFile() file: Express.Multer.File) {
@@ -71,6 +73,7 @@ export class AdminUsersController {
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+      fileFilter: importFileFilter,
     }),
   )
   importUsers(

@@ -1,5 +1,4 @@
-export type SchoolFeatureType =
-  'boolean' | 'string' | 'string_array' | 'number';
+type SchoolFeatureType = 'boolean' | 'string' | 'string_array' | 'number';
 
 export type ApplicabilityFeatureDefinition = {
   key: string;

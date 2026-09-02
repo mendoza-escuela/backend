@@ -12,7 +12,10 @@ import { SurveyVersion } from '../entities/survey-version.entity';
 import { Survey } from '../entities/survey.entity';
 import { SurveyDimension } from '../entities/survey-dimension.entity';
 import { SurveyOption } from '../entities/survey-option.entity';
+import { SurveyQuestion } from '../entities/survey-question.entity';
 import { SurveyQuestionType } from '../entities/survey-question-type.enum';
+import { SurveySection } from '../entities/survey-section.entity';
+import { UpdateSurveyVersionDto } from '../dto/update-survey-version.dto';
 import { AdminSurveysService } from './admin-surveys.service';
 import { SurveyStructureValidator } from './survey-structure-validator.service';
 import { SurveyVersionComparator } from './survey-version-comparator.service';
@@ -24,6 +27,9 @@ import {
   OFFICIAL_SURVEY_DIMENSIONS,
   OfficialSurveyDimensionCode,
 } from '../templates/official-survey-dimensions.template';
+import { InstitutionalSurveyEvaluabilityPolicy } from '../policies/institutional-survey-evaluability.policy';
+import { getApprovedOfficialQuestionScoreSequence } from '../policies/official-survey-scoring.policy';
+import { SurveyVersionCertificationService } from './survey-version-certification.service';
 
 describe('AdminSurveysService', () => {
   const manager = {
@@ -33,6 +39,7 @@ describe('AdminSurveysService', () => {
     findOne: jest.fn(),
     find: jest.fn(),
     save: jest.fn(),
+    update: jest.fn(),
     delete: jest.fn(),
   };
   const dataSource = {
@@ -46,15 +53,50 @@ describe('AdminSurveysService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    const rulesService = {
+      validateRules: jest.fn(() => []),
+    } as unknown as ApplicabilityRulesService;
     service = new AdminSurveysService(
       dataSource as unknown as DataSource,
       validator,
       new SurveyVersionComparator(),
-      {
-        validateRules: jest.fn(() => []),
-      } as unknown as ApplicabilityRulesService,
+      new SurveyVersionCertificationService(
+        validator,
+        rulesService,
+        new InstitutionalSurveyEvaluabilityPolicy(),
+      ),
     );
   });
+
+  function prepareStructureUpdate(current: SurveyVersion) {
+    manager.findOne.mockReset();
+    manager.findOne
+      .mockResolvedValueOnce(current)
+      .mockResolvedValueOnce(current);
+    manager.save.mockReset();
+    manager.save.mockImplementation(
+      (entity: unknown, attributes: Record<string, unknown>) => {
+        if (attributes.id) return attributes;
+        const generatedId =
+          entity === SurveyDimension
+            ? 'new-dimension-id'
+            : entity === SurveySection
+              ? 'new-section-id'
+              : entity === SurveyQuestion
+                ? 'new-question-id'
+                : entity === SurveyOption
+                  ? 'new-option-id'
+                  : 'audit-id';
+        return { ...attributes, id: generatedId };
+      },
+    );
+    manager.update.mockResolvedValue({ affected: 1 });
+    manager.delete.mockResolvedValue({ affected: 1 });
+    jest.spyOn(service, 'findVersion').mockResolvedValue({
+      id: current.id,
+      updatedAt: new Date('2026-01-01T00:00:00.001Z'),
+    } as never);
+  }
 
   it('pagina cuestionarios y sus resúmenes de versión en base de datos', async () => {
     const builder = {
@@ -85,13 +127,18 @@ describe('AdminSurveysService', () => {
         createQueryBuilder: jest.fn(() => builder),
       })),
     } as unknown as DataSource;
+    const rulesService = {
+      validateRules: jest.fn(() => []),
+    } as unknown as ApplicabilityRulesService;
     const listService = new AdminSurveysService(
       listDataSource,
       validator,
       new SurveyVersionComparator(),
-      {
-        validateRules: jest.fn(() => []),
-      } as unknown as ApplicabilityRulesService,
+      new SurveyVersionCertificationService(
+        validator,
+        rulesService,
+        new InstitutionalSurveyEvaluabilityPolicy(),
+      ),
     );
 
     const response = await listService.list({
@@ -120,13 +167,229 @@ describe('AdminSurveysService', () => {
       service.updateVersion(
         'survey-id',
         'version-id',
-        { title: 'Intento', instructions: null, dimensions: [] },
+        {
+          expectedUpdatedAt: '2026-01-01T00:00:00.000Z',
+          title: 'Intento',
+          instructions: null,
+          dimensions: [],
+        },
         actor,
       ),
     ).rejects.toBeInstanceOf(ConflictException);
 
     expect(manager.delete).not.toHaveBeenCalled();
     expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('rechaza una revisión desactualizada dentro del lock sin tocar contenido', async () => {
+    const current = editableVersionWithRule();
+    manager.findOne.mockResolvedValue(current);
+
+    let conflict: unknown;
+    try {
+      await service.updateVersion(
+        current.surveyId,
+        current.id,
+        {
+          ...writeInput(current),
+          expectedUpdatedAt: '2025-12-31T23:59:59.000Z',
+        },
+        actor,
+      );
+    } catch (error) {
+      conflict = error;
+    }
+    expect(conflict).toBeInstanceOf(ConflictException);
+    expect((conflict as ConflictException).getResponse()).toMatchObject({
+      code: 'SURVEY_VERSION_EDIT_CONFLICT',
+    });
+
+    expect(manager.findOne).toHaveBeenCalledWith(
+      SurveyVersion,
+      expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
+    );
+    expect(manager.save).not.toHaveBeenCalled();
+    expect(manager.update).not.toHaveBeenCalled();
+    expect(manager.delete).not.toHaveBeenCalled();
+  });
+
+  it('renombra una pregunta conservando su UUID y sus reglas', async () => {
+    const current = editableVersionWithRule();
+    const input = writeInput(current);
+    input.dimensions[0].sections[0].questions[0].code = 'pregunta_renombrada';
+    prepareStructureUpdate(current);
+
+    await service.updateVersion(current.surveyId, current.id, input, actor);
+
+    expect(manager.save).toHaveBeenCalledWith(
+      SurveyQuestion,
+      expect.objectContaining({
+        id: 'question-id',
+        code: 'pregunta_renombrada',
+      }),
+    );
+    expect(manager.save).not.toHaveBeenCalledWith(
+      SurveyApplicabilityRule,
+      expect.anything(),
+    );
+    expect(manager.delete).not.toHaveBeenCalledWith(
+      SurveyQuestion,
+      expect.anything(),
+    );
+    expect(manager.update).toHaveBeenCalledWith(
+      SurveyVersion,
+      current.id,
+      expect.anything(),
+    );
+    const revisionCall = (
+      manager.update.mock.calls as unknown as Array<[unknown, unknown, unknown]>
+    ).find(([entity, id]) => entity === SurveyVersion && id === current.id);
+    const revisionExpression = revisionCall?.[2] as
+      { updatedAt?: unknown } | undefined;
+    expect(typeof revisionExpression?.updatedAt).toBe('function');
+    if (typeof revisionExpression?.updatedAt === 'function')
+      expect((revisionExpression.updatedAt as () => string)()).toContain(
+        'GREATEST',
+      );
+  });
+
+  it('mueve una pregunta entre secciones sin desvincular sus reglas', async () => {
+    const current = editableVersionWithRule();
+    const firstDimension = current.dimensions[0];
+    firstDimension.sections.push({
+      id: 'section-target-id',
+      dimensionId: firstDimension.id,
+      code: 'destino',
+      title: 'Destino',
+      description: null,
+      order: 1,
+      questions: [],
+    } as SurveySection);
+    const input = writeInput(current);
+    const [movedQuestion] = input.dimensions[0].sections[0].questions.splice(
+      0,
+      1,
+    );
+    input.dimensions[0].sections[1].questions.push(movedQuestion);
+    prepareStructureUpdate(current);
+
+    await service.updateVersion(current.surveyId, current.id, input, actor);
+
+    expect(manager.save).toHaveBeenCalledWith(
+      SurveyQuestion,
+      expect.objectContaining({
+        id: 'question-id',
+        sectionId: 'section-target-id',
+      }),
+    );
+    expect(manager.save).not.toHaveBeenCalledWith(
+      SurveyApplicabilityRule,
+      expect.anything(),
+    );
+    expect(manager.delete).not.toHaveBeenCalledWith(
+      SurveyQuestion,
+      expect.anything(),
+    );
+  });
+
+  it('al eliminar y reutilizar un código crea otra pregunta y no transfiere reglas', async () => {
+    const current = editableVersionWithRule();
+    const input = writeInput(current);
+    input.dimensions[0].sections[0].questions = [
+      {
+        id: null,
+        code: 'pregunta_prueba',
+        type: SurveyQuestionType.SingleChoice,
+        prompt: 'Pregunta nueva con código reutilizado',
+        required: true,
+        validation: {},
+        options: [
+          {
+            id: null,
+            value: 'si',
+            label: 'Sí',
+            score: 100,
+          },
+        ],
+      },
+    ];
+    prepareStructureUpdate(current);
+
+    await service.updateVersion(current.surveyId, current.id, input, actor);
+
+    const newQuestionCall = (
+      manager.save.mock.calls as unknown as Array<[unknown, unknown]>
+    ).find(([entity]) => entity === SurveyQuestion);
+    const newQuestion = newQuestionCall?.[1] as Record<string, unknown>;
+    expect(newQuestion).toEqual(
+      expect.objectContaining({
+        code: 'pregunta_prueba',
+        prompt: 'Pregunta nueva con código reutilizado',
+      }),
+    );
+    expect(newQuestion).not.toHaveProperty('id');
+    expect(manager.save).toHaveBeenCalledWith(
+      SurveyOption,
+      expect.objectContaining({ questionId: 'new-question-id' }),
+    );
+    expect(manager.delete).toHaveBeenCalledWith(SurveyQuestion, [
+      'question-id',
+    ]);
+    expect(manager.save).not.toHaveBeenCalledWith(
+      SurveyApplicabilityRule,
+      expect.anything(),
+    );
+  });
+
+  it('rechaza identidades ajenas o repetidas antes de reconciliar', async () => {
+    const current = editableVersionWithRule();
+    const foreign = writeInput(current);
+    foreign.dimensions[0].sections[0].questions[0].id = 'foreign-question-id';
+    manager.findOne
+      .mockResolvedValueOnce(current)
+      .mockResolvedValueOnce(current);
+
+    let identityConflict: unknown;
+    try {
+      await service.updateVersion(current.surveyId, current.id, foreign, actor);
+    } catch (error) {
+      identityConflict = error;
+    }
+    expect(identityConflict).toBeInstanceOf(ConflictException);
+    expect((identityConflict as ConflictException).getResponse()).toMatchObject(
+      {
+        code: 'SURVEY_STRUCTURE_IDENTITY_CONFLICT',
+      },
+    );
+
+    jest.clearAllMocks();
+    const duplicated = writeInput(current);
+    duplicated.dimensions[0].sections[0].questions.push({
+      ...duplicated.dimensions[0].sections[0].questions[0],
+      code: 'otra_pregunta',
+    });
+    manager.findOne
+      .mockResolvedValueOnce(current)
+      .mockResolvedValueOnce(current);
+
+    await expect(
+      service.updateVersion(current.surveyId, current.id, duplicated, actor),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(manager.update).not.toHaveBeenCalled();
+    expect(manager.delete).not.toHaveBeenCalled();
+
+    jest.clearAllMocks();
+    const legacyPayload = writeInput(current);
+    delete legacyPayload.dimensions[0].sections[0].questions[0].id;
+    manager.findOne
+      .mockResolvedValueOnce(current)
+      .mockResolvedValueOnce(current);
+
+    await expect(
+      service.updateVersion(current.surveyId, current.id, legacyPayload, actor),
+    ).rejects.toThrow('La identidad de cada pregunta debe enviarse');
+    expect(manager.update).not.toHaveBeenCalled();
+    expect(manager.delete).not.toHaveBeenCalled();
   });
 
   it('rechaza publicar un borrador incompleto sin persistir cambios', async () => {
@@ -329,10 +592,16 @@ describe('AdminSurveysService', () => {
       valid: false,
       errors: ['La versión debe contener al menos una dimensión.'],
       counts: { dimensions: 0, sections: 0, questions: 0, options: 0 },
+      profile: 'generic',
+      evaluable: false,
+      evaluationErrors: [
+        'La versión debe contener al menos una dimensión.',
+        'La versión es genérica y no puede utilizarse en campañas institucionales evaluables.',
+      ],
     });
   });
 
-  it('no impone dimensiones, obligatoriedad ni secuencias de puntaje por código', async () => {
+  it('expone las reglas institucionales en validación sin ocultar errores', async () => {
     const repository = {
       findOneBy: jest.fn().mockResolvedValue({ id: 'survey-id' }),
     };
@@ -355,8 +624,63 @@ describe('AdminSurveysService', () => {
 
     const response = await service.validateVersion(draft.surveyId, draft.id);
 
-    expect(response.valid).toBe(true);
-    expect(response.errors).toEqual([]);
+    expect(response.profile).toBe('institutional');
+    expect(response.valid).toBe(false);
+    expect(response.evaluable).toBe(false);
+    expect(response.errors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('seis dimensiones oficiales'),
+        expect.stringContaining('obligatorias'),
+        expect.stringContaining('p001'),
+      ]),
+    );
+    expect(response.evaluationErrors).toEqual(response.errors);
+  });
+
+  it('rechaza publicar una versión institucional con puntajes distintos de los aprobados', async () => {
+    const draft = officialPublishableDraft();
+    const p038 = draft.dimensions
+      .flatMap((dimension) => dimension.sections)
+      .flatMap((section) => section.questions)
+      .find(({ code }) => code === 'p038')!;
+    p038.options.forEach((option, index) => {
+      option.score = [100, 50, 0, 0][index];
+    });
+    manager.findOne
+      .mockResolvedValueOnce({ id: draft.surveyId })
+      .mockResolvedValueOnce(draft)
+      .mockResolvedValueOnce(draft);
+
+    await expect(
+      service.publishVersion(draft.surveyId, draft.id, actor),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(manager.find).not.toHaveBeenCalled();
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('publica una versión institucional con los puntajes aprobados del Excel', async () => {
+    const draft = officialPublishableDraft();
+    manager.findOne
+      .mockResolvedValueOnce({ id: draft.surveyId })
+      .mockResolvedValueOnce(draft)
+      .mockResolvedValueOnce(draft);
+    manager.find.mockResolvedValue([]);
+    manager.save.mockImplementation(
+      (_entity: unknown, value: Record<string, unknown>) => value,
+    );
+    jest
+      .spyOn(service, 'findVersion')
+      .mockResolvedValue({ id: draft.id } as never);
+
+    await service.publishVersion(draft.surveyId, draft.id, actor);
+
+    expect(draft.status).toBe(SurveyVersionStatus.Published);
+    expect(draft.publishedAt).toBeInstanceOf(Date);
+    expect(manager.find).toHaveBeenCalledWith(
+      SurveyVersion,
+      expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
+    );
   });
 
   it('crea un borrador nuevo con las seis dimensiones oficiales por defecto', async () => {
@@ -702,6 +1026,74 @@ function publishableVersion(
   });
 }
 
+function editableVersionWithRule(): SurveyVersion {
+  const editable = publishableVersion();
+  const dimension = editable.dimensions[0];
+  dimension.versionId = editable.id;
+  const section = dimension.sections[0];
+  section.dimensionId = dimension.id;
+  const question = section.questions[0];
+  question.sectionId = section.id;
+  question.options[0].questionId = question.id;
+  question.applicabilityRules = [
+    {
+      id: 'rule-id',
+      questionId: question.id,
+      groupOperator: 'all',
+      action: 'omit',
+      defaultAction: 'show',
+      order: 0,
+      conditions: [
+        {
+          id: 'condition-id',
+          ruleId: 'rule-id',
+          feature: 'has_kiosk',
+          operator: 'equals',
+          expectedValue: true,
+          order: 0,
+        },
+      ],
+    },
+  ] as SurveyQuestion['applicabilityRules'];
+  return editable;
+}
+
+function writeInput(version: SurveyVersion): UpdateSurveyVersionDto {
+  return {
+    expectedUpdatedAt: version.updatedAt.toISOString(),
+    title: version.title,
+    instructions: version.instructions,
+    dimensions: version.dimensions.map((dimension) => ({
+      id: dimension.id,
+      code: dimension.code,
+      title: dimension.title,
+      description: dimension.description,
+      sections: dimension.sections.map((section) => ({
+        id: section.id,
+        code: section.code,
+        title: section.title,
+        description: section.description,
+        questions: section.questions.map((question) => ({
+          id: question.id,
+          code: question.code,
+          type: question.type,
+          prompt: question.prompt,
+          helpText: question.helpText,
+          required: question.required,
+          validation: question.validation,
+          options: question.options.map((option) => ({
+            id: option.id,
+            value: option.value,
+            label: option.label,
+            helpText: option.helpText,
+            score: option.score,
+          })),
+        })),
+      })),
+    })),
+  };
+}
+
 function officialPublishableDraft(): SurveyVersion {
   const dimensions = OFFICIAL_SURVEY_DIMENSIONS.map((definition) => ({
     id: `dimension-${definition.order}`,
@@ -728,6 +1120,9 @@ function officialPublishableDraft(): SurveyVersion {
       ({ code }) => code === String(officialDimensionFor(number)),
     )!;
     const code = `p${String(number).padStart(3, '0')}`;
+    const scores = getApprovedOfficialQuestionScoreSequence(code);
+    if (!scores)
+      throw new Error(`No existe una secuencia oficial para ${code}.`);
     const labels =
       number === 32
         ? [
@@ -735,11 +1130,11 @@ function officialPublishableDraft(): SurveyVersion {
             'Se incluyen de 2 a 3 veces por semana.',
             'Se incluyen una vez por semana.',
           ]
-        : [
-            'Respuesta óptima',
-            'Respuesta intermedia',
-            number === 46 ? 'No se abordan estos temas.' : 'Respuesta inicial',
-          ];
+        : scores.map((_, index) =>
+            number === 46 && index === scores.length - 1
+              ? 'No se abordan estos temas.'
+              : `Respuesta ${index + 1}`,
+          );
     dimension.sections[0].questions.push({
       id: `question-${number}`,
       sectionId: dimension.sections[0].id,
@@ -765,10 +1160,7 @@ function officialPublishableDraft(): SurveyVersion {
             ? 'Se garantiza sistemáticamente 10 minutos para desayuno/merienda y 30 minutos para almuerzo.'
             : label,
         helpText: null,
-        score:
-          dimension.code === String(OfficialSurveyDimensionCode.MentalHealth)
-            ? [100, 66, 0][index]
-            : [100, 50, 0][index],
+        score: scores[index],
         order: index,
       })),
     });

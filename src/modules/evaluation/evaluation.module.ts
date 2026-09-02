@@ -4,6 +4,7 @@ import { AuthModule } from '../auth/auth.module';
 import { SchoolsModule } from '../schools/schools.module';
 import { EvaluationConfigModule } from '../evaluation-config/evaluation-config.module';
 import { CampaignSchool } from '../campaigns/entities/campaign-school.entity';
+import { Campaign } from '../campaigns/entities/campaign.entity';
 import { SurveyAnswer } from '../submissions/entities/survey-answer.entity';
 import { SurveySubmission } from '../submissions/entities/survey-submission.entity';
 import { SubmissionQuestionApplicability } from '../submissions/entities/submission-question-applicability.entity';
@@ -24,6 +25,7 @@ import { KioskApplicabilityDataRepairService } from './services/kiosk-applicabil
   imports: [
     TypeOrmModule.forFeature([
       EvaluationResult,
+      Campaign,
       CampaignSchool,
       EvaluationDimensionResult,
       SurveySubmission,

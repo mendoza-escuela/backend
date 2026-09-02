@@ -1,0 +1,106 @@
+# Configuración de Gitleaks para los repositorios del proyecto.
+#
+# Extiende el conjunto de reglas por defecto (que ya cubre claves privadas,
+# tokens de GitHub, credenciales de AWS/GCP, JWT, etc.) y agrega las reglas
+# propias del proyecto.
+#
+# IMPORTANTE: la allowlist de este archivo se limita a valores sintéticos que
+# NO son secretos: credenciales de un entorno efímero que se destruye en cada
+# ejecución y placeholders de documentación. Cualquier otra supresión exige una
+# entrada en security/exceptions/security-exceptions.yml.
+
+title = "Escuelas Promotoras - Gitleaks"
+
+[extend]
+useDefault = true
+
+# -----------------------------------------------------------------------------
+# Reglas propias: nombres de variables sensibles de esta aplicación
+# -----------------------------------------------------------------------------
+
+[[rules]]
+id = "mendoza-jwt-secret"
+description = "JWT_SECRET con valor asignado"
+regex = '''(?i)JWT_SECRET\s*[:=]\s*['"]?([A-Za-z0-9+/_\-=]{16,})['"]?'''
+tags = ["secret", "jwt", "mendoza"]
+[rules.allowlist]
+regexTarget = "match"
+regexes = [
+  '''(?i)(change_me|changeme|CAMBIAR|placeholder|example|ejemplo|your[_-]?secret)''',
+  '''ci-ephemeral-jwt-secret-not-used-in-production''',
+]
+
+[[rules]]
+id = "mendoza-database-password"
+description = "Contraseña de base de datos con valor asignado"
+regex = '''(?i)(DATABASE_PASSWORD|POSTGRES_PASSWORD)\s*[:=]\s*['"]?([^\s'"$#{}]{8,})['"]?'''
+tags = ["secret", "database", "mendoza"]
+[rules.allowlist]
+regexTarget = "match"
+regexes = [
+  '''(?i)(change_me|changeme|CAMBIAR|placeholder|example|ejemplo)''',
+  '''ci-ephemeral-not-a-secret''',
+  # Valor sintetico de los workflows: el job de tests unitarios no tiene base
+  # de datos, la variable existe solo porque AppModule valida el entorno.
+  '''ci-unit-tests-not-a-secret''',
+]
+
+[[rules]]
+id = "mendoza-smtp-password"
+description = "Credencial SMTP con valor asignado"
+regex = '''(?i)SMTP_(PASSWORD|USER)\s*[:=]\s*['"]?([^\s'"$#{}]{6,})['"]?'''
+tags = ["secret", "smtp", "mendoza"]
+[rules.allowlist]
+regexTarget = "match"
+regexes = [
+  '''(?i)(change_me|changeme|CAMBIAR|placeholder|example|ejemplo)''',
+]
+
+[[rules]]
+id = "mendoza-database-url"
+description = "Cadena de conexión PostgreSQL con credenciales embebidas"
+regex = '''postgres(ql)?://[^:\s]+:[^@\s]{4,}@[^\s'"]+'''
+tags = ["secret", "database", "mendoza"]
+[rules.allowlist]
+# regexTarget = "match" evalúa la coincidencia COMPLETA. Sin esto, gitleaks
+# compara sólo contra el secreto extraído y los placeholders de documentación
+# no se filtran (falso positivo detectado en la primera corrida sobre
+# docs/campaign-tracking.md:137).
+regexTarget = "match"
+regexes = [
+  '''(?i)(change_me|changeme|user:password|usuario:contrase|localhost:5432/base_prueba)''',
+  # TEST_DATABASE_URL del entorno efimero: apunta al contenedor sec-db, que
+  # solo existe dentro de la red interna del compose de seguridad y se destruye
+  # con `down -v`. La contrasena es la sintetica ya declarada arriba.
+  '''@sec-db:5432''',
+]
+
+# -----------------------------------------------------------------------------
+# Allowlist global — sólo valores demostrablemente no secretos
+# -----------------------------------------------------------------------------
+[allowlist]
+description = "Valores sintéticos, plantillas y documentación"
+
+paths = [
+  # Plantillas: existen justamente para mostrar la forma de cada variable.
+  '''\.env\.example$''',
+  # Reportes generados por las propias herramientas (ya vienen redactados).
+  '''security/reports/.*''',
+  # Este archivo contiene los patrones de detección, no secretos.
+  '''security/config/gitleaks\.toml$''',
+]
+
+regexes = [
+  # Credenciales del entorno efímero de CI: la base se destruye en cada corrida
+  # y estos valores no dan acceso a ningún sistema real.
+  '''ci-ephemeral-not-a-secret''',
+  '''ci-ephemeral-jwt-secret-not-used-in-production-0123456789''',
+  '''CiSynthetic#(Admin|School|SchoolB)2026''',
+  # Valores sintéticos declarados en los workflows para que los tests unitarios
+  # puedan importar AppModule, que valida el entorno al cargarse. En ese job no
+  # hay base de datos ni servicio alguno: no dan acceso a nada.
+  # Detectados por las propias reglas del proyecto en la validación final, lo
+  # que confirma que el escaneo de secretos funciona.
+  '''ci-unit-tests-secret-not-used-anywhere-0123456789''',
+  '''ci-unit-tests-not-a-secret''',
+]

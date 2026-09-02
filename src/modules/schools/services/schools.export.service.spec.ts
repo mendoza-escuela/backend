@@ -120,4 +120,25 @@ describe('SchoolsService registry export', () => {
     expect(sheet?.getCell('U2').text).toBe('');
     expect(sheet?.getCell('Y2').text).toBe('12/08/2026 15:35:42');
   });
+
+  it('neutraliza fórmulas tras BOM/controles y conserva escaping CSV/XLSX', async () => {
+    const originalName = school.name;
+    school.name = '\uFEFF\t=CMD("x")\r\nlínea 2';
+
+    try {
+      const csv = await service.export(query, 'csv', actor);
+      expect(csv.buffer.toString('utf8')).toContain(
+        '"\'\uFEFF\t=CMD(""x"")\r\nlínea 2"',
+      );
+
+      const xlsx = await service.export(query, 'xlsx', actor);
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(xlsx.buffer as unknown as ArrayBuffer);
+      expect(workbook.getWorksheet('Padrón')?.getCell('B2').text).toBe(
+        '\'\uFEFF\t=CMD("x")\nlínea 2',
+      );
+    } finally {
+      school.name = originalName;
+    }
+  });
 });

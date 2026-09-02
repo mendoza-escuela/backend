@@ -16,6 +16,9 @@ import { ListSurveysQueryDto } from '../dto/list-surveys-query.dto';
 import { ImportSurveyVersionDto } from '../dto/import-survey-version.dto';
 import {
   SurveyDimensionInputDto,
+  SurveyOptionInputDto,
+  SurveyQuestionInputDto,
+  SurveySectionInputDto,
   UpdateSurveyVersionDto,
 } from '../dto/update-survey-version.dto';
 import { UpdateSurveyDto } from '../dto/update-survey.dto';
@@ -38,7 +41,7 @@ import { SurveyStructureValidator } from './survey-structure-validator.service';
 import { SurveyVersionComparator } from './survey-version-comparator.service';
 import { SurveyApplicabilityRule } from '../entities/survey-applicability-rule.entity';
 import { SurveyApplicabilityCondition } from '../entities/survey-applicability-condition.entity';
-import { ApplicabilityRulesService } from './applicability-rules.service';
+import { SurveyVersionCertificationService } from './survey-version-certification.service';
 
 @Injectable()
 export class AdminSurveysService {
@@ -46,7 +49,7 @@ export class AdminSurveysService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly structureValidator: SurveyStructureValidator,
     private readonly comparator: SurveyVersionComparator,
-    private readonly applicabilityRules: ApplicabilityRulesService,
+    private readonly versionCertification: SurveyVersionCertificationService,
   ) {}
 
   async list(query: ListSurveysQueryDto) {
@@ -411,18 +414,23 @@ export class AdminSurveysService {
     await this.dataSource.transaction(async (manager) => {
       const version = await this.getLockedVersion(manager, surveyId, versionId);
       this.assertDraft(version);
+      this.assertExpectedRevision(version, dto.expectedUpdatedAt);
       const beforeVersion = await this.getVersionWithContent(
         surveyId,
         versionId,
         manager,
       );
+      this.assertStableStructureIdentity(dto.dimensions, beforeVersion);
       const beforeCounts = this.structureCounts(beforeVersion);
       version.title = dto.title.trim();
       version.instructions = this.nullable(dto.instructions);
       await manager.save(SurveyVersion, version);
-      await manager.delete(SurveyDimension, { versionId });
-      await this.persistStructure(manager, versionId, dto.dimensions);
-      await this.cloneApplicabilityRules(manager, beforeVersion, versionId);
+      await this.reconcileStructure(
+        manager,
+        versionId,
+        dto.dimensions,
+        beforeVersion,
+      );
       await this.audit(
         manager,
         actor.id,
@@ -436,6 +444,7 @@ export class AdminSurveysService {
           afterCounts: this.inputCounts(dto.dimensions),
         },
       );
+      await this.bumpVersionRevision(manager, versionId);
     });
     return this.findVersion(surveyId, versionId);
   }
@@ -459,21 +468,11 @@ export class AdminSurveysService {
           versionId,
           manager,
         );
-        const versionInput = this.versionToInput(withContent);
-        this.structureValidator.validate(versionInput, true);
-        const applicabilityErrors = this.applicabilityRules.validateRules(
-          withContent.dimensions.flatMap((dimension) =>
-            dimension.sections.flatMap((section) =>
-              section.questions.flatMap(
-                (question) => question.applicabilityRules ?? [],
-              ),
-            ),
-          ),
-        );
-        if (applicabilityErrors.length)
+        const certification = this.versionCertification.certify(withContent);
+        if (!certification.valid)
           throw new BadRequestException({
-            message: 'Las reglas de aplicabilidad contienen errores.',
-            errors: applicabilityErrors,
+            message: certification.errors[0],
+            errors: certification.errors,
           });
 
         const publishedVersions = await manager.find(SurveyVersion, {
@@ -573,23 +572,14 @@ export class AdminSurveysService {
   async validateVersion(surveyId: string, versionId: string) {
     await this.getSurvey(surveyId);
     const version = await this.getVersionWithContent(surveyId, versionId);
-    const versionInput = this.versionToInput(version);
-    const errors = this.structureValidator.inspect(versionInput, true);
-    errors.push(
-      ...this.applicabilityRules.validateRules(
-        version.dimensions.flatMap((dimension) =>
-          dimension.sections.flatMap((section) =>
-            section.questions.flatMap(
-              (question) => question.applicabilityRules ?? [],
-            ),
-          ),
-        ),
-      ),
-    );
+    const certification = this.versionCertification.certify(version);
     return {
-      valid: errors.length === 0,
-      errors,
+      valid: certification.valid,
+      errors: certification.errors,
       counts: this.structureCounts(version),
+      profile: certification.profile,
+      evaluable: certification.evaluable,
+      evaluationErrors: certification.evaluationErrors,
     };
   }
 
@@ -693,6 +683,20 @@ export class AdminSurveysService {
       );
   }
 
+  private assertExpectedRevision(
+    version: SurveyVersion,
+    expectedUpdatedAt: string,
+  ) {
+    if (new Date(expectedUpdatedAt).getTime() === version.updatedAt.getTime())
+      return;
+    throw new ConflictException({
+      code: 'SURVEY_VERSION_EDIT_CONFLICT',
+      message:
+        'Otra persona modificó esta versión mientras la estabas editando. Tus cambios no se guardaron; cargá la versión actual antes de continuar.',
+      currentUpdatedAt: version.updatedAt.toISOString(),
+    });
+  }
+
   private async persistStructure(
     manager: EntityManager,
     versionId: string,
@@ -758,6 +762,314 @@ export class AdminSurveysService {
         }
       }
     }
+  }
+
+  /**
+   * Conserva los UUID de la estructura durante renombres, movimientos y
+   * reordenamientos. Las reglas quedan vinculadas a la identidad de la
+   * pregunta y nunca se vuelven a asociar por códigos editables.
+   */
+  private async reconcileStructure(
+    manager: EntityManager,
+    versionId: string,
+    dimensions: SurveyDimensionInputDto[],
+    currentVersion: SurveyVersion,
+  ) {
+    const current = this.indexStructure(currentVersion);
+    await this.stageStructureUniqueValues(manager, currentVersion);
+
+    const retainedDimensionIds = new Set<string>();
+    const retainedSectionIds = new Set<string>();
+    const retainedQuestionIds = new Set<string>();
+    const retainedOptionIds = new Set<string>();
+
+    for (const [dimensionOrder, input] of dimensions.entries()) {
+      const dimension = input.id
+        ? current.dimensions.get(input.id)!
+        : manager.create(SurveyDimension, { versionId });
+      if (input.id) retainedDimensionIds.add(input.id);
+      Object.assign(dimension, {
+        versionId,
+        code: this.normalizeCode(input.code),
+        title: input.title.trim(),
+        description: this.nullable(input.description),
+        order: dimensionOrder,
+      });
+      const savedDimension = await manager.save(SurveyDimension, dimension);
+      await this.reconcileSections(
+        manager,
+        savedDimension.id,
+        input.sections,
+        current,
+        retainedSectionIds,
+        retainedQuestionIds,
+        retainedOptionIds,
+      );
+    }
+
+    const removedOptionIds = this.missingIds(
+      current.options,
+      retainedOptionIds,
+    );
+    if (removedOptionIds.length)
+      await manager.delete(SurveyOption, removedOptionIds);
+    const removedQuestionIds = this.missingIds(
+      current.questions,
+      retainedQuestionIds,
+    );
+    if (removedQuestionIds.length)
+      await manager.delete(SurveyQuestion, removedQuestionIds);
+    const removedSectionIds = this.missingIds(
+      current.sections,
+      retainedSectionIds,
+    );
+    if (removedSectionIds.length)
+      await manager.delete(SurveySection, removedSectionIds);
+    const removedDimensionIds = this.missingIds(
+      current.dimensions,
+      retainedDimensionIds,
+    );
+    if (removedDimensionIds.length)
+      await manager.delete(SurveyDimension, removedDimensionIds);
+  }
+
+  private async reconcileSections(
+    manager: EntityManager,
+    dimensionId: string,
+    sections: SurveySectionInputDto[],
+    current: ReturnType<AdminSurveysService['indexStructure']>,
+    retainedSectionIds: Set<string>,
+    retainedQuestionIds: Set<string>,
+    retainedOptionIds: Set<string>,
+  ) {
+    for (const [sectionOrder, input] of sections.entries()) {
+      const section = input.id
+        ? current.sections.get(input.id)!
+        : manager.create(SurveySection, { dimensionId });
+      if (input.id) retainedSectionIds.add(input.id);
+      Object.assign(section, {
+        dimensionId,
+        code: this.normalizeCode(input.code),
+        title: input.title.trim(),
+        description: this.nullable(input.description),
+        order: sectionOrder,
+      });
+      const savedSection = await manager.save(SurveySection, section);
+      await this.reconcileQuestions(
+        manager,
+        savedSection.id,
+        input.questions,
+        current,
+        retainedQuestionIds,
+        retainedOptionIds,
+      );
+    }
+  }
+
+  private async reconcileQuestions(
+    manager: EntityManager,
+    sectionId: string,
+    questions: SurveyQuestionInputDto[],
+    current: ReturnType<AdminSurveysService['indexStructure']>,
+    retainedQuestionIds: Set<string>,
+    retainedOptionIds: Set<string>,
+  ) {
+    for (const [questionOrder, input] of questions.entries()) {
+      const question = input.id
+        ? current.questions.get(input.id)!
+        : manager.create(SurveyQuestion, { sectionId });
+      if (input.id) retainedQuestionIds.add(input.id);
+      Object.assign(question, {
+        sectionId,
+        code: this.normalizeCode(input.code),
+        type: input.type,
+        prompt: input.prompt.trim(),
+        helpText: this.nullable(input.helpText),
+        required: input.required,
+        order: questionOrder,
+        validation: input.validation ?? {},
+      });
+      const savedQuestion = await manager.save(SurveyQuestion, question);
+      await this.reconcileOptions(
+        manager,
+        savedQuestion.id,
+        input.options,
+        current,
+        retainedOptionIds,
+      );
+    }
+  }
+
+  private async reconcileOptions(
+    manager: EntityManager,
+    questionId: string,
+    options: SurveyOptionInputDto[],
+    current: ReturnType<AdminSurveysService['indexStructure']>,
+    retainedOptionIds: Set<string>,
+  ) {
+    for (const [optionOrder, input] of options.entries()) {
+      const option = input.id
+        ? current.options.get(input.id)!
+        : manager.create(SurveyOption, { questionId });
+      if (input.id) retainedOptionIds.add(input.id);
+      Object.assign(option, {
+        questionId,
+        value: this.normalizeCode(input.value),
+        label: input.label.trim(),
+        helpText: this.nullable(input.helpText),
+        score: input.score ?? null,
+        order: optionOrder,
+      });
+      await manager.save(SurveyOption, option);
+    }
+  }
+
+  private assertStableStructureIdentity(
+    dimensions: SurveyDimensionInputDto[],
+    currentVersion: SurveyVersion,
+  ) {
+    const current = this.indexStructure(currentVersion);
+    const used = {
+      dimensions: new Set<string>(),
+      sections: new Set<string>(),
+      questions: new Set<string>(),
+      options: new Set<string>(),
+    };
+    for (const dimension of dimensions) {
+      this.assertStableId(
+        dimension,
+        'dimensión',
+        current.dimensions,
+        used.dimensions,
+      );
+      for (const section of dimension.sections) {
+        this.assertStableId(
+          section,
+          'sección',
+          current.sections,
+          used.sections,
+        );
+        for (const question of section.questions) {
+          this.assertStableId(
+            question,
+            'pregunta',
+            current.questions,
+            used.questions,
+          );
+          for (const option of question.options)
+            this.assertStableId(
+              option,
+              'opción',
+              current.options,
+              used.options,
+            );
+        }
+      }
+    }
+  }
+
+  private assertStableId<T extends { id?: string | null }>(
+    input: T,
+    label: string,
+    current: Map<string, unknown>,
+    used: Set<string>,
+  ) {
+    if (!Object.prototype.hasOwnProperty.call(input, 'id'))
+      throw new BadRequestException(
+        `La identidad de cada ${label} debe enviarse explícitamente: usá su UUID si ya existe o null si es nueva. No se aplicó ningún cambio.`,
+      );
+    if (input.id === null) return;
+    if (!input.id || !current.has(input.id))
+      throw new ConflictException({
+        code: 'SURVEY_STRUCTURE_IDENTITY_CONFLICT',
+        message: `La ${label} indicada ya no pertenece a esta versión. Recargá el editor antes de guardar.`,
+      });
+    if (used.has(input.id))
+      throw new BadRequestException(
+        `La identidad de la ${label} está repetida en la estructura enviada.`,
+      );
+    used.add(input.id);
+  }
+
+  private indexStructure(version: SurveyVersion) {
+    const dimensions = new Map<string, SurveyDimension>();
+    const sections = new Map<string, SurveySection>();
+    const questions = new Map<string, SurveyQuestion>();
+    const options = new Map<string, SurveyOption>();
+    for (const dimension of version.dimensions) {
+      dimensions.set(dimension.id, dimension);
+      for (const section of dimension.sections) {
+        sections.set(section.id, section);
+        for (const question of section.questions) {
+          questions.set(question.id, question);
+          for (const option of question.options) options.set(option.id, option);
+        }
+      }
+    }
+    return { dimensions, sections, questions, options };
+  }
+
+  private async stageStructureUniqueValues(
+    manager: EntityManager,
+    version: SurveyVersion,
+  ) {
+    const indexed = this.indexStructure(version);
+    await this.stageEntities(
+      manager,
+      SurveyDimension,
+      [...indexed.dimensions.values()],
+      'code',
+    );
+    await this.stageEntities(
+      manager,
+      SurveySection,
+      [...indexed.sections.values()],
+      'code',
+    );
+    await this.stageEntities(
+      manager,
+      SurveyQuestion,
+      [...indexed.questions.values()],
+      'code',
+    );
+    await this.stageEntities(
+      manager,
+      SurveyOption,
+      [...indexed.options.values()],
+      'value',
+    );
+  }
+
+  private async stageEntities<T extends { id: string; order: number }>(
+    manager: EntityManager,
+    entity: new () => T,
+    entries: T[],
+    codeField: 'code' | 'value',
+  ) {
+    const highestOrder = entries.reduce(
+      (highest, entry) => Math.max(highest, entry.order),
+      -1,
+    );
+    if (highestOrder + entries.length >= 2_147_483_647)
+      throw new ConflictException(
+        'No se puede reordenar una estructura con índices fuera del rango soportado.',
+      );
+    for (const [index, entry] of entries.entries())
+      await manager.update(entity, entry.id, {
+        [codeField]: `tmp_${randomUUID().replaceAll('-', '')}`,
+        order: highestOrder + index + 1,
+      } as never);
+  }
+
+  private missingIds<T>(current: Map<string, T>, retained: Set<string>) {
+    return [...current.keys()].filter((id) => !retained.has(id));
+  }
+
+  private bumpVersionRevision(manager: EntityManager, versionId: string) {
+    return manager.update(SurveyVersion, versionId, {
+      updatedAt: () =>
+        `GREATEST(clock_timestamp(), "updated_at" + interval '1 millisecond')`,
+    });
   }
 
   private async cloneApplicabilityRules(
@@ -1005,19 +1317,6 @@ export class AdminSurveysService {
         0,
       ),
     };
-  }
-
-  private async loadCounts(
-    manager: EntityManager,
-    surveyId: string,
-    versionId: string,
-  ) {
-    const version = await this.getVersionWithContent(
-      surveyId,
-      versionId,
-      manager,
-    );
-    return this.structureCounts(version);
   }
 
   private versionSummary(version: SurveyVersion) {

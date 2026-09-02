@@ -14,8 +14,10 @@ import {
 import { EducationLevelCatalog } from '../../schools/entities/education-level-catalog.entity';
 import { SchoolShiftCatalog } from '../../schools/entities/school-shift-catalog.entity';
 import {
+  ApplicabilityRuleDefinitionDto,
   BulkCreateApplicabilityRuleDto,
   ReorderApplicabilityRulesDto,
+  SurveyVersionRevisionDto,
   WriteApplicabilityRuleDto,
 } from '../dto/applicability-rule.dto';
 import { SurveyApplicabilityCondition } from '../entities/survey-applicability-condition.entity';
@@ -75,22 +77,32 @@ export class ApplicabilityRulesService {
   }
 
   async list(surveyId: string, versionId: string, questionId?: string) {
-    await this.assertVersion(surveyId, versionId);
-    const repository = this.dataSource.getRepository(SurveyApplicabilityRule);
-    return repository
-      .createQueryBuilder('rule')
-      .innerJoinAndSelect('rule.question', 'question')
-      .innerJoin('question.section', 'section')
-      .innerJoin('section.dimension', 'dimension')
-      .leftJoinAndSelect('rule.conditions', 'condition')
-      .where('dimension.version_id = :versionId', { versionId })
-      .andWhere(questionId ? 'question.id = :questionId' : 'TRUE', {
-        questionId,
-      })
-      .orderBy('question.order', 'ASC')
-      .addOrderBy('rule.order', 'ASC')
-      .addOrderBy('condition.order', 'ASC')
-      .getMany();
+    return this.dataSource.transaction(async (manager) => {
+      const version = await manager.findOne(SurveyVersion, {
+        where: { id: versionId, surveyId },
+        lock: { mode: 'pessimistic_read' },
+      });
+      if (!version) throw new NotFoundException('Versión no encontrada.');
+      const rules = await manager
+        .getRepository(SurveyApplicabilityRule)
+        .createQueryBuilder('rule')
+        .innerJoinAndSelect('rule.question', 'question')
+        .innerJoin('question.section', 'section')
+        .innerJoin('section.dimension', 'dimension')
+        .leftJoinAndSelect('rule.conditions', 'condition')
+        .where('dimension.version_id = :versionId', { versionId })
+        .andWhere(questionId ? 'question.id = :questionId' : 'TRUE', {
+          questionId,
+        })
+        .orderBy('question.order', 'ASC')
+        .addOrderBy('rule.order', 'ASC')
+        .addOrderBy('condition.order', 'ASC')
+        .getMany();
+      return {
+        rules,
+        versionUpdatedAt: version.updatedAt.toISOString(),
+      };
+    });
   }
 
   async create(
@@ -101,12 +113,13 @@ export class ApplicabilityRulesService {
     actor: AuthenticatedUser,
   ) {
     return this.dataSource.transaction(async (manager) => {
-      await this.assertMutableQuestion(
+      const version = await this.assertMutableQuestion(
         manager,
         surveyId,
         versionId,
         questionId,
       );
+      this.assertExpectedRevision(version, dto.expectedUpdatedAt);
       this.validate(dto);
       await this.assertDefaultAction(manager, questionId, dto.defaultAction);
       const rule = await manager.save(
@@ -131,7 +144,11 @@ export class ApplicabilityRulesService {
           questionId,
         },
       );
-      return this.findRule(manager, rule.id);
+      const versionUpdatedAt = await this.touchVersion(manager, versionId);
+      return {
+        rule: await this.findRule(manager, rule.id),
+        versionUpdatedAt,
+      };
     });
   }
 
@@ -149,13 +166,27 @@ export class ApplicabilityRulesService {
   ) {
     return this.dataSource.transaction(async (manager) => {
       this.validate(dto.rule);
-      for (const questionId of dto.questionIds) {
+      const [firstQuestionId, ...remainingQuestionIds] = dto.questionIds;
+      if (dto.questionIds.length < 2 || !firstQuestionId)
+        throw new BadRequestException(
+          'Seleccioná al menos dos preguntas para crear reglas.',
+        );
+      const version = await this.assertMutableQuestion(
+        manager,
+        surveyId,
+        versionId,
+        firstQuestionId,
+      );
+      this.assertExpectedRevision(version, dto.expectedUpdatedAt);
+      for (const questionId of remainingQuestionIds) {
         await this.assertMutableQuestion(
           manager,
           surveyId,
           versionId,
           questionId,
         );
+      }
+      for (const questionId of dto.questionIds) {
         await this.assertDefaultAction(
           manager,
           questionId,
@@ -194,9 +225,13 @@ export class ApplicabilityRulesService {
           createdRuleIds,
         },
       );
-      return Promise.all(
-        createdRuleIds.map((ruleId) => this.findRule(manager, ruleId)),
-      );
+      const versionUpdatedAt = await this.touchVersion(manager, versionId);
+      return {
+        rules: await Promise.all(
+          createdRuleIds.map((ruleId) => this.findRule(manager, ruleId)),
+        ),
+        versionUpdatedAt,
+      };
     });
   }
 
@@ -209,12 +244,13 @@ export class ApplicabilityRulesService {
     actor: AuthenticatedUser,
   ) {
     return this.dataSource.transaction(async (manager) => {
-      await this.assertMutableQuestion(
+      const version = await this.assertMutableQuestion(
         manager,
         surveyId,
         versionId,
         questionId,
       );
+      this.assertExpectedRevision(version, dto.expectedUpdatedAt);
       const rule = await this.findRule(manager, ruleId);
       if (rule.questionId !== questionId)
         throw new NotFoundException('Regla no encontrada para la pregunta.');
@@ -245,7 +281,11 @@ export class ApplicabilityRulesService {
           questionId,
         },
       );
-      return this.findRule(manager, ruleId);
+      const versionUpdatedAt = await this.touchVersion(manager, versionId);
+      return {
+        rule: await this.findRule(manager, ruleId),
+        versionUpdatedAt,
+      };
     });
   }
 
@@ -254,15 +294,17 @@ export class ApplicabilityRulesService {
     versionId: string,
     questionId: string,
     ruleId: string,
+    dto: SurveyVersionRevisionDto,
     actor: AuthenticatedUser,
   ) {
-    await this.dataSource.transaction(async (manager) => {
-      await this.assertMutableQuestion(
+    return this.dataSource.transaction(async (manager) => {
+      const version = await this.assertMutableQuestion(
         manager,
         surveyId,
         versionId,
         questionId,
       );
+      this.assertExpectedRevision(version, dto.expectedUpdatedAt);
       const rule = await this.findRule(manager, ruleId);
       if (rule.questionId !== questionId)
         throw new NotFoundException('Regla no encontrada para la pregunta.');
@@ -278,6 +320,9 @@ export class ApplicabilityRulesService {
           questionId,
         },
       );
+      return {
+        versionUpdatedAt: await this.touchVersion(manager, versionId),
+      };
     });
   }
 
@@ -288,13 +333,14 @@ export class ApplicabilityRulesService {
     dto: ReorderApplicabilityRulesDto,
     actor: AuthenticatedUser,
   ) {
-    await this.dataSource.transaction(async (manager) => {
-      await this.assertMutableQuestion(
+    return this.dataSource.transaction(async (manager) => {
+      const version = await this.assertMutableQuestion(
         manager,
         surveyId,
         versionId,
         questionId,
       );
+      this.assertExpectedRevision(version, dto.expectedUpdatedAt);
       const rules = await manager.findBy(SurveyApplicabilityRule, {
         questionId,
       });
@@ -318,8 +364,12 @@ export class ApplicabilityRulesService {
         questionId,
         { surveyId, versionId, ruleIds: dto.ruleIds },
       );
+      const versionUpdatedAt = await this.touchVersion(manager, versionId);
+      return {
+        rules: await this.findQuestionRules(manager, questionId),
+        versionUpdatedAt,
+      };
     });
-    return this.list(surveyId, versionId, questionId);
   }
 
   async preview(
@@ -329,7 +379,7 @@ export class ApplicabilityRulesService {
     schoolId: string,
   ) {
     const periodYear = this.currentPeriodYear();
-    const [rules, rectification] = await Promise.all([
+    const [ruleSnapshot, rectification] = await Promise.all([
       this.list(surveyId, versionId, questionId),
       this.dataSource.getRepository(SchoolRectification).findOne({
         where: { schoolId, periodYear },
@@ -341,7 +391,7 @@ export class ApplicabilityRulesService {
         `La escuela no tiene una rectificación confirmada para ${periodYear}.`,
       );
     return this.engine.evaluate(
-      rules,
+      ruleSnapshot.rules,
       this.factsFromSnapshot(rectification.snapshot),
     );
   }
@@ -405,7 +455,7 @@ export class ApplicabilityRulesService {
     return errors;
   }
 
-  private validate(dto: WriteApplicabilityRuleDto) {
+  private validate(dto: ApplicabilityRuleDefinitionDto) {
     if (!dto.conditions.length)
       throw new BadRequestException('Cada regla debe tener condiciones.');
     const orders = new Set<number>();
@@ -441,24 +491,22 @@ export class ApplicabilityRulesService {
     }
   }
 
-  private async assertVersion(surveyId: string, versionId: string) {
-    const version = await this.dataSource
-      .getRepository(SurveyVersion)
-      .createQueryBuilder('version')
-      .where('version.id = :versionId AND version.survey_id = :surveyId', {
-        versionId,
-        surveyId,
-      })
-      .getOne();
-    if (!version) throw new NotFoundException('Versión no encontrada.');
-  }
-
   private async assertMutableQuestion(
     manager: EntityManager,
     surveyId: string,
     versionId: string,
     questionId: string,
   ) {
+    const version = await manager.findOne(SurveyVersion, {
+      where: { id: versionId, surveyId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!version) throw new NotFoundException('Versión no encontrada.');
+    if (version.status !== SurveyVersionStatus.Draft)
+      throw new ConflictException(
+        'Las reglas sólo pueden modificarse en versiones borrador.',
+      );
+
     const question = await manager
       .getRepository(SurveyQuestion)
       .createQueryBuilder('question')
@@ -470,17 +518,37 @@ export class ApplicabilityRulesService {
         versionId,
         surveyId,
       })
-      .select(['question.id', 'version.status'])
-      .getRawOne<{
-        question_id: string;
-        version_status: SurveyVersionStatus;
-      }>();
+      .select(['question.id'])
+      .getRawOne<{ question_id: string }>();
     if (!question)
       throw new NotFoundException('Pregunta no encontrada en la versión.');
-    if (question.version_status !== SurveyVersionStatus.Draft)
-      throw new ConflictException(
-        'Las reglas sólo pueden modificarse en versiones borrador.',
-      );
+    return version;
+  }
+
+  private assertExpectedRevision(
+    version: SurveyVersion,
+    expectedUpdatedAt: string,
+  ) {
+    if (new Date(expectedUpdatedAt).getTime() === version.updatedAt.getTime())
+      return;
+    throw new ConflictException({
+      code: 'SURVEY_VERSION_EDIT_CONFLICT',
+      message:
+        'Otra persona modificó esta versión mientras la estabas editando. Tus cambios no se guardaron; cargá la versión actual antes de continuar.',
+      currentUpdatedAt: version.updatedAt.toISOString(),
+    });
+  }
+
+  private async touchVersion(manager: EntityManager, versionId: string) {
+    await manager.update(SurveyVersion, versionId, {
+      updatedAt: () =>
+        `GREATEST(clock_timestamp(), "updated_at" + interval '1 millisecond')`,
+    });
+    const updatedVersion = await manager.findOneBy(SurveyVersion, {
+      id: versionId,
+    });
+    if (!updatedVersion) throw new NotFoundException('Versión no encontrada.');
+    return updatedVersion.updatedAt.toISOString();
   }
 
   private async assertDefaultAction(
@@ -502,7 +570,7 @@ export class ApplicabilityRulesService {
   private saveConditions(
     manager: EntityManager,
     ruleId: string,
-    dto: WriteApplicabilityRuleDto,
+    dto: ApplicabilityRuleDefinitionDto,
   ) {
     return manager.save(
       SurveyApplicabilityCondition,
@@ -520,6 +588,14 @@ export class ApplicabilityRulesService {
     });
     if (!rule) throw new NotFoundException('Regla no encontrada.');
     return rule;
+  }
+
+  private findQuestionRules(manager: EntityManager, questionId: string) {
+    return manager.find(SurveyApplicabilityRule, {
+      where: { questionId },
+      relations: { conditions: true },
+      order: { order: 'ASC', conditions: { order: 'ASC' } },
+    });
   }
 
   /**

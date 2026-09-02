@@ -1,3 +1,4 @@
+import { importFileFilter } from '../../../common/uploads/import-file.filter';
 import {
   Body,
   Controller,
@@ -21,7 +22,7 @@ import { Roles } from '../../../common/decorators/roles.decorator';
 import { PasswordChangeRequiredGuard } from '../../../common/guards/password-change-required.guard';
 import { RolesGuard } from '../../../common/guards/roles.guard';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { JwtAuthGuard } from '../../../common/guards/jwt-auth.guard';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { AssignSchoolUserDto } from '../dto/assign-school-user.dto';
 import { AdminRectifySchoolDto } from '../dto/admin-rectify-school.dto';
@@ -61,6 +62,7 @@ export class AdminSchoolsController {
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+      fileFilter: importFileFilter,
     }),
   )
   preview(@UploadedFile() file: Express.Multer.File) {
@@ -70,6 +72,7 @@ export class AdminSchoolsController {
   @UseInterceptors(
     FileInterceptor('file', {
       limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+      fileFilter: importFileFilter,
     }),
   )
   importSchools(

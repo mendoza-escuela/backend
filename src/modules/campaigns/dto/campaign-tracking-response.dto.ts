@@ -2,7 +2,7 @@ import type { CampaignStatus } from '../entities/campaign-status.enum';
 import type { CampaignType } from '../entities/campaign-type.enum';
 import type { CampaignParticipationStatus } from './list-campaign-tracking-query.dto';
 
-export type CampaignTrackingStatusSummaryDto = {
+type CampaignTrackingStatusSummaryDto = {
   count: number;
   percentage: number;
 };

@@ -11,7 +11,7 @@ import request from 'supertest';
 import { PasswordChangeRequiredGuard } from '../../../common/guards/password-change-required.guard';
 import { RolesGuard } from '../../../common/guards/roles.guard';
 import type { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { JwtAuthGuard } from '../../../common/guards/jwt-auth.guard';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { AdminSchoolResultDetailService } from '../services/admin-school-result-detail.service';
 import { AdminSchoolResultDetailController } from './admin-school-result-detail.controller';

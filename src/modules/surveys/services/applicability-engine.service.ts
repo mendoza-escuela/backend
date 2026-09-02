@@ -4,7 +4,7 @@ import {
   ApplicabilityGroupOperator,
 } from '../entities/survey-applicability-rule.entity';
 
-export type ApplicabilityConditionInput = {
+type ApplicabilityConditionInput = {
   id?: string;
   feature: string;
   operator: string;

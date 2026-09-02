@@ -1,0 +1,12 @@
+{
+  "_comment": [
+    "Hallazgos YA CONOCIDOS y aceptados como deuda registrada, no ocultados.",
+    "Un hallazgo que no esté en esta lista bloquea el pipeline.",
+    "Los CVE de las imágenes detectados el 2026-08-28 fueron corregidos y retirados."
+  ],
+  "generated": "2026-08-28",
+  "project": "backend",
+  "review_before": "2026-09-30",
+  "known_findings": [],
+  "details": {}
+}

@@ -37,39 +37,36 @@ reciben los archivos oficiales y una licencia que autorice su redistribución.
 
 ## Identidad institucional
 
-`ReportBrandingProvider` acepta únicamente imágenes PNG/JPEG existentes. Mientras
-se esperan los activos definitivos, usa por defecto los logos provisionales
-versionados de Gobierno de Mendoza y OPS:
+`ReportBrandingProvider` acepta únicamente imágenes PNG/JPEG existentes. Usa
+por defecto los logos autorizados de Gobierno de Mendoza y OPS:
 
 ```text
 assets/brand/official/mendoza/marca-gobierno-mendoza.png
-assets/brand/official/ops/ops-logo.jpeg
+assets/brand/official/ops/ops-blue-horizontal.png
 ```
 
 `REPORT_LOGO_MENDOZA_PATH` y `REPORT_LOGO_OPS_PATH` permiten reemplazarlos sin
-modificar código. `REPORT_LOGO_HEALTH_PATH` y `REPORT_LOGO_DGE_PATH` siguen siendo
-opcionales. Una ruta configurada sólo se incorpora si existe y es PNG o JPEG. Si
+modificar código. Una ruta configurada sólo se incorpora si existe y es PNG o JPEG. Si
 un activo no está disponible, el documento conserva la identificación textual;
 la firma también se omite si no fue configurada.
 
-La línea de organismos se imprime aun cuando existan logos, por lo que Salud y
-la Dirección General de Escuelas permanecen identificadas por nombre hasta que
-se entreguen sus variantes gráficas autorizadas.
+La línea de organismos se imprime aun cuando existan logos y queda limitada a
+Gobierno de Mendoza y OPS; el nombre del programa identifica a Escuelas
+Promotoras de Salud.
 
 Las variables admitidas están documentadas en `backend/.env.example` bajo el
 prefijo `REPORT_`.
 
 Los reportes se generan sobre fondo claro. Cada override `REPORT_LOGO_*_PATH`
 debe apuntar a una variante autorizada para ese fondo y contar con procedencia
-documentada. Los activos provisionales podrán sustituirse cuando el cliente
-entregue las versiones definitivas.
+documentada.
 
 ## Descarga Excel para la escuela (EXP-02)
 
 `GET /api/school/campaigns/:campaignId/submission/report.xlsx` descarga un
 único libro institucional con cuatro hojas:
 
-- `Resumen`: ficha, etapa, envío, resultado y trazabilidad del cálculo.
+- `Resumen`: ficha, campaña, envío, resultado y trazabilidad del cálculo.
 - `Dimensiones`: numerador, denominador, puntaje y criticidad persistidos.
 - `Respuestas`: sólo preguntas aplicables y sus respuestas declaradas.
 - `Exclusiones`: preguntas excluidas y motivo histórico, sin exponer una
@@ -92,4 +89,4 @@ respuestas en la auditoría.
 Todo texto dinámico pasa por `spreadsheetSafeCell`; también se neutralizan
 prefijos de fórmula precedidos por espacios, tabulaciones u otros caracteres de
 control. Las fechas visibles usan `America/Argentina/Mendoza`, evitando mostrar
-como día siguiente en UTC el cierre civil de una etapa.
+como día siguiente en UTC el cierre civil de una campaña.

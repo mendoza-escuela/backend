@@ -62,8 +62,7 @@ describe('PdfReportRenderer', () => {
       ...view,
       branding: {
         ...view.branding,
-        organizations:
-          'Gobierno de Mendoza · Salud · Dirección General de Escuelas · OPS',
+        organizations: 'Gobierno de Mendoza · OPS',
         logos: ['data:image/png;base64,bG9nbw=='],
       },
     };
@@ -71,9 +70,7 @@ describe('PdfReportRenderer', () => {
     renderer.report(brandedView);
 
     const definition = create.mock.calls[0][0];
-    expect(JSON.stringify(definition)).toContain(
-      'Gobierno de Mendoza · Salud · Dirección General de Escuelas · OPS',
-    );
+    expect(JSON.stringify(definition)).toContain('Gobierno de Mendoza · OPS');
     create.mockRestore();
   });
 

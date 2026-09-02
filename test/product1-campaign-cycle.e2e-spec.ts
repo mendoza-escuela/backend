@@ -11,6 +11,7 @@ import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { spanishValidationException } from '../src/common/validation/spanish-validation-errors';
 import { parseFrontendOrigin } from '../src/config/frontend-origins';
+import { InstitutionalSurveyEvaluabilityPolicy } from '../src/modules/surveys/policies/institutional-survey-evaluability.policy';
 import { OFFICIAL_KIOSK_QUESTION_CODES } from '../src/modules/surveys/policies/official-survey-applicability.policy';
 import { OFFICIAL_SURVEY_DIMENSIONS } from '../src/modules/surveys/templates/official-survey-dimensions.template';
 
@@ -30,11 +31,13 @@ type SubmissionWorkspaceBody = {
   submission: {
     id: string;
     status: string;
+    revision: number;
     progress: { answered: number; total: number; percentage: number };
   };
   applicability: {
     excluded: Array<{ questionCode: string }>;
   };
+  answers: Record<string, string | number | boolean | null>;
 };
 type ResultsDashboardBody = {
   metrics: {
@@ -156,7 +159,17 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      // Este ciclo usa puntajes sintéticos; el contrato oficial se prueba en sus specs dedicados.
+      .overrideProvider(InstitutionalSurveyEvaluabilityPolicy)
+      .useValue({
+        inspect: () => ({
+          profile: 'institutional' as const,
+          evaluable: true,
+          evaluationErrors: [],
+        }),
+      })
+      .compile();
     app = moduleRef.createNestApplication<INestApplication<Server>>();
     app.setGlobalPrefix('api');
     app.useGlobalPipes(
@@ -176,7 +189,7 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
     await app?.close();
   });
 
-  it('creates, assigns, activates, submits and calculates without a 500', async () => {
+  it('creates, assigns, serializes concurrent drafts, submits and calculates without a 500', async () => {
     const httpServer = app.getHttpServer();
     const admin = request.agent(httpServer).set(csrfHeaders());
     const school = request.agent(httpServer).set(csrfHeaders());
@@ -364,9 +377,51 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
       ),
     ).toEqual(['p021', 'p022', 'p023', 'p024', 'p025', 'p026', 'p027']);
 
+    const concurrentDrafts = await Promise.all([
+      school.put(`/api/school/campaigns/${campaignId}/submission/draft`).send({
+        expectedRevision: startedBody.submission.revision,
+        answers: [baseAnswers[0]],
+      }),
+      school.put(`/api/school/campaigns/${campaignId}/submission/draft`).send({
+        expectedRevision: startedBody.submission.revision,
+        answers: [baseAnswers[1]],
+      }),
+    ]);
+    expect(concurrentDrafts.map(({ status }) => status).sort()).toEqual([
+      200, 409,
+    ]);
+    const concurrentWinner = concurrentDrafts.find(
+      ({ status }) => status === 200,
+    );
+    const concurrentLoser = concurrentDrafts.find(
+      ({ status }) => status === 409,
+    );
+    expect(concurrentWinner).toBeDefined();
+    expect(concurrentLoser?.body).toMatchObject({
+      code: 'SUBMISSION_REVISION_CONFLICT',
+      currentRevision: 1,
+    });
+    const winningWorkspace = concurrentWinner!.body as SubmissionWorkspaceBody;
+    const persistedConcurrentAnswers = await dataSource.query<
+      Array<{ questionId: string }>
+    >(
+      `SELECT "question_id" AS "questionId"
+       FROM "survey_answers"
+       WHERE "submission_id" = $1
+       ORDER BY "question_id"`,
+      [submissionId],
+    );
+    expect(
+      persistedConcurrentAnswers.map(({ questionId }) => questionId),
+    ).toEqual(Object.keys(winningWorkspace.answers).sort());
+    expect(persistedConcurrentAnswers).toHaveLength(1);
+
     const draft = await school
       .put(`/api/school/campaigns/${campaignId}/submission/draft`)
-      .send({ answers: baseAnswers })
+      .send({
+        expectedRevision: winningWorkspace.submission.revision,
+        answers: baseAnswers,
+      })
       .expect(200);
     expect(
       (draft.body as SubmissionWorkspaceBody).submission.progress,
@@ -387,6 +442,10 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
     );
     const submitted = await school
       .post(`/api/school/campaigns/${campaignId}/submission/submit`)
+      .send({
+        expectedRevision: (draft.body as SubmissionWorkspaceBody).submission
+          .revision,
+      })
       .expect(201);
     expect((submitted.body as SubmissionWorkspaceBody).submission.status).toBe(
       'submitted',
@@ -515,15 +574,23 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
       .patch(`/api/admin/campaigns/${comparisonCampaignId}/status`)
       .send({ status: 'active' })
       .expect(200);
-    await school
+    const comparisonStarted = await school
       .post(`/api/school/campaigns/${comparisonCampaignId}/submission`)
       .expect(201);
-    await school
+    const comparisonDraft = await school
       .put(`/api/school/campaigns/${comparisonCampaignId}/submission/draft`)
-      .send({ answers: baseAnswers })
+      .send({
+        expectedRevision: (comparisonStarted.body as SubmissionWorkspaceBody)
+          .submission.revision,
+        answers: baseAnswers,
+      })
       .expect(200);
     await school
       .post(`/api/school/campaigns/${comparisonCampaignId}/submission/submit`)
+      .send({
+        expectedRevision: (comparisonDraft.body as SubmissionWorkspaceBody)
+          .submission.revision,
+      })
       .expect(201);
 
     const comparison = await admin
@@ -1100,9 +1167,20 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
     expect(userTemplateBuffer.subarray(0, 3)).toEqual(
       Buffer.from([0xef, 0xbb, 0xbf]),
     );
+    // La importación escolar anterior crea y asigna a su responsable. Para
+    // probar la plantilla de usuarios se conserva el formato descargado, pero
+    // se usa otra escuela existente y todavía sin usuario asociado.
+    const availableUserSchoolCue = '500012301';
+    await insertSchool(availableUserSchoolCue, 'Capital');
+    const userImportBuffer = Buffer.from(
+      userTemplateBuffer
+        .toString('utf8')
+        .replace('500012300', availableUserSchoolCue),
+      'utf8',
+    );
     const userPreview = await admin
       .post('/api/admin/users/import/preview')
-      .attach('file', userTemplateBuffer, {
+      .attach('file', userImportBuffer, {
         filename: 'plantilla-usuarios.csv',
         contentType: 'text/csv',
       })
@@ -1114,7 +1192,7 @@ describeWithDatabase('Producto 1 campaign-to-result cycle (PostgreSQL)', () => {
     });
     const userImport = await admin
       .post('/api/admin/users/import')
-      .attach('file', userTemplateBuffer, {
+      .attach('file', userImportBuffer, {
         filename: 'plantilla-usuarios.csv',
         contentType: 'text/csv',
       })

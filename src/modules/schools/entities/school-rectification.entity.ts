@@ -12,13 +12,13 @@ import { User } from '../../users/entities/user.entity';
 import { SchoolRectificationEducationLevel } from './school-rectification-education-level.entity';
 import { School } from './school.entity';
 
-export type SchoolCatalogSnapshot = {
+type SchoolCatalogSnapshot = {
   id: string;
   code: string;
   label: string;
 };
 
-export type SchoolEducationLevelSnapshot = SchoolCatalogSnapshot & {
+type SchoolEducationLevelSnapshot = SchoolCatalogSnapshot & {
   enrollment: number | null;
 };
 

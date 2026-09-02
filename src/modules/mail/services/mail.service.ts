@@ -245,12 +245,20 @@ export class MailService {
     const user = configService.get<string>('SMTP_USER');
     const password = configService.get<string>('SMTP_PASSWORD');
 
+    const port = Number(configService.get('SMTP_PORT') ?? 587);
+    const useImplicitTls = port === 465;
+
     this.transporter =
       host && user && password
         ? nodemailer.createTransport({
             host,
-            port: Number(configService.get('SMTP_PORT') ?? 587),
-            secure: Number(configService.get('SMTP_PORT') ?? 587) === 465,
+            port,
+            secure: useImplicitTls,
+            // Fuera del 465 (TLS implícito) se exige STARTTLS. Sin esto,
+            // nodemailer acepta continuar en texto plano cuando el servidor no
+            // anuncia la extensión, exponiendo credenciales y contenido del
+            // mensaje. ASVS 5.0 V9.1.1 (hallazgo H-05).
+            requireTLS: !useImplicitTls,
             auth: { user, pass: password },
           })
         : null;

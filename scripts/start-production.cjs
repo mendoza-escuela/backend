@@ -8,6 +8,15 @@ async function startProduction() {
     path.join(projectRoot, 'dist', 'database', 'data-source.js'),
   );
   const dataSource = dataSourceModule.default;
+  const { ensureInitialAdmin } = require(
+    path.join(
+      projectRoot,
+      'dist',
+      'database',
+      'seeds',
+      'seed-initial-admin.js',
+    ),
+  );
 
   console.log('Waiting for the database migration lock...');
   await dataSource.initialize();
@@ -22,6 +31,8 @@ async function startProduction() {
           ? 'No migrations are pending.'
           : `${executedMigrations.length} migration(s) executed successfully.`,
       );
+      console.log('Ensuring the initial administrator exists...');
+      await ensureInitialAdmin(dataSource);
     } finally {
       await dataSource.query('SELECT pg_advisory_unlock($1)', [
         migrationLockId,
@@ -36,6 +47,9 @@ async function startProduction() {
 }
 
 startProduction().catch((error) => {
-  console.error('Database migration failed. The API will not start.', error);
+  console.error(
+    'Production initialization failed. The API will not start.',
+    error,
+  );
   process.exit(1);
 });

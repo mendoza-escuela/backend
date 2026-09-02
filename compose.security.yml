@@ -1,0 +1,314 @@
+# =============================================================================
+# Entorno efímero de pruebas de seguridad (DAST + tests de integración)
+#
+# NO es el stack de producción y NO debe usarse para desplegar.
+#   - Base de datos efímera, destruida con `down -v`.
+#   - Datos exclusivamente sintéticos.
+#   - Credenciales de un solo uso, válidas únicamente dentro de este entorno.
+#   - PostgreSQL en red interna, sin puertos publicados.
+#   - Único punto de entrada: el proxy, publicado SOLO en 127.0.0.1.
+#
+# Uso:
+#   ./security/scripts/security-compose.sh up -d --build            (API + base)
+#   ./security/scripts/security-compose.sh --profile full up -d --build   (+ SPA)
+#   ./security/scripts/run-all.sh
+#   ./security/scripts/security-compose.sh --profile full down -v
+#
+# El servicio `sec-web` construye el repositorio del frontend, que vive aparte.
+# Ruta configurable con SECURITY_FRONTEND_CONTEXT (por defecto ../frontend).
+# =============================================================================
+
+name: mendoza-security
+
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  restart: "no"
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL efímero — red interna, sin acceso desde el host ni desde Internet
+  # ---------------------------------------------------------------------------
+  sec-db:
+    <<: *hardening
+    image: ${SECURITY_POSTGRES_IMAGE:?Ejecutar mediante security/scripts/security-compose.sh}
+    container_name: mendoza-sec-db
+    environment:
+      # Credenciales sintéticas de un entorno descartable. No son secretos:
+      # la base se destruye al finalizar y no existe fuera de este compose.
+      POSTGRES_DB: ${SECURITY_DB_NAME:-security_db}
+      POSTGRES_USER: ${SECURITY_DB_USER:-security_user}
+      POSTGRES_PASSWORD: ${SECURITY_DB_PASSWORD:-ci-ephemeral-not-a-secret}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - sec_postgres_data:/var/lib/postgresql/data
+    networks:
+      - sec-internal
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_READ_SEARCH
+      - FOWNER
+      - SETGID
+      - SETUID
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  # ---------------------------------------------------------------------------
+  # API NestJS — ejecuta las migraciones al arrancar y queda tras el proxy
+  # ---------------------------------------------------------------------------
+  sec-api:
+    <<: *hardening
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mendoza-sec-api:${SECURITY_IMAGE_TAG:-ci}
+    container_name: mendoza-sec-api
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      # El origen público del entorno de pruebas: alimenta CORS y el guard CSRF.
+      FRONTEND_URL: ${SECURITY_APP_URL:-http://localhost:8081}
+      TRUST_PROXY_HOPS: "1"
+      # Secreto sintético fijo: permite reproducir los tests de firma JWT.
+      JWT_SECRET: ${SECURITY_JWT_SECRET:-ci-ephemeral-jwt-secret-not-used-in-production-0123456789}
+      JWT_EXPIRES_IN: 8h
+      SESSION_DURATION_HOURS: "8"
+      LOGIN_MAX_ATTEMPTS: "5"
+      LOGIN_LOCK_MINUTES: "15"
+      PASSWORD_RESET_TOKEN_EXPIRES_MINUTES: "30"
+      DATABASE_URL: ""
+      DATABASE_HOST: sec-db
+      DATABASE_PORT: "5432"
+      DATABASE_USER: ${SECURITY_DB_USER:-security_user}
+      DATABASE_PASSWORD: ${SECURITY_DB_PASSWORD:-ci-ephemeral-not-a-secret}
+      DATABASE_NAME: ${SECURITY_DB_NAME:-security_db}
+      # SMTP deliberadamente vacío: la API degrada el envío y CI no manda correos.
+      SMTP_HOST: ""
+      SMTP_PORT: "587"
+      SMTP_USER: ""
+      SMTP_PASSWORD: ""
+      SMTP_FROM: ""
+      SURVEY_IMPORT_MAX_FILE_MB: "5"
+      SURVEY_IMPORT_MAX_ROWS: "2000"
+    expose:
+      - "4000"
+    networks:
+      - sec-internal
+      - sec-edge
+    depends_on:
+      sec-db:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+
+  # ---------------------------------------------------------------------------
+  # SPA compilada — perfil `full`, requiere el repositorio del frontend
+  # ---------------------------------------------------------------------------
+  sec-web:
+    <<: *hardening
+    profiles: ["full"]
+    build:
+      context: ${SECURITY_FRONTEND_CONTEXT:-../frontend}
+      dockerfile: Dockerfile
+      args:
+        # Mismo origen que la API: el proxy reenvía /api.
+        VITE_API_URL: /api
+    image: mendoza-sec-web:${SECURITY_IMAGE_TAG:-ci}
+    container_name: mendoza-sec-web
+    expose:
+      - "8080"
+    networks:
+      - sec-edge
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/cache/nginx:size=32m
+      - /var/run:size=8m
+    # La imagen no privilegiada no necesita capacidades para bajar de usuario.
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # Proxy — ÚNICO servicio publicado, y sólo en la interfaz de loopback
+  # ---------------------------------------------------------------------------
+  sec-proxy:
+    <<: *hardening
+    image: ${SECURITY_NGINX_IMAGE:?Ejecutar mediante security/scripts/security-compose.sh}
+    container_name: mendoza-sec-proxy
+    ports:
+      # 127.0.0.1 evita que el entorno de pruebas quede accesible en la red.
+      - "127.0.0.1:${SECURITY_HTTP_PORT:-8081}:80"
+    volumes:
+      - ./security/config/nginx/security-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - sec-edge
+    depends_on:
+      sec-api:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+      - /var/cache/nginx:size=32m
+      - /var/run:size=8m
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - NET_BIND_SERVICE
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # Datos sintéticos: usuarios de prueba para el DAST autenticado
+  #   ./security/scripts/security-compose.sh --profile seed run --rm sec-seed
+  # ---------------------------------------------------------------------------
+  sec-seed:
+    <<: *hardening
+    profiles: ["seed"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build
+    image: mendoza-sec-tools:${SECURITY_IMAGE_TAG:-ci}
+    container_name: mendoza-sec-seed
+    environment:
+      NODE_ENV: production
+      FRONTEND_URL: ${SECURITY_APP_URL:-http://localhost:8081}
+      JWT_SECRET: ${SECURITY_JWT_SECRET:-ci-ephemeral-jwt-secret-not-used-in-production-0123456789}
+      JWT_EXPIRES_IN: 8h
+      DATABASE_URL: ""
+      DATABASE_HOST: sec-db
+      DATABASE_PORT: "5432"
+      DATABASE_USER: ${SECURITY_DB_USER:-security_user}
+      DATABASE_PASSWORD: ${SECURITY_DB_PASSWORD:-ci-ephemeral-not-a-secret}
+      DATABASE_NAME: ${SECURITY_DB_NAME:-security_db}
+      SECURITY_ADMIN_EMAIL: ${SECURITY_ADMIN_EMAIL:-security_admin@ci.local}
+      SECURITY_ADMIN_PASSWORD: ${SECURITY_ADMIN_PASSWORD:-CiSynthetic#Admin2026}
+      SECURITY_SCHOOL_EMAIL: ${SECURITY_SCHOOL_EMAIL:-security_school@ci.local}
+      SECURITY_SCHOOL_PASSWORD: ${SECURITY_SCHOOL_PASSWORD:-CiSynthetic#School2026}
+      SECURITY_SCHOOL_B_EMAIL: ${SECURITY_SCHOOL_B_EMAIL:-security_school_b@ci.local}
+      SECURITY_SCHOOL_B_PASSWORD: ${SECURITY_SCHOOL_B_PASSWORD:-CiSynthetic#SchoolB2026}
+    networks:
+      - sec-internal
+    depends_on:
+      sec-db:
+        condition: service_healthy
+    command:
+      [
+        "node",
+        "-r",
+        "ts-node/register",
+        "-r",
+        "tsconfig-paths/register",
+        "security/seed/seed-security-fixtures.ts",
+      ]
+
+
+  # ---------------------------------------------------------------------------
+  # Tests de seguridad (control de acceso, JWT, CSRF, CORS, headers, uploads).
+  # Corren DENTRO de la red interna: la base nunca se expone al host.
+  #   ./security/scripts/security-compose.sh --profile tests run --rm sec-tests
+  # ---------------------------------------------------------------------------
+  sec-tests:
+    <<: *hardening
+    profiles: ["tests"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build
+    image: mendoza-sec-tools:${SECURITY_IMAGE_TAG:-ci}
+    container_name: mendoza-sec-tests
+    environment:
+      NODE_ENV: test
+      FRONTEND_URL: ${SECURITY_APP_URL:-http://localhost:8081}
+      JWT_SECRET: ${SECURITY_JWT_SECRET:-ci-ephemeral-jwt-secret-not-used-in-production-0123456789}
+      JWT_EXPIRES_IN: 8h
+      SESSION_DURATION_HOURS: "8"
+      LOGIN_MAX_ATTEMPTS: "5"
+      LOGIN_LOCK_MINUTES: "15"
+      TRUST_PROXY_HOPS: "0"
+      DATABASE_URL: ""
+      DATABASE_HOST: sec-db
+      DATABASE_PORT: "5432"
+      DATABASE_USER: ${SECURITY_DB_USER:-security_user}
+      DATABASE_PASSWORD: ${SECURITY_DB_PASSWORD:-ci-ephemeral-not-a-secret}
+      DATABASE_NAME: ${SECURITY_DB_NAME:-security_db}
+      # Los e2e se saltan solos si esta variable no está definida.
+      TEST_DATABASE_URL: postgresql://${SECURITY_DB_USER:-security_user}:${SECURITY_DB_PASSWORD:-ci-ephemeral-not-a-secret}@sec-db:5432/${SECURITY_DB_NAME:-security_db}
+    networks:
+      - sec-internal
+    depends_on:
+      sec-db:
+        condition: service_healthy
+    command: ["npm", "run", "test:e2e", "--", "security-access-control"]
+networks:
+  # Sin salida a Internet ni acceso desde el host: sólo api <-> db
+  sec-internal:
+    driver: bridge
+    internal: true
+  sec-edge:
+    driver: bridge
+
+volumes:
+  sec_postgres_data:
+    name: mendoza_security_postgres_data

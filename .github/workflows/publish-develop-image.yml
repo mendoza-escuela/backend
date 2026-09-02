@@ -1,0 +1,90 @@
+name: Publicar imagen Docker
+
+on:
+  push:
+    branches: [develop]
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Tag Docker SemVer a publicar (por ejemplo, v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-push:
+    name: Build y publicación en Docker Hub
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validar configuración de Docker Hub
+        id: dockerhub-config
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          test -n "$DOCKERHUB_USERNAME" || { echo 'Falta la variable de repositorio DOCKERHUB_USERNAME'; exit 1; }
+          printf '%s' "$DOCKERHUB_USERNAME" | grep -Eq '^[a-z0-9][a-z0-9_-]{1,29}$' || { echo 'DOCKERHUB_USERNAME tiene espacios, comillas, mayúsculas o caracteres no admitidos'; exit 1; }
+          test -n "$DOCKERHUB_TOKEN" || { echo 'Falta el secreto DOCKERHUB_TOKEN'; exit 1; }
+          echo "username=$DOCKERHUB_USERNAME" >> "$GITHUB_OUTPUT"
+
+      - name: Validar versión
+        if: github.ref_type == 'tag'
+        env:
+          IMAGE_VERSION: ${{ github.ref_name }}
+        run: |
+          printf '%s' "$IMAGE_VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$' || {
+            echo 'El tag debe usar SemVer, por ejemplo v1.0.0 o v1.1.0-rc.1'
+            exit 1
+          }
+
+      - name: Validar versión manual
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          IMAGE_VERSION: ${{ inputs.version }}
+        run: |
+          printf '%s' "$IMAGE_VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$' || {
+            echo 'La versión debe usar SemVer, por ejemplo v1.0.0 o v1.1.0-rc.1'
+            exit 1
+          }
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Preparar Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Autenticar en Docker Hub
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+        with:
+          username: ${{ steps.dockerhub-config.outputs.username }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generar etiquetas y metadatos
+        id: metadata
+        uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
+        with:
+          images: ${{ steps.dockerhub-config.outputs.username }}/eps-backend
+          tags: |
+            type=raw,value=develop,enable=${{ github.ref == 'refs/heads/develop' }}
+            type=sha,prefix=develop-,enable=${{ github.ref == 'refs/heads/develop' }}
+            type=ref,event=tag
+            type=raw,value=${{ inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Construir y publicar
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true

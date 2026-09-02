@@ -1,0 +1,130 @@
+name: Seguridad (main)
+
+# Suite completa NO destructiva sobre la rama principal. Todo lo del PR más el
+# build y escaneo de las imágenes que efectivamente se despliegan, y la
+# publicación de los informes completos como artifacts.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      full_dast:
+        description: 'Ejecutar ZAP full scan en lugar de baseline'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-main-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  full-suite:
+    name: Suite completa de seguridad
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Checkout del frontend
+        # main se audita con frontend main para representar la pareja desplegable.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mendoza-escuela/frontend
+          ref: main
+          path: frontend-repo
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Usar npm declarado por el proyecto
+        run: bash security/scripts/setup-project-npm.sh
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      # app.module.spec.ts importa AppModule, que valida el entorno al cargarse.
+      - name: Tests unitarios
+        env:
+          JWT_SECRET: ci-unit-tests-secret-not-used-anywhere-0123456789
+          JWT_EXPIRES_IN: 8h
+          FRONTEND_URL: http://localhost:5173
+          DATABASE_HOST: localhost
+          DATABASE_PORT: '5432'
+          DATABASE_USER: ci
+          DATABASE_PASSWORD: ci-unit-tests-not-a-secret
+          DATABASE_NAME: ci
+        run: npm test
+
+      - name: Suite de seguridad completa
+        env:
+          SECURITY_FRONTEND_CONTEXT: ${{ github.workspace }}/frontend-repo
+          # El input NUNCA se interpola dentro del script: se pasa por env y
+          # el shell lo lee como dato. Interpolar ${{ }} en un run: permite
+          # inyeccion de comandos (semgrep run-shell-injection).
+          FULL_DAST: ${{ inputs.full_dast }}
+        run: |
+          if [ "$FULL_DAST" = "true" ]; then
+            bash security/scripts/run-all.sh --full-dast
+          else
+            bash security/scripts/run-all.sh
+          fi
+
+      - name: Subir SARIF a Code Scanning
+        if: always() && hashFiles('security/reports/semgrep.sarif') != ''
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: security/reports/semgrep.sarif
+          category: semgrep
+
+      - name: Publicar resumen
+        if: always()
+        run: cat security/reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Guardar informes completos
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-reports-${{ github.sha }}
+          path: |
+            security/reports/*.json
+            security/reports/*.sarif
+            security/reports/*.html
+            security/reports/*.md
+          # Repositorio público: los artifacts son descargables por cualquiera.
+          # Retención corta para acotar la ventana de exposición del detalle.
+          retention-days: 7
+
+      - name: Limpiar el entorno
+        if: always()
+        run: ./security/scripts/security-compose.sh --profile full --profile seed --profile tests down -v
+
+  # ---------------------------------------------------------------------------
+  # CodeQL. El repositorio es público, así que está disponible sin coste.
+  # El pipeline NO depende de este job: Semgrep es el SAST obligatorio.
+  # ---------------------------------------------------------------------------
+  codeql:
+    name: CodeQL (complementario)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          languages: javascript-typescript
+          queries: security-and-quality
+
+      - uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          category: '/language:javascript-typescript'

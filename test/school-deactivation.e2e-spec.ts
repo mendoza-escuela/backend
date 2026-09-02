@@ -135,7 +135,7 @@ describeWithDatabase('SCH-05 school deactivation (PostgreSQL)', () => {
 
     await firstSchoolSession
       .put(`/api/school/campaigns/${campaignId}/submission/draft`)
-      .send({ answers: [] })
+      .send({ expectedRevision: 0, answers: [] })
       .expect(401);
     await firstSchoolSession.get('/api/auth/me').expect(401);
     await secondSchoolSession.get('/api/auth/me').expect(401);

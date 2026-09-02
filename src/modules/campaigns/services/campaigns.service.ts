@@ -11,6 +11,12 @@ import { AuthenticatedUser } from '../../../common/types/authenticated-user.type
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { SurveyVersionStatus } from '../../surveys/entities/survey-version-status.enum';
 import { SurveyVersion } from '../../surveys/entities/survey-version.entity';
+import { isHistoricallyAvailableSurveyVersion } from '../../surveys/policies/survey-version-availability.policy';
+import {
+  SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_CODE,
+  SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_MESSAGE,
+  SurveyVersionCertificationService,
+} from '../../surveys/services/survey-version-certification.service';
 import { SubmissionStatus } from '../../submissions/entities/submission-status.enum';
 import { SurveySubmission } from '../../submissions/entities/survey-submission.entity';
 import { CreateCampaignDto } from '../dto/create-campaign.dto';
@@ -34,7 +40,10 @@ const STATUS_TRANSITIONS: Record<CampaignStatus, CampaignStatus[]> = {
 
 @Injectable()
 export class CampaignsService {
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly versionCertification: SurveyVersionCertificationService,
+  ) {}
 
   async list(query: ListCampaignsQueryDto) {
     await this.closeExpiredCampaigns();
@@ -89,29 +98,43 @@ export class CampaignsService {
     return campaigns.map((campaign) => this.serialize(campaign));
   }
 
-  /** Lista únicamente versiones publicadas de cuestionarios activos. */
+  /** Lista versiones publicadas, activas y certificadas para nuevas etapas. */
   async publishedVersionOptions() {
     const versions = await this.dataSource
       .getRepository(SurveyVersion)
       .createQueryBuilder('version')
       .innerJoinAndSelect('version.survey', 'survey')
+      .leftJoinAndSelect('version.dimensions', 'dimension')
+      .leftJoinAndSelect('dimension.sections', 'section')
+      .leftJoinAndSelect('section.questions', 'question')
+      .leftJoinAndSelect('question.options', 'option')
+      .leftJoinAndSelect('question.applicabilityRules', 'rule')
+      .leftJoinAndSelect('rule.conditions', 'condition')
       .where('version.status = :status', {
         status: SurveyVersionStatus.Published,
       })
       .andWhere('survey.isActive = true')
       .orderBy('survey.name', 'ASC')
       .addOrderBy('version.versionNumber', 'DESC')
+      .addOrderBy('dimension.order', 'ASC')
+      .addOrderBy('section.order', 'ASC')
+      .addOrderBy('question.order', 'ASC')
+      .addOrderBy('option.order', 'ASC')
+      .addOrderBy('rule.order', 'ASC')
+      .addOrderBy('condition.order', 'ASC')
       .getMany();
 
-    return versions.map((version) => ({
-      id: version.id,
-      surveyId: version.surveyId,
-      surveyCode: version.survey.code,
-      surveyName: version.survey.name,
-      versionNumber: version.versionNumber,
-      versionTitle: version.title,
-      publishedAt: version.publishedAt,
-    }));
+    return versions
+      .filter((version) => this.versionCertification.certify(version).evaluable)
+      .map((version) => ({
+        id: version.id,
+        surveyId: version.surveyId,
+        surveyCode: version.survey.code,
+        surveyName: version.survey.name,
+        versionNumber: version.versionNumber,
+        versionTitle: version.title,
+        publishedAt: version.publishedAt,
+      }));
   }
 
   /** Recorridos existentes para evitar nombres divergentes al crear etapas. */
@@ -135,7 +158,7 @@ export class CampaignsService {
   async operationalCampaigns(schoolId: string) {
     await this.closeExpiredCampaigns();
     const now = new Date();
-    return this.dataSource
+    const campaigns = await this.dataSource
       .getRepository(Campaign)
       .createQueryBuilder('campaign')
       .innerJoin(
@@ -146,6 +169,12 @@ export class CampaignsService {
       )
       .innerJoinAndSelect('campaign.surveyVersion', 'version')
       .innerJoinAndSelect('version.survey', 'survey')
+      .leftJoinAndSelect('version.dimensions', 'dimension')
+      .leftJoinAndSelect('dimension.sections', 'section')
+      .leftJoinAndSelect('section.questions', 'question')
+      .leftJoinAndSelect('question.options', 'option')
+      .leftJoinAndSelect('question.applicabilityRules', 'rule')
+      .leftJoinAndSelect('rule.conditions', 'condition')
       .where('campaign.status = :status', { status: CampaignStatus.Active })
       .andWhere('campaign.startsAt <= :now', { now })
       .andWhere('campaign.endsAt > :now', { now })
@@ -153,7 +182,15 @@ export class CampaignsService {
       .addOrderBy('campaign.sequenceOrder', 'ASC', 'NULLS FIRST')
       .addOrderBy('campaign.startsAt', 'ASC')
       .addOrderBy('campaign.name', 'ASC')
+      .addOrderBy('dimension.order', 'ASC')
+      .addOrderBy('section.order', 'ASC')
+      .addOrderBy('question.order', 'ASC')
+      .addOrderBy('option.order', 'ASC')
+      .addOrderBy('rule.order', 'ASC')
+      .addOrderBy('condition.order', 'ASC')
       .getMany();
+
+    return campaigns;
   }
 
   /**
@@ -250,7 +287,37 @@ export class CampaignsService {
   ) {
     const campaign = await manager.findOne(Campaign, {
       where: { id },
-      relations: { surveyVersion: { survey: true } },
+      relations: {
+        surveyVersion: {
+          survey: true,
+          dimensions: {
+            sections: {
+              questions: {
+                options: true,
+                applicabilityRules: { conditions: true },
+              },
+            },
+          },
+        },
+      },
+      order: {
+        surveyVersion: {
+          dimensions: {
+            order: 'ASC',
+            sections: {
+              order: 'ASC',
+              questions: {
+                order: 'ASC',
+                options: { order: 'ASC' },
+                applicabilityRules: {
+                  order: 'ASC',
+                  conditions: { order: 'ASC' },
+                },
+              },
+            },
+          },
+        },
+      },
     });
     if (!campaign) throw new NotFoundException('Etapa no encontrada.');
     const now = Date.now();
@@ -262,6 +329,7 @@ export class CampaignsService {
       throw new ConflictException(
         'La etapa no se encuentra abierta para recibir respuestas.',
       );
+    this.assertExistingCampaignVersionAvailable(campaign.surveyVersion);
     return campaign;
   }
 
@@ -273,9 +341,9 @@ export class CampaignsService {
         dto.sequenceOrder,
       );
       await this.assertWorkflowOrderAvailable(manager, workflow);
-      const version = await this.assertPublishedVersion(
-        manager,
+      const version = await this.assertVersionEligibleForCampaign(
         dto.surveyVersionId,
+        manager,
       );
       const campaign = await manager.save(
         Campaign,
@@ -327,13 +395,11 @@ export class CampaignsService {
         campaign.workflowCycle = workflow.workflowCycle;
         campaign.sequenceOrder = workflow.sequenceOrder;
       }
-      if (dto.surveyVersionId !== undefined) {
-        const version = await this.assertPublishedVersion(
-          manager,
-          dto.surveyVersionId,
-        );
-        campaign.surveyVersionId = version.id;
-      }
+      const version = await this.assertVersionEligibleForCampaign(
+        dto.surveyVersionId ?? campaign.surveyVersionId,
+        manager,
+      );
+      campaign.surveyVersionId = version.id;
       if (dto.startDate !== undefined || dto.endDate !== undefined) {
         const dates = this.resolveDates(
           dto.startDate ?? mendozaDateString(campaign.startsAt),
@@ -367,7 +433,10 @@ export class CampaignsService {
         );
 
       if (nextStatus === CampaignStatus.Active) {
-        await this.assertPublishedVersion(manager, campaign.surveyVersionId);
+        await this.assertVersionEligibleForCampaign(
+          campaign.surveyVersionId,
+          manager,
+        );
         const assignedSchools = await manager.count(CampaignSchool, {
           where: { campaignId: campaign.id, removedAt: IsNull() },
         });
@@ -471,18 +540,11 @@ export class CampaignsService {
     return { startsAt, endsAt };
   }
 
-  private async assertPublishedVersion(
-    manager: EntityManager,
+  async assertVersionEligibleForCampaign(
     versionId: string,
+    manager: EntityManager = this.dataSource.manager,
   ) {
-    const version = await manager.findOne(SurveyVersion, {
-      where: { id: versionId },
-      relations: { survey: true },
-    });
-    if (!version)
-      throw new BadRequestException(
-        'La versión de cuestionario seleccionada no existe.',
-      );
+    const version = await this.loadVersionForCertification(versionId, manager);
     if (
       version.status !== SurveyVersionStatus.Published ||
       !version.publishedAt
@@ -494,7 +556,83 @@ export class CampaignsService {
       throw new ConflictException(
         'El cuestionario asociado se encuentra inactivo.',
       );
+    this.assertInstitutionallyEvaluable(version);
     return version;
+  }
+
+  /**
+   * Certifica el contenido de una versión ya fijada por una etapa existente.
+   * Una versión archivada conserva disponibilidad histórica y no se reinterpreta
+   * como una nueva asociación administrativa.
+   */
+  async assertVersionCertifiedForExistingCampaign(
+    versionId: string,
+    manager: EntityManager = this.dataSource.manager,
+  ) {
+    const version = await this.loadVersionForCertification(versionId, manager);
+    this.assertExistingCampaignVersionAvailable(version);
+    return version;
+  }
+
+  private async loadVersionForCertification(
+    versionId: string,
+    manager: EntityManager,
+  ) {
+    const version = await manager.findOne(SurveyVersion, {
+      where: { id: versionId },
+      relations: {
+        survey: true,
+        dimensions: {
+          sections: {
+            questions: {
+              options: true,
+              applicabilityRules: { conditions: true },
+            },
+          },
+        },
+      },
+      order: {
+        dimensions: {
+          order: 'ASC',
+          sections: {
+            order: 'ASC',
+            questions: {
+              order: 'ASC',
+              options: { order: 'ASC' },
+              applicabilityRules: {
+                order: 'ASC',
+                conditions: { order: 'ASC' },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!version)
+      throw new BadRequestException(
+        'La versión de cuestionario seleccionada no existe.',
+      );
+    return version;
+  }
+
+  private assertInstitutionallyEvaluable(version: SurveyVersion) {
+    const certification = this.versionCertification.certify(version);
+    if (certification.evaluable) return;
+    throw new ConflictException({
+      code: SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_CODE,
+      message: SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_MESSAGE,
+      errors: certification.evaluationErrors,
+    });
+  }
+
+  private assertExistingCampaignVersionAvailable(version: SurveyVersion) {
+    if (
+      !isHistoricallyAvailableSurveyVersion(version.status, version.publishedAt)
+    )
+      throw new ConflictException(
+        'La versión asociada a la etapa no está disponible.',
+      );
+    this.assertInstitutionallyEvaluable(version);
   }
 
   private async getCampaign(id: string) {

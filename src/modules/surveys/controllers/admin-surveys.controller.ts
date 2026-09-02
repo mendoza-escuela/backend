@@ -1,3 +1,4 @@
+import { importFileFilter } from '../../../common/uploads/import-file.filter';
 import {
   Body,
   Controller,
@@ -24,7 +25,7 @@ import { Roles } from '../../../common/decorators/roles.decorator';
 import { PasswordChangeRequiredGuard } from '../../../common/guards/password-change-required.guard';
 import { RolesGuard } from '../../../common/guards/roles.guard';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { JwtAuthGuard } from '../../../common/guards/jwt-auth.guard';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { CompareSurveyVersionsQueryDto } from '../dto/compare-survey-versions-query.dto';
 import { CreateSurveyVersionDto } from '../dto/create-survey-version.dto';
@@ -39,9 +40,12 @@ import {
   BulkCreateApplicabilityRuleDto,
   PreviewApplicabilityDto,
   ReorderApplicabilityRulesDto,
+  SurveyVersionRevisionDto,
   WriteApplicabilityRuleDto,
 } from '../dto/applicability-rule.dto';
 import { ApplicabilityRulesService } from '../services/applicability-rules.service';
+
+const SURVEY_VERSION_UPDATED_AT_HEADER = 'X-Survey-Version-Updated-At';
 
 @Controller('admin/surveys')
 @UseGuards(JwtAuthGuard, PasswordChangeRequiredGuard, RolesGuard)
@@ -95,6 +99,7 @@ export class AdminSurveysController {
           Number(process.env.SURVEY_IMPORT_MAX_FILE_MB ?? 5) * 1024 * 1024,
         files: 1,
       },
+      fileFilter: importFileFilter,
     }),
   )
   previewImport(
@@ -112,6 +117,7 @@ export class AdminSurveysController {
           Number(process.env.SURVEY_IMPORT_MAX_FILE_MB ?? 5) * 1024 * 1024,
         files: 1,
       },
+      fileFilter: importFileFilter,
     }),
   )
   importVersion(
@@ -218,60 +224,83 @@ export class AdminSurveysController {
   }
 
   @Get(':surveyId/versions/:versionId/applicability-rules')
-  listApplicabilityRules(
+  async listApplicabilityRules(
     @Param('surveyId', ParseUUIDPipe) surveyId: string,
     @Param('versionId', ParseUUIDPipe) versionId: string,
+    @Res({ passthrough: true }) response: Response,
     @Query('questionId') questionId?: string,
   ) {
-    return this.applicabilityRulesService.list(surveyId, versionId, questionId);
+    const snapshot = await this.applicabilityRulesService.list(
+      surveyId,
+      versionId,
+      questionId,
+    );
+    response.setHeader(
+      SURVEY_VERSION_UPDATED_AT_HEADER,
+      snapshot.versionUpdatedAt,
+    );
+    return snapshot.rules;
   }
 
   @Post(
     ':surveyId/versions/:versionId/questions/:questionId/applicability-rules',
   )
-  createApplicabilityRule(
+  async createApplicabilityRule(
     @Param('surveyId', ParseUUIDPipe) surveyId: string,
     @Param('versionId', ParseUUIDPipe) versionId: string,
     @Param('questionId', ParseUUIDPipe) questionId: string,
     @Body() dto: WriteApplicabilityRuleDto,
     @Req() request: Request & { user: AuthenticatedUser },
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.applicabilityRulesService.create(
+    const mutation = await this.applicabilityRulesService.create(
       surveyId,
       versionId,
       questionId,
       dto,
       request.user,
     );
+    response.setHeader(
+      SURVEY_VERSION_UPDATED_AT_HEADER,
+      mutation.versionUpdatedAt,
+    );
+    return mutation.rule;
   }
 
   @Post(':surveyId/versions/:versionId/applicability-rules/bulk')
-  createApplicabilityRuleBulk(
+  async createApplicabilityRuleBulk(
     @Param('surveyId', ParseUUIDPipe) surveyId: string,
     @Param('versionId', ParseUUIDPipe) versionId: string,
     @Body() dto: BulkCreateApplicabilityRuleDto,
     @Req() request: Request & { user: AuthenticatedUser },
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.applicabilityRulesService.createBulk(
+    const mutation = await this.applicabilityRulesService.createBulk(
       surveyId,
       versionId,
       dto,
       request.user,
     );
+    response.setHeader(
+      SURVEY_VERSION_UPDATED_AT_HEADER,
+      mutation.versionUpdatedAt,
+    );
+    return mutation.rules;
   }
 
   @Put(
     ':surveyId/versions/:versionId/questions/:questionId/applicability-rules/:ruleId',
   )
-  updateApplicabilityRule(
+  async updateApplicabilityRule(
     @Param('surveyId', ParseUUIDPipe) surveyId: string,
     @Param('versionId', ParseUUIDPipe) versionId: string,
     @Param('questionId', ParseUUIDPipe) questionId: string,
     @Param('ruleId', ParseUUIDPipe) ruleId: string,
     @Body() dto: WriteApplicabilityRuleDto,
     @Req() request: Request & { user: AuthenticatedUser },
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.applicabilityRulesService.update(
+    const mutation = await this.applicabilityRulesService.update(
       surveyId,
       versionId,
       questionId,
@@ -279,45 +308,63 @@ export class AdminSurveysController {
       dto,
       request.user,
     );
+    response.setHeader(
+      SURVEY_VERSION_UPDATED_AT_HEADER,
+      mutation.versionUpdatedAt,
+    );
+    return mutation.rule;
   }
 
   @Delete(
     ':surveyId/versions/:versionId/questions/:questionId/applicability-rules/:ruleId',
   )
   @HttpCode(204)
-  removeApplicabilityRule(
+  async removeApplicabilityRule(
     @Param('surveyId', ParseUUIDPipe) surveyId: string,
     @Param('versionId', ParseUUIDPipe) versionId: string,
     @Param('questionId', ParseUUIDPipe) questionId: string,
     @Param('ruleId', ParseUUIDPipe) ruleId: string,
+    @Query() dto: SurveyVersionRevisionDto,
     @Req() request: Request & { user: AuthenticatedUser },
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.applicabilityRulesService.remove(
+    const mutation = await this.applicabilityRulesService.remove(
       surveyId,
       versionId,
       questionId,
       ruleId,
+      dto,
       request.user,
+    );
+    response.setHeader(
+      SURVEY_VERSION_UPDATED_AT_HEADER,
+      mutation.versionUpdatedAt,
     );
   }
 
   @Put(
     ':surveyId/versions/:versionId/questions/:questionId/applicability-rules-order',
   )
-  reorderApplicabilityRules(
+  async reorderApplicabilityRules(
     @Param('surveyId', ParseUUIDPipe) surveyId: string,
     @Param('versionId', ParseUUIDPipe) versionId: string,
     @Param('questionId', ParseUUIDPipe) questionId: string,
     @Body() dto: ReorderApplicabilityRulesDto,
     @Req() request: Request & { user: AuthenticatedUser },
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.applicabilityRulesService.reorder(
+    const mutation = await this.applicabilityRulesService.reorder(
       surveyId,
       versionId,
       questionId,
       dto,
       request.user,
     );
+    response.setHeader(
+      SURVEY_VERSION_UPDATED_AT_HEADER,
+      mutation.versionUpdatedAt,
+    );
+    return mutation.rules;
   }
 
   @Post(
