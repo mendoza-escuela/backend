@@ -34,9 +34,11 @@ Las credenciales deben pertenecer a un administrador exclusivo del entorno de
 pruebas. Si `SECURITY_STAGING_API_URL` no se define, se asume que la API vive
 bajo el mismo origen que el frontend.
 
-En CI, el checkout cruzado conserva una pareja coherente: los PR usan la rama
-objetivo (`main` o `develop`) del frontend y los workflows de `main`/nocturno
-usan frontend `main`. Así los informes no mezclan ramas con destinos distintos.
+En CI, el checkout cruzado conserva una pareja coherente. Los PR de trabajo
+usan la rama objetivo del frontend; una promoción de backend `develop → main`
+usa frontend `develop`, porque ambos son los artefactos candidatos de la misma
+entrega y se evita el bloqueo circular entre los dos repositorios. Los workflows
+de `main` y nocturnos revalidan la pareja ya promovida usando frontend `main`.
 
 ---
 
