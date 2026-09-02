@@ -33,7 +33,12 @@ El seed es idempotente, asigna el rol `admin` y obliga a cambiar la contraseña 
 
 Si una migración falla, el proceso termina con error y la API no arranca con un esquema incompleto. Las migraciones deben mantener operaciones compatibles con despliegues graduales cuando se ejecuten varias réplicas de la aplicación.
 
-El seed del administrador no forma parte del arranque automático: debe ejecutarse una sola vez mediante `npm run seed:admin`.
+Después de ejecutar las migraciones, el arranque garantiza de forma idempotente
+la existencia del administrador indicado por `INITIAL_ADMIN_EMAIL` y
+`INITIAL_ADMIN_PASSWORD`. Si ambas variables están vacías omite el alta; si se
+configura sólo una, el proceso falla. Una cuenta existente no cambia su
+contraseña ni sus datos, y nunca se eleva automáticamente una cuenta con otro rol.
+El administrador creado debe cambiar su contraseña en el primer ingreso.
 
 ### URLs de frontend y API
 
