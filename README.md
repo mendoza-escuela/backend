@@ -41,11 +41,27 @@ El seed del administrador no forma parte del arranque automático: debe ejecutar
 origen HTTP(S) exacto del frontend —esquema, host y puerto, sin `/api` ni otras
 rutas— y se utiliza para CORS, protección CSRF y enlaces enviados por correo.
 
-`VITE_API_URL` pertenece exclusivamente al entorno de compilación del frontend
-y define la base usada por su cliente HTTP. No debe agregarse al `.env` del
-backend. Puede ser `/api` cuando un proxy del mismo origen enruta las solicitudes,
-o una URL absoluta terminada en `/api` cuando la API se publica en otro host. Un
-cambio de `VITE_API_URL` requiere volver a compilar el frontend.
+`VITE_API_URL` pertenece exclusivamente al frontend y define la base usada por
+su cliente HTTP. No debe agregarse al `.env` del backend. Puede ser `/api` cuando
+un proxy del mismo origen enruta las solicitudes, o una URL absoluta terminada
+en `/api` cuando la API se publica en otro host. La imagen Docker del frontend
+la resuelve al arrancar, por lo que cambiarla no requiere recompilarla.
+
+### Imagen Docker de develop
+
+Cada push a `develop` publica en Docker Hub las etiquetas `develop` y
+`develop-<sha>`. El repositorio de GitHub debe definir las variables
+`DOCKERHUB_USERNAME` y `DOCKERHUB_IMAGE_NAME`, y el secreto
+`DOCKERHUB_TOKEN`. La imagen recibe toda su configuración al arrancar; no
+contiene credenciales de infraestructura:
+
+```bash
+docker run --rm -p 4000:4000 --env-file .env \
+  <docker-id>/<nombre-imagen-backend>:develop
+```
+
+Si se cambia `PORT`, debe publicarse el mismo puerto del contenedor, por ejemplo
+`-e PORT=5000 -p 5000:5000`. El healthcheck usa también ese valor en runtime.
 
 ## Seguridad de autenticación
 
