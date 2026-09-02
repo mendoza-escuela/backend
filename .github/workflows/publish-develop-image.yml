@@ -44,7 +44,7 @@ jobs:
         id: metadata
         uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
         with:
-          images: ${{ steps.dockerhub-config.outputs.username }}/mendoza-backend
+          images: ${{ steps.dockerhub-config.outputs.username }}/eps-backend
           tags: |
             type=raw,value=develop
             type=sha,prefix=develop-
