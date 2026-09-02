@@ -2,7 +2,7 @@ name: Publicar imagen Docker
 
 on:
   push:
-    branches: [develop]
+    branches: [main]
     tags: ['v*.*.*']
   workflow_dispatch:
     inputs:

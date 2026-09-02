@@ -124,11 +124,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Checkout del frontend
-        # Se audita la misma rama objetivo que recibirá este PR (main/develop).
+        # Una promoción develop -> main se valida contra el frontend develop:
+        # ambos son los artefactos candidatos de la misma entrega. Para los
+        # demás PR se conserva la rama objetivo como integración estable.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mendoza-escuela/frontend
-          ref: ${{ github.base_ref }}
+          ref: ${{ github.head_ref == 'develop' && 'develop' || github.base_ref }}
           path: frontend-repo
 
       - name: Construir y analizar imágenes
@@ -161,11 +163,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Checkout del frontend
-        # Se audita la misma rama objetivo que recibirá este PR (main/develop).
+        # Debe usar la misma pareja de ramas que el escaneo de contenedores.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mendoza-escuela/frontend
-          ref: ${{ github.base_ref }}
+          ref: ${{ github.head_ref == 'develop' && 'develop' || github.base_ref }}
           path: frontend-repo
 
       - name: Levantar el entorno efímero

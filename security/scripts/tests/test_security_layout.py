@@ -225,9 +225,11 @@ class SecurityLayoutTests(unittest.TestCase):
             )
 
             original_path = os.environ["PATH"]
+            bash_executable = shutil.which("bash")
+            self.assertIsNotNone(bash_executable, "Bash es obligatorio para estos scripts")
             completed = subprocess.run(
                 [
-                    "/usr/bin/bash",
+                    bash_executable,
                     "-c",
                     'source "$1"; status=$?; printf "%s" "$PATH"; exit "$status"',
                     "bash",

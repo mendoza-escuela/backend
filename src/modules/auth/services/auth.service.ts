@@ -46,10 +46,13 @@ type CompletedLogin = {
  * Hash señuelo con el mismo coste (12 rondas) que los reales. Se compara contra
  * él cuando la cuenta no existe para que el login tarde lo mismo en ambos casos
  * y no se pueda enumerar usuarios midiendo el tiempo de respuesta.
- * No corresponde a ninguna contraseña utilizable.
+ * Se genera una sola vez al cargar el proceso y no corresponde a ninguna
+ * cuenta ni contraseña utilizable.
  */
-const DECOY_PASSWORD_HASH =
-  '$2b$12$g7eeKoS4WUaShPDTNFpFLu1lilN76as/VT35ijKJ7BsAWvRQRm02K'; // nosemgrep: generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash -- SEC-EXC-004
+const DECOY_PASSWORD_HASH = bcrypt.hashSync(
+  'decoy-password-not-used-for-authentication',
+  12,
+);
 
 @Injectable()
 export class AuthService {
