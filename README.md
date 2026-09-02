@@ -50,14 +50,14 @@ la resuelve al arrancar, por lo que cambiarla no requiere recompilarla.
 ### Imagen Docker de develop
 
 Cada push a `develop` publica en Docker Hub las etiquetas `develop` y
-`develop-<sha>`. El repositorio de GitHub debe definir las variables
-`DOCKERHUB_USERNAME` y `DOCKERHUB_IMAGE_NAME`, y el secreto
-`DOCKERHUB_TOKEN`. La imagen recibe toda su configuración al arrancar; no
-contiene credenciales de infraestructura:
+`develop-<sha>` bajo `<docker-id>/mendoza-backend`. El repositorio de GitHub
+debe definir la variable `DOCKERHUB_USERNAME` y el secreto `DOCKERHUB_TOKEN`.
+La imagen recibe toda su configuración al arrancar y no contiene credenciales
+de infraestructura:
 
 ```bash
 docker run --rm -p 4000:4000 --env-file .env \
-  <docker-id>/<nombre-imagen-backend>:develop
+  <docker-id>/mendoza-backend:develop
 ```
 
 Si se cambia `PORT`, debe publicarse el mismo puerto del contenedor, por ejemplo

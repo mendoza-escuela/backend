@@ -20,11 +20,11 @@ jobs:
       - name: Validar configuración de Docker Hub
         env:
           DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
-          DOCKERHUB_IMAGE_NAME: ${{ vars.DOCKERHUB_IMAGE_NAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          test -n "$DOCKERHUB_USERNAME" || { echo 'Falta la variable DOCKERHUB_USERNAME'; exit 1; }
-          test -n "$DOCKERHUB_IMAGE_NAME" || { echo 'Falta la variable DOCKERHUB_IMAGE_NAME'; exit 1; }
+          case "$DOCKERHUB_USERNAME" in
+            ''|*[!a-z0-9_-]*) echo 'DOCKERHUB_USERNAME debe ser el Docker ID en minúsculas'; exit 1 ;;
+          esac
           test -n "$DOCKERHUB_TOKEN" || { echo 'Falta el secreto DOCKERHUB_TOKEN'; exit 1; }
 
       - name: Checkout
@@ -43,7 +43,7 @@ jobs:
         id: metadata
         uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
         with:
-          images: ${{ vars.DOCKERHUB_USERNAME }}/${{ vars.DOCKERHUB_IMAGE_NAME }}
+          images: ${{ vars.DOCKERHUB_USERNAME }}/mendoza-backend
           tags: |
             type=raw,value=develop
             type=sha,prefix=develop-
