@@ -1,8 +1,11 @@
 import { BadRequestException, HttpException, Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { isEmail } from 'class-validator';
-import ExcelJS from 'exceljs';
 import { DataSource } from 'typeorm';
+import {
+  readCsvImportRecords,
+  readXlsxImportRecords,
+} from '../../../common/spreadsheets/spreadsheet-import.util';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { EducationLevelCatalog } from '../entities/education-level-catalog.entity';
 import { School } from '../entities/school.entity';
@@ -308,45 +311,15 @@ export class BulkSchoolImportService {
     };
   }
   private readCsv(buffer: Buffer): RawRecord[] {
-    const lines = buffer
-      .toString('utf8')
-      .replace(/^\uFEFF/, '')
-      .split(/\r?\n/)
-      .filter((line) => line.trim());
-    if (lines.length < 2) return [];
-    const headers = this.csvLine(lines[0]).map((value) => this.header(value));
-    this.assertHeaders(headers);
-    return lines.slice(1).map((line) => {
-      const values = this.csvLine(line);
-      return Object.fromEntries(
-        headers.map((header, index) => [header, values[index]?.trim() ?? '']),
-      );
+    return readCsvImportRecords(buffer, {
+      assertHeaders: (headers) => this.assertHeaders(headers),
+      unterminatedQuoteMessage: 'El CSV contiene comillas sin cerrar.',
     });
   }
   private async readWorkbook(buffer: Buffer): Promise<RawRecord[]> {
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
-    const sheet = workbook.worksheets[0];
-    if (!sheet || sheet.rowCount < 2) return [];
-    const headers = (sheet.getRow(1).values as unknown[])
-      .slice(1)
-      .map((value) => this.header(this.cell(value)));
-    this.assertHeaders(headers);
-    const rows: RawRecord[] = [];
-    sheet.eachRow((row, number) => {
-      if (number === 1) return;
-      const values = (row.values as unknown[]).slice(1);
-      if (values.every((value) => !this.cell(value).trim())) return;
-      rows.push(
-        Object.fromEntries(
-          headers.map((header, index) => [
-            header,
-            this.cell(values[index]).trim(),
-          ]),
-        ),
-      );
+    return readXlsxImportRecords(buffer, {
+      assertHeaders: (headers) => this.assertHeaders(headers),
     });
-    return rows;
   }
   private assertHeaders(headers: string[]) {
     const commonRequired = [
@@ -391,53 +364,6 @@ export class BulkSchoolImportService {
       throw new BadRequestException(
         'La plantilla debe incluir tipo_educacion, niveles_y_matriculas, matricula_total, plurigrado e intercultural_bilingue.',
       );
-  }
-  private header(value: string) {
-    return value
-      .trim()
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/\s+/g, '_');
-  }
-  private csvLine(line: string) {
-    const values: string[] = [];
-    let value = '';
-    let quoted = false;
-    for (let index = 0; index < line.length; index += 1) {
-      const char = line[index];
-      if (char === '"' && quoted && line[index + 1] === '"') {
-        value += '"';
-        index += 1;
-      } else if (char === '"') quoted = !quoted;
-      else if (char === ',' && !quoted) {
-        values.push(value);
-        value = '';
-      } else value += char;
-    }
-    if (quoted)
-      throw new BadRequestException('El CSV contiene comillas sin cerrar.');
-    values.push(value);
-    return values;
-  }
-  private cell(value: unknown): string {
-    if (value === null || value === undefined) return '';
-    if (typeof value === 'string') return value;
-    if (typeof value === 'number' || typeof value === 'boolean')
-      return value.toString();
-    if (value instanceof Date) return value.toISOString();
-    if (typeof value === 'object') {
-      const cell = value as {
-        text?: string;
-        result?: unknown;
-        richText?: Array<{ text?: string }>;
-      };
-      if (cell.text) return cell.text;
-      if (cell.result !== undefined) return this.cell(cell.result);
-      if (cell.richText)
-        return cell.richText.map((part) => part.text ?? '').join('');
-    }
-    return '';
   }
   private optionalInteger(value = ''): {
     value: number | null;

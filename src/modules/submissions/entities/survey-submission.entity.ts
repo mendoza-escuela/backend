@@ -56,6 +56,7 @@ export type RespondentSnapshot = {
   'CHK_survey_submissions_school_profile_snapshot',
   `"school_profile_snapshot" IS NULL OR jsonb_typeof("school_profile_snapshot") = 'object'`,
 )
+@Check('CHK_survey_submissions_non_negative_revision', `"revision" >= 0`)
 export class SurveySubmission {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -131,6 +132,13 @@ export class SurveySubmission {
 
   @Column({ name: 'last_saved_at', type: 'timestamptz', nullable: true })
   lastSavedAt: Date | null;
+
+  /**
+   * Revisión monotónica usada para impedir que un cliente con un borrador
+   * anterior sobrescriba respuestas guardadas desde otra pestaña o sesión.
+   */
+  @Column({ type: 'integer', default: 0 })
+  revision: number;
 
   @Column({ name: 'submitted_at', type: 'timestamptz', nullable: true })
   submittedAt: Date | null;

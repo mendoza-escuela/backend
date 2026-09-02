@@ -8,8 +8,8 @@ import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
 import { parseFrontendOrigin } from '../../config/frontend-origins';
 
-export const CSRF_PROTECTION_HEADER = 'x-csrf-protection';
-export const CSRF_PROTECTION_HEADER_VALUE = '1';
+const CSRF_PROTECTION_HEADER = 'x-csrf-protection';
+const CSRF_PROTECTION_HEADER_VALUE = '1';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 

@@ -37,6 +37,11 @@ type NewAuthSession = Pick<
   'tokenId' | 'userId' | 'expiresAt' | 'revokedAt'
 >;
 
+type CompletedLogin = {
+  user: User;
+  previousLastLoginAt: Date | null;
+};
+
 /**
  * Hash señuelo con el mismo coste (12 rondas) que los reales. Se compara contra
  * él cuando la cuenta no existe para que el login tarde lo mismo en ambos casos
@@ -76,9 +81,9 @@ export class AuthService {
 
   /** Autentica sin revelar si la cuenta existe y registra intentos y último acceso. */
   async login(email: string, password: string) {
-    const user = await this.usersService.findByEmailWithPassword(
-      email.trim().toLowerCase(),
-    );
+    const normalizedEmail = email.trim().toLowerCase();
+    const user =
+      await this.usersService.findByEmailWithPassword(normalizedEmail);
     const invalidCredentials = new UnauthorizedException(
       'Correo o contraseña incorrectos.',
     );
@@ -91,58 +96,44 @@ export class AuthService {
       await bcrypt.compare(password, DECOY_PASSWORD_HASH);
       throw invalidCredentials;
     }
-    if (user.lockedUntil && user.lockedUntil > new Date()) {
-      // Mensaje idéntico al de credenciales inválidas: informar el bloqueo
-      // confirmaba la existencia de la cuenta a cualquiera que probara cinco
-      // veces un correo. El usuario legítimo recupera el acceso por el flujo de
-      // contraseña olvidada o esperando el desbloqueo.
-      throw invalidCredentials;
-    }
 
-    if (!(await bcrypt.compare(password, user.passwordHash))) {
-      await this.usersService.recordFailedLogin(
-        user,
-        this.maxLoginAttempts,
-        this.lockMinutes,
-      );
-      throw invalidCredentials;
-    }
-
-    const previousLastLoginAt = user.lastLoginAt;
+    // El coste de bcrypt se paga antes de abrir la transacción. Si otro flujo
+    // cambia el hash mientras se espera el lock, completeLogin vuelve a
+    // comparar contra el valor vigente antes de decidir el resultado.
+    const initialPasswordMatches = await bcrypt.compare(
+      password,
+      user.passwordHash,
+    );
     const tokenId = randomUUID();
     const expiresAt = new Date(Date.now() + this.sessionHours * 60 * 60_000);
-    const session: NewAuthSession = {
-      tokenId,
+    const completed = await this.completeLogin({
       userId: user.id,
+      normalizedEmail,
+      password,
+      initialPasswordHash: user.passwordHash,
+      initialPasswordMatches,
+      initialRole: user.role,
+      tokenId,
       expiresAt,
-      revokedAt: null,
-    };
-
-    if (user.role === UserRole.School) {
-      const sessionCreated = await this.createSchoolSessionIfActive(session);
-      if (!sessionCreated) throw invalidCredentials;
-      await this.usersService.recordSuccessfulLogin(user.id);
-    } else {
-      await this.usersService.recordSuccessfulLogin(user.id);
-      await this.sessionsRepository.save(session);
-    }
+    });
+    if (!completed) throw invalidCredentials;
 
     return {
       accessToken: await this.jwtService.signAsync({
-        sub: user.id,
+        sub: completed.user.id,
         sid: tokenId,
-        email: user.email,
-        role: user.role,
+        email: completed.user.email,
+        role: completed.user.role,
       }),
       expiresAt,
       user: {
-        id: user.id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        role: user.role,
-        mustChangePassword: user.mustChangePassword,
-        lastLoginAt: previousLastLoginAt,
+        id: completed.user.id,
+        firstName: completed.user.firstName,
+        lastName: completed.user.lastName,
+        email: completed.user.email,
+        role: completed.user.role,
+        mustChangePassword: completed.user.mustChangePassword,
+        lastLoginAt: completed.previousLastLoginAt,
       },
     };
   }
@@ -194,27 +185,42 @@ export class AuthService {
     );
     if (!user || !user.isActive) return;
 
-    await this.resetTokensRepository.update(
-      { userId: user.id, usedAt: IsNull() },
-      { usedAt: new Date() },
-    );
     const rawToken = randomBytes(32).toString('hex');
     const expiresMinutes = Number(
       this.configService.get('PASSWORD_RESET_TOKEN_EXPIRES_MINUTES') ?? 30,
     );
     const tokenHash = this.hashToken(rawToken);
-    await this.resetTokensRepository.save({
-      userId: user.id,
-      tokenHash,
-      expiresAt: new Date(Date.now() + expiresMinutes * 60_000),
-      usedAt: null,
+    const recipient = await this.dataSource.transaction(async (manager) => {
+      // La fila de usuario es el punto de serialización compartido por login,
+      // emisión y consumo. Dos solicitudes para la misma cuenta no pueden
+      // intercalar "invalidar anteriores" con "crear nuevo".
+      const currentUser = await manager.getRepository(User).findOne({
+        where: { id: user.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!currentUser?.isActive) return null;
+
+      const issuedAt = new Date();
+      await manager.update(
+        PasswordResetToken,
+        { userId: currentUser.id, usedAt: IsNull() },
+        { usedAt: issuedAt },
+      );
+      await manager.getRepository(PasswordResetToken).save({
+        userId: currentUser.id,
+        tokenHash,
+        expiresAt: new Date(issuedAt.getTime() + expiresMinutes * 60_000),
+        usedAt: null,
+      });
+      return currentUser.email;
     });
+    if (!recipient) return;
 
     try {
-      await this.mailService.sendPasswordReset(user.email, rawToken);
+      await this.mailService.sendPasswordReset(recipient, rawToken);
     } catch {
       await this.resetTokensRepository.update(
-        { tokenHash },
+        { tokenHash, usedAt: IsNull() },
         { usedAt: new Date() },
       );
       this.logger.error(
@@ -228,7 +234,21 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(newPassword, 12);
     const tokenHash = this.hashToken(rawToken);
 
+    // Esta lectura sólo resuelve qué fila de usuario se debe bloquear. El token
+    // se vuelve a validar bajo lock dentro de la transacción; no autoriza nada.
+    const tokenReference = await this.resetTokensRepository.findOne({
+      select: { id: true, userId: true },
+      where: { tokenHash },
+    });
+    if (!tokenReference) throw this.invalidResetToken();
+
     await this.dataSource.transaction(async (manager) => {
+      const user = await manager.getRepository(User).findOne({
+        where: { id: tokenReference.userId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!user?.isActive) throw this.invalidResetToken();
+
       const resetToken = await manager
         .getRepository(PasswordResetToken)
         .findOne({
@@ -240,27 +260,20 @@ export class AuthService {
           lock: { mode: 'pessimistic_write' },
         });
       if (!resetToken) {
-        throw new BadRequestException(
-          'El enlace es inválido, ya fue usado o venció.',
-        );
+        throw this.invalidResetToken();
       }
 
-      await manager.update(User, resetToken.userId, {
+      const changedAt = new Date();
+      await manager.update(User, user.id, {
         passwordHash,
         mustChangePassword: false,
         failedLoginAttempts: 0,
         lockedUntil: null,
       });
-      await manager.update(PasswordResetToken, resetToken.id, {
-        usedAt: new Date(),
-      });
-      await manager
-        .createQueryBuilder()
-        .update(AuthSession)
-        .set({ revokedAt: new Date() })
-        .where('user_id = :userId', { userId: resetToken.userId })
-        .andWhere('revoked_at IS NULL')
-        .execute();
+      await this.invalidatePasswordResetTokens(manager, user.id, changedAt);
+      // Consumir todos los enlaces evita que dos tokens legados válidos
+      // compitan y dejen la contraseña que termine escribiendo último.
+      await this.revokeUserSessions(manager, user.id, changedAt);
     });
   }
 
@@ -270,36 +283,73 @@ export class AuthService {
     newPassword: string,
   ): Promise<void> {
     assertStrongPassword(newPassword);
-    const persistedUser = await this.usersService.findByEmailWithPassword(
+    const initialUser = await this.usersService.findByEmailWithPassword(
       user.email,
     );
     if (
-      !persistedUser ||
-      !(await bcrypt.compare(currentPassword, persistedUser.passwordHash))
+      !initialUser ||
+      !(await bcrypt.compare(currentPassword, initialUser.passwordHash))
     ) {
       throw new BadRequestException('La contraseña actual es incorrecta.');
     }
-    if (await bcrypt.compare(newPassword, persistedUser.passwordHash)) {
+    if (await bcrypt.compare(newPassword, initialUser.passwordHash)) {
       throw new BadRequestException(
         'La nueva contraseña debe ser diferente a la actual.',
       );
     }
 
-    await this.usersService.updatePassword(
-      user.id,
-      await bcrypt.hash(newPassword, 12),
-    );
-    await this.revokeUserSessions(user.id, user.sessionId);
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await this.dataSource.transaction(async (manager) => {
+      const currentUser = await this.findLockedUserWithPassword(
+        manager,
+        user.id,
+      );
+      if (!currentUser?.isActive) {
+        throw new BadRequestException('La contraseña actual es incorrecta.');
+      }
+
+      if (currentUser.passwordHash !== initialUser.passwordHash) {
+        if (
+          !(await bcrypt.compare(currentPassword, currentUser.passwordHash))
+        ) {
+          throw new BadRequestException('La contraseña actual es incorrecta.');
+        }
+        if (await bcrypt.compare(newPassword, currentUser.passwordHash)) {
+          throw new BadRequestException(
+            'La nueva contraseña debe ser diferente a la actual.',
+          );
+        }
+      }
+
+      const changedAt = new Date();
+      await manager.update(User, user.id, {
+        passwordHash,
+        mustChangePassword: false,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      });
+      // Un enlace emitido antes del cambio no puede volver a reemplazar la
+      // contraseña elegida por el usuario después de confirmar esta escritura.
+      await this.invalidatePasswordResetTokens(manager, user.id, changedAt);
+      await this.revokeUserSessions(
+        manager,
+        user.id,
+        changedAt,
+        user.sessionId,
+      );
+    });
   }
 
   private async revokeUserSessions(
+    manager: EntityManager,
     userId: string,
+    revokedAt: Date,
     exceptTokenId?: string,
   ): Promise<void> {
-    const query = this.sessionsRepository
+    const query = manager
       .createQueryBuilder()
       .update(AuthSession)
-      .set({ revokedAt: new Date() })
+      .set({ revokedAt })
       .where('user_id = :userId', { userId })
       .andWhere('revoked_at IS NULL');
     if (exceptTokenId)
@@ -307,37 +357,124 @@ export class AuthService {
     await query.execute();
   }
 
+  private async invalidatePasswordResetTokens(
+    manager: EntityManager,
+    userId: string,
+    usedAt: Date,
+  ): Promise<void> {
+    await manager.update(
+      PasswordResetToken,
+      { userId, usedAt: IsNull() },
+      { usedAt },
+    );
+  }
+
   /**
-   * Crea una sesión escolar sólo mientras la fila del establecimiento está
-   * bloqueada para lectura. La baja usa un bloqueo de escritura sobre esa misma
-   * fila, por lo que necesariamente revocará esta sesión o se ejecutará antes y
-   * hará fallar la validación de estado.
+   * Serializa el resultado de todos los logins de una cuenta sobre su fila.
+   * Contador, bloqueo, último acceso y sesión se confirman en el mismo commit.
    */
-  private createSchoolSessionIfActive(
-    session: NewAuthSession,
-  ): Promise<boolean> {
+  private completeLogin(input: {
+    userId: string;
+    normalizedEmail: string;
+    password: string;
+    initialPasswordHash: string;
+    initialPasswordMatches: boolean;
+    initialRole: UserRole;
+    tokenId: string;
+    expiresAt: Date;
+  }): Promise<CompletedLogin | null> {
     return this.dataSource.transaction(async (manager) => {
-      const association = await manager.findOneBy(UserSchool, {
-        userId: session.userId,
-      });
-      if (!association) return false;
+      // assignUser toma School→User. Mantener el mismo orden evita un ciclo de
+      // espera entre una reasignación y un login escolar concurrentes.
+      const school =
+        input.initialRole === UserRole.School
+          ? await this.lockAssignedSchoolForLogin(manager, input.userId)
+          : undefined;
+      const user = await this.findLockedUserWithPassword(manager, input.userId);
+      if (
+        !user?.isActive ||
+        user.role !== input.initialRole ||
+        user.email.trim().toLowerCase() !== input.normalizedEmail
+      ) {
+        return null;
+      }
 
-      const school = await manager.getRepository(School).findOne({
-        where: { id: association.schoolId },
-        lock: { mode: 'pessimistic_read' },
-      });
-      if (!school?.isActive) return false;
+      const now = new Date();
+      if (user.lockedUntil && user.lockedUntil > now) return null;
 
-      // La asociación pudo cambiar mientras se esperaba el lock de la escuela.
-      const currentAssociation = await manager.findOneBy(UserSchool, {
-        userId: session.userId,
-        schoolId: school.id,
-      });
-      if (!currentAssociation) return false;
+      const passwordMatches =
+        user.passwordHash === input.initialPasswordHash
+          ? input.initialPasswordMatches
+          : await bcrypt.compare(input.password, user.passwordHash);
+      if (!passwordMatches) {
+        const attempts = user.failedLoginAttempts + 1;
+        const lockedUntil =
+          attempts >= this.maxLoginAttempts
+            ? new Date(now.getTime() + this.lockMinutes * 60_000)
+            : null;
+        await manager.update(User, user.id, {
+          failedLoginAttempts: lockedUntil ? 0 : attempts,
+          lockedUntil,
+        });
+        return null;
+      }
 
+      if (
+        user.role === UserRole.School &&
+        (!school?.isActive ||
+          !(await manager.findOneBy(UserSchool, {
+            userId: user.id,
+            schoolId: school.id,
+          })))
+      ) {
+        return null;
+      }
+
+      const previousLastLoginAt = user.lastLoginAt;
+      await manager.update(User, user.id, {
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+        lastLoginAt: now,
+      });
+      const session: NewAuthSession = {
+        tokenId: input.tokenId,
+        userId: user.id,
+        expiresAt: input.expiresAt,
+        revokedAt: null,
+      };
       await manager.getRepository(AuthSession).save(session);
-      return true;
+      return { user, previousLastLoginAt };
     });
+  }
+
+  /**
+   * Mantiene el establecimiento estable hasta que la sesión escolar y el
+   * éxito de login quedan confirmados por la transacción exterior.
+   */
+  private async lockAssignedSchoolForLogin(
+    manager: EntityManager,
+    userId: string,
+  ): Promise<School | null> {
+    const association = await manager.findOneBy(UserSchool, { userId });
+    if (!association) return null;
+
+    return manager.getRepository(School).findOne({
+      where: { id: association.schoolId },
+      lock: { mode: 'pessimistic_read' },
+    });
+  }
+
+  private findLockedUserWithPassword(
+    manager: EntityManager,
+    userId: string,
+  ): Promise<User | null> {
+    return manager
+      .getRepository(User)
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .where('user.id = :userId', { userId })
+      .setLock('pessimistic_write')
+      .getOne();
   }
 
   /** Comprueba la asociación 1:1 en cada uso de una sesión escolar. */
@@ -354,5 +491,11 @@ export class AuthService {
 
   private hashToken(token: string): string {
     return createHash('sha256').update(token).digest('hex');
+  }
+
+  private invalidResetToken(): BadRequestException {
+    return new BadRequestException(
+      'El enlace es inválido, ya fue usado o venció.',
+    );
   }
 }

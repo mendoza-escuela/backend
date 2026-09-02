@@ -1,6 +1,6 @@
 import type { SchoolRectificationSnapshot } from './entities/school-rectification.entity';
 
-export type SchoolRectificationMissingField = {
+type SchoolRectificationMissingField = {
   code:
     | 'name'
     | 'cue'

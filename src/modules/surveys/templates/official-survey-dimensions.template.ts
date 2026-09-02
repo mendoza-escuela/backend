@@ -107,6 +107,30 @@ export function getOfficialDimensionCodeForQuestion(
 }
 
 /**
+ * Devuelve la dimensión obligatoria de una pregunta del banco institucional.
+ * Fuera del inventario p001-p060 no existe una asignación oficial.
+ */
+export function getRequiredOfficialDimensionCodeForQuestion(
+  questionCode: string,
+): OfficialSurveyDimensionCode | null {
+  const match = /^p(\d{3})$/i.exec(questionCode.trim());
+  if (!match) return null;
+
+  const questionNumber = Number(match[1]);
+  if (questionNumber < 1 || questionNumber > 60) return null;
+  if (questionNumber <= 5)
+    return OfficialSurveyDimensionCode.InstitutionalCommitment;
+  if (questionNumber <= 7)
+    return OfficialSurveyDimensionCode.HealthTeamCoordination;
+  if (questionNumber <= 34)
+    return OfficialSurveyDimensionCode.HealthyFoodEnvironment;
+  if (questionNumber <= 40) return OfficialSurveyDimensionCode.PhysicalActivity;
+  if (questionNumber <= 43) return OfficialSurveyDimensionCode.MentalHealth;
+  if (questionNumber <= 46) return OfficialSurveyDimensionCode.SmokeFreeSpaces;
+  return OfficialSurveyDimensionCode.MentalHealth;
+}
+
+/**
  * Reconoce el instrumento institucional por su espacio de nombres reservado.
  * Los códigos de dimensión oficiales y p001-p060 no deben reutilizarse en
  * cuestionarios personalizados.

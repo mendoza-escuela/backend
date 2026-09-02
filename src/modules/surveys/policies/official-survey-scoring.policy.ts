@@ -17,8 +17,16 @@ export const OFFICIAL_GENERAL_BINARY_SCORE_SEQUENCE = Object.freeze([
   100, 0,
 ] as const);
 
-export const OFFICIAL_MENTAL_HEALTH_RESOLVED_SCORE_SEQUENCE = Object.freeze([
+export const OFFICIAL_P052_SCORE_SEQUENCE = Object.freeze([
   0, 33, 66, 100,
+] as const);
+
+export const OFFICIAL_P038_SCORE_SEQUENCE = Object.freeze([
+  100, 66, 33, 0,
+] as const);
+
+export const OFFICIAL_MENTAL_HEALTH_TERNARY_SCORE_SEQUENCE = Object.freeze([
+  100, 50, 0,
 ] as const);
 
 export const OFFICIAL_GENERAL_TERNARY_QUESTION_CODES = Object.freeze([
@@ -35,19 +43,22 @@ export const OFFICIAL_GENERAL_BINARY_QUESTION_CODES = Object.freeze([
   'p025',
 ]);
 
-export const OFFICIAL_UNRESOLVED_P038_CODE = 'p038' as const;
+export const OFFICIAL_P038_QUESTION_CODE = 'p038' as const;
 
-export const OFFICIAL_MENTAL_HEALTH_RESOLVED_QUESTION_CODE = 'p052' as const;
+export const OFFICIAL_P052_QUESTION_CODE = 'p052' as const;
 
-export const OFFICIAL_MENTAL_HEALTH_PENDING_QUESTION_CODES = Object.freeze([
+export const OFFICIAL_MENTAL_HEALTH_TERNARY_QUESTION_CODES = Object.freeze([
   ...questionCodeRange(41, 43),
   ...questionCodeRange(47, 51),
   ...questionCodeRange(53, 60),
 ]);
 
 /**
- * Devuelve los únicos puntajes admitidos por la escala oficial de una
- * dimensión. Sólo debe usarse después de reconocer el banco institucional.
+ * Devuelve el perfil de referencia informado para una dimensión oficial.
+ *
+ * No es una lista exhaustiva de valores permitidos: p038 y las preguntas
+ * ternarias de Salud Mental poseen secuencias específicas aprobadas. Para
+ * validar opciones debe usarse `getApprovedOfficialQuestionScoreSequence`.
  */
 export function getOfficialScoreProfile(
   dimensionCode: string,
@@ -60,7 +71,7 @@ export function getOfficialScoreProfile(
 
 /**
  * Devuelve la secuencia aprobada para el orden actual de opciones de una
- * pregunta oficial. `null` identifica un mapeo todavía no definido.
+ * pregunta oficial. `null` identifica un código fuera de la matriz oficial.
  */
 export function getApprovedOfficialQuestionScoreSequence(
   questionCode: string,
@@ -70,15 +81,17 @@ export function getApprovedOfficialQuestionScoreSequence(
     return OFFICIAL_GENERAL_SCORE_PROFILE;
   if (OFFICIAL_GENERAL_BINARY_QUESTION_CODES.includes(code))
     return OFFICIAL_GENERAL_BINARY_SCORE_SEQUENCE;
-  if (code === OFFICIAL_MENTAL_HEALTH_RESOLVED_QUESTION_CODE)
-    return OFFICIAL_MENTAL_HEALTH_RESOLVED_SCORE_SEQUENCE;
+  if (code === OFFICIAL_P038_QUESTION_CODE) return OFFICIAL_P038_SCORE_SEQUENCE;
+  if (OFFICIAL_MENTAL_HEALTH_TERNARY_QUESTION_CODES.includes(code))
+    return OFFICIAL_MENTAL_HEALTH_TERNARY_SCORE_SEQUENCE;
+  if (code === OFFICIAL_P052_QUESTION_CODE) return OFFICIAL_P052_SCORE_SEQUENCE;
   return null;
 }
 
 /**
- * Valida el mapeo completo de cada pregunta cuya escala ya está definida.
- * Las dos ambigüedades que las respuestas funcionales no resolvieron se
- * informan como bloqueos de publicación en lugar de inferir puntajes.
+ * Valida el mapeo completo de cada pregunta del banco institucional.
+ * Cada código se compara con la secuencia aprobada para el orden de sus
+ * opciones, de modo que una permutación de los mismos valores también falla.
  */
 export function inspectOfficialSurveyScoring(
   dimensions: SurveyDimensionInputDto[],
@@ -86,25 +99,11 @@ export function inspectOfficialSurveyScoring(
   if (!isOfficialSurveyStructure(dimensions)) return [];
 
   const errors: string[] = [];
-  const pendingMentalHealthQuestions: string[] = [];
-
   for (const dimension of dimensions) {
     for (const section of dimension.sections) {
       for (const question of section.questions) {
         const code = normalize(question.code);
         const scores = question.options.map((option) => option.score ?? null);
-
-        if (code === OFFICIAL_UNRESOLVED_P038_CODE) {
-          errors.push(
-            'p038: falta definir el puntaje oficial de sus cuatro alternativas; la escala general informada sólo define 100/50/0.',
-          );
-          continue;
-        }
-
-        if (OFFICIAL_MENTAL_HEALTH_PENDING_QUESTION_CODES.includes(code)) {
-          pendingMentalHealthQuestions.push(code);
-          continue;
-        }
 
         const expected = getApprovedOfficialQuestionScoreSequence(code);
         if (expected && !sameScoreSequence(scores, expected))
@@ -118,11 +117,6 @@ export function inspectOfficialSurveyScoring(
       }
     }
   }
-
-  if (pendingMentalHealthQuestions.length)
-    errors.push(
-      `Salud Mental: ${pendingMentalHealthQuestions.join(', ')} mantienen puntajes sin definición final; la escala aprobada posee cuatro niveles (100/66/33/0) y falta definir el puntaje exacto de sus tres alternativas, incluida la alternativa intermedia.`,
-    );
 
   return errors;
 }

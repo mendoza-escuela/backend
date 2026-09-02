@@ -2,10 +2,8 @@
 
 Validación de seguridad reproducible, ejecutable en una notebook y en CI con el
 mismo resultado. Todas las herramientas corren en contenedores con versión
-fijada: **no hace falta instalar nada más que Docker**.
-
-Documentación completa en `mendoza/docs/security/` (raíz del workspace, fuera
-de este repositorio: los informes no son parte del código de la aplicación).
+fijada: **no hace falta instalar nada más que Docker**. Las imágenes se cargan
+y validan siempre mediante `security/scripts/load-tool-versions.sh`.
 
 ---
 
@@ -13,7 +11,7 @@ de este repositorio: los informes no son parte del código de la aplicación).
 
 ```bash
 ./security/scripts/run-all.sh                 # suite completa (~20 min)
-./security/scripts/run-all.sh --static-only   # sólo estático (~5 min)
+./security/scripts/run-all.sh --static-only   # estático + imágenes, sin stack/DAST
 ./security/scripts/run-all.sh --full-dast     # ZAP full scan
 ./security/scripts/run-all.sh --keep-env      # deja el entorno levantado
 ```
@@ -36,6 +34,10 @@ Las credenciales deben pertenecer a un administrador exclusivo del entorno de
 pruebas. Si `SECURITY_STAGING_API_URL` no se define, se asume que la API vive
 bajo el mismo origen que el frontend.
 
+En CI, el checkout cruzado conserva una pareja coherente: los PR usan la rama
+objetivo (`main` o `develop`) del frontend y los workflows de `main`/nocturno
+usan frontend `main`. Así los informes no mezclan ramas con destinos distintos.
+
 ---
 
 ## Qué hace cada script
@@ -47,6 +49,9 @@ bajo el mismo origen que el frontend.
 | `run-container-scan.sh` | Construye las imágenes reales y las analiza | Docker, Trivy |
 | `run-dast.sh` | Escaneo dinámico autenticado | ZAP, Nuclei, testssl.sh |
 | `wait-for-app.sh` | Espera a que el entorno esté utilizable | curl |
+| `security-compose.sh` | Carga las versiones y delega en Compose | Docker Compose |
+| `load-tool-versions.sh` | Valida y exporta todas las imágenes canónicas | Bash |
+| `setup-project-npm.sh` | Instala el npm fijado en `packageManager` para CI | Node.js, npm |
 | `create-summary.sh` | Consolida y aplica la política de gates | Python |
 | `validate-exceptions.py` | Falla si hay excepciones vencidas o mal formadas | Python |
 
@@ -54,19 +59,35 @@ bajo el mismo origen que el frontend.
 
 ## Herramientas y versiones
 
-Fijadas en `config/tool-versions.env` y **verificadas contra el registry** con
-`docker manifest inspect`. Nunca `latest`: un pipeline de seguridad que cambia
-de versión sin avisar no es comparable entre ejecuciones.
+Fijadas exclusivamente en `security/config/tool-versions.env` y **verificadas
+contra el registry** con `docker manifest inspect`. Nunca `latest`: un pipeline
+de seguridad que cambia de versión sin avisar no es comparable entre
+ejecuciones. El helper rechaza variables faltantes, adicionales, duplicadas y
+referencias sin tag o digest fijo antes de ejecutar una herramienta.
 
-| Herramienta | Versión | Rol |
+| Herramienta | Fuente | Rol |
 | --- | --- | --- |
-| Semgrep | 1.145.0 | SAST + 11 reglas propias |
-| Trivy | 0.74.0 | Dependencias, imágenes, SBOM, misconfig |
-| OSV-Scanner | v2.2.4 | Segunda fuente sobre los lockfiles |
-| Gitleaks | v8.30.0 | Secretos en el historial completo |
-| OWASP ZAP | 2.17.0 | DAST |
-| Nuclei | v3.4.10 | DAST complementario |
-| testssl.sh | 3.2 | TLS (sólo staging) |
+| Python | `PYTHON_IMAGE` | Runtime de respaldo para los consolidadores |
+| Semgrep | `SEMGREP_IMAGE` | SAST + reglas propias |
+| Trivy | `TRIVY_IMAGE` | Dependencias, imágenes, SBOM, misconfig |
+| OSV-Scanner | `OSV_SCANNER_IMAGE` | Segunda fuente sobre los lockfiles |
+| Gitleaks | `GITLEAKS_IMAGE` | Secretos en el historial completo |
+| OWASP ZAP | `ZAP_IMAGE` | DAST |
+| Nuclei | `NUCLEI_IMAGE` | DAST complementario |
+| testssl.sh | `TESTSSL_IMAGE` | TLS (sólo staging) |
+| PostgreSQL | `SECURITY_POSTGRES_IMAGE` | Base efímera de pruebas |
+| Nginx | `SECURITY_NGINX_IMAGE` | Proxy efímero de pruebas |
+
+Los workflows no repiten la versión de npm: `setup-project-npm.sh` la deriva
+de `package.json#packageManager`. Los valores de `uses:` de GitHub Actions son
+la única excepción técnica a la centralización: GitHub no admite variables ni
+expresiones en ese campo, por lo que sus SHA quedan fijados y comentados en cada
+workflow.
+
+Backend y frontend conservan copias vendorizadas de los helpers comunes. La
+duplicación es deliberada: cada repositorio debe poder ejecutar y versionar su
+pipeline por separado. Las pruebas de integridad de cada uno mantienen esas
+copias alineadas con su inventario local.
 
 ---
 
@@ -79,12 +100,15 @@ de versión sin avisar no es comparable entre ejecuciones.
 3. HIGH **nuevo** respecto del baseline.
 4. Alerta de riesgo alto en ZAP.
 5. Excepción **vencida**.
-6. Herramienta que debía correr y falló.
+6. Informe requerido ausente, vacío o inválido.
+7. SBOM o metadato obligatorio ausente o vacío.
 
 **PASS WITH WARNINGS**: MEDIUM/LOW y HIGH ya conocidos en el baseline.
 
 > `NOT_EXECUTED` **no** equivale a `PASS`. Si una herramienta no dejó informe,
-> el resumen lo dice.
+> el gate falla. Los jobs parciales declaran su alcance con
+> `--partial --require-group static|container|dast`; sin grupo explícito, el
+> consolidador rechaza la ejecución.
 
 ---
 
@@ -109,11 +133,11 @@ de versión sin avisar no es comparable entre ejecuciones.
 ## Entorno efímero
 
 ```bash
-docker compose -f compose.security.yml --profile full up -d --build
+./security/scripts/security-compose.sh --profile full up -d --build
 ./security/scripts/wait-for-app.sh
-docker compose -f compose.security.yml --profile seed run --rm sec-seed
+./security/scripts/security-compose.sh --profile seed run --rm sec-seed
 # ... pruebas ...
-docker compose -f compose.security.yml --profile full --profile seed --profile tests down -v
+./security/scripts/security-compose.sh --profile full --profile seed --profile tests down -v
 ```
 
 - Base de datos efímera, destruida con `down -v`.
@@ -130,7 +154,7 @@ docker compose -f compose.security.yml --profile full --profile seed --profile t
 ```
 security/
 ├── config/       versiones, reglas y configuración de cada herramienta
-├── scripts/      los seis scripts ejecutables
+├── scripts/      ejecución, helpers y pruebas de integridad
 ├── seed/         datos sintéticos para el DAST autenticado
 ├── exceptions/   excepciones formales con vencimiento
 ├── baseline/     hallazgos ya conocidos (opcional)
@@ -139,10 +163,5 @@ security/
 
 ---
 
-## Antes de entregar a Ciberseguridad
-
-Completar `mendoza/docs/security/SECURITY_RELEASE_CHECKLIST.md`.
-
 **"Sin vulnerabilidades detectadas" no significa "aplicación segura".** Este
-pipeline automatiza lo automatizable; el checklist enumera las ocho pruebas que
-siguen requiriendo revisión manual.
+pipeline automatiza lo automatizable y no reemplaza la revisión manual.

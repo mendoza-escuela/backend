@@ -1,8 +1,8 @@
 # Reglas Semgrep propias del proyecto.
 #
 # Complementan los packs públicos (p/security-audit, p/owasp-top-ten, etc.)
-# con controles específicos de ESTA aplicación, derivados del análisis de la
-# Fase 1 (docs/security/REPOSITORY_SECURITY_ANALYSIS.md).
+# con controles específicos de ESTA aplicación, derivados de la auditoría
+# interna y de los controles que el código ya implementa.
 #
 # Cada regla apunta a un control que la aplicación ya implementa: su función es
 # impedir que una regresión lo desactive sin que nadie lo note.

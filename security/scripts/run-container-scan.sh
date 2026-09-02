@@ -24,10 +24,15 @@ case "$(uname -s)" in
   MINGW* | MSYS* | CYGWIN*) export MSYS_NO_PATHCONV=1 ;;
 esac
 
-# shellcheck source=/dev/null
-set -a && . "${CONFIG_DIR}/tool-versions.env" && set +a
+# shellcheck source=load-tool-versions.sh
+. "${SCRIPT_DIR}/load-tool-versions.sh" || exit $?
 
 mkdir -p "${REPORTS_DIR}"
+rm -f \
+  "${REPORTS_DIR}/trivy-backend-image.json" \
+  "${REPORTS_DIR}/trivy-frontend-image.json" \
+  "${REPORTS_DIR}/sbom-backend-image.cyclonedx.json" \
+  "${REPORTS_DIR}/container-scan-metadata.json"
 
 git_meta() { (cd "$1" 2>/dev/null && git rev-parse HEAD 2>/dev/null) || echo "sin-git"; }
 
@@ -78,7 +83,9 @@ scan_image() {
 log INFO "Backend  commit ${BACKEND_SHA}"
 log INFO "Frontend commit ${FRONTEND_SHA}"
 
+BACKEND_IMAGE_BUILT=0
 if build_image "${REPO_ROOT}" "${BACKEND_IMAGE}" "backend"; then
+  BACKEND_IMAGE_BUILT=1
   scan_image "${BACKEND_IMAGE}" "trivy-backend-image.json" "backend" || STATUS=1
 else
   log BUILD "El backend no se pudo construir: el escaneo de su imagen queda NOT_EXECUTED"
@@ -94,21 +101,24 @@ if [ -d "${FRONTEND_CONTEXT}" ]; then
     STATUS=1
   fi
 else
-  log INFO "No se encontró el repositorio del frontend en ${FRONTEND_CONTEXT}: se omite."
+  log INFO "No se encontró el repositorio del frontend en ${FRONTEND_CONTEXT}: el escaneo queda NOT_EXECUTED."
+  STATUS=1
 fi
 
 # -----------------------------------------------------------------------------
 # SBOM de las imágenes finales, no sólo del código fuente: incluye los paquetes
 # del sistema operativo base, que es donde suelen aparecer los CVEs.
-log SBOM "Generando SBOM de la imagen del backend"
-docker run --rm \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v trivy-cache:/root/.cache/trivy \
-  -v "${REPORTS_DIR}:/reports" \
-  "${TRIVY_IMAGE}" image \
-  --format cyclonedx \
-  --output /reports/sbom-backend-image.cyclonedx.json \
-  "${BACKEND_IMAGE}" || STATUS=1
+if [ "${BACKEND_IMAGE_BUILT}" -eq 1 ]; then
+  log SBOM "Generando SBOM de la imagen del backend"
+  docker run --rm \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v trivy-cache:/root/.cache/trivy \
+    -v "${REPORTS_DIR}:/reports" \
+    "${TRIVY_IMAGE}" image \
+    --format cyclonedx \
+    --output /reports/sbom-backend-image.cyclonedx.json \
+    "${BACKEND_IMAGE}" || STATUS=1
+fi
 
 # Deja constancia de qué se analizó exactamente.
 cat > "${REPORTS_DIR}/container-scan-metadata.json" <<EOF

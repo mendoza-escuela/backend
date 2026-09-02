@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { SurveyVersion } from '../entities/survey-version.entity';
 
-export type SurveyVersionChange = {
+type SurveyVersionChange = {
   type: 'added' | 'removed' | 'modified';
   entityType: 'version' | 'dimension' | 'section' | 'question' | 'option';
   path: string;

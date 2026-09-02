@@ -15,7 +15,11 @@ import { EvaluationSnapshot } from '../../evaluation/evaluation-snapshot.type';
 import { School } from '../../schools/entities/school.entity';
 import { SubmissionStatus } from '../../submissions/entities/submission-status.enum';
 import { AdminExportQueryDto } from '../dto/admin-export-query.dto';
-import { spreadsheetSafeCell } from '../spreadsheet-cell.util';
+import {
+  escapeCsvCell,
+  spreadsheetSafeCell,
+  spreadsheetSafeCsvCell,
+} from '../../../common/spreadsheets/spreadsheet-cell.util';
 
 type ExportRow = {
   assignmentId: string;
@@ -96,13 +100,13 @@ export class AdminExportsService {
     try {
       const headers = this.headers(kind);
       response.write(
-        `\uFEFF${headers.map((value) => this.csv(value)).join(',')}\r\n`,
+        `\uFEFF${headers.map((value) => escapeCsvCell(value, { alwaysQuote: true })).join(',')}\r\n`,
       );
       let outputCount = 0;
       await this.eachRow(query, async (row) => {
         for (const values of this.exportRows(kind, row)) {
           const writable = response.write(
-            `${values.map((value) => this.csv(String(spreadsheetSafeCell(value)))).join(',')}\r\n`,
+            `${values.map((value) => spreadsheetSafeCsvCell(value, { alwaysQuote: true })).join(',')}\r\n`,
           );
           outputCount += 1;
           if (!writable) await once(response, 'drain');
@@ -377,10 +381,6 @@ export class AdminExportsService {
       : status === SubmissionStatus.Draft
         ? 'Borrador'
         : 'No iniciada';
-  }
-
-  private csv(value: string) {
-    return `"${value.replace(/"/g, '""')}"`;
   }
 
   private dateTime(value: Date | string | null) {

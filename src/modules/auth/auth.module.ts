@@ -1,9 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { JwtModule } from '@nestjs/jwt';
+import { JwtModule, type JwtSignOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { StringValue } from 'ms';
 import { UsersModule } from '../users/users.module';
 import { AuthController } from './controllers/auth.controller';
 import { AuthService } from './services/auth.service';
@@ -11,14 +10,13 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { AuthSession } from './entities/auth-session.entity';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { MailModule } from '../mail/mail.module';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { PasswordChangeRequiredGuard } from '../../common/guards/password-change-required.guard';
-import { RolesGuard } from '../../common/guards/roles.guard';
+import { AuthGuardsModule } from '../../common/guards/auth-guards.module';
 
 @Module({
   imports: [
     UsersModule,
     MailModule,
+    AuthGuardsModule,
     TypeOrmModule.forFeature([AuthSession, PasswordResetToken]),
     PassportModule,
     JwtModule.registerAsync({
@@ -27,19 +25,16 @@ import { RolesGuard } from '../../common/guards/roles.guard';
       useFactory: (configService: ConfigService) => ({
         secret: configService.getOrThrow<string>('JWT_SECRET'),
         signOptions: {
-          expiresIn: configService.getOrThrow<StringValue>('JWT_EXPIRES_IN'),
+          expiresIn:
+            configService.getOrThrow<NonNullable<JwtSignOptions['expiresIn']>>(
+              'JWT_EXPIRES_IN',
+            ),
         },
       }),
     }),
   ],
   controllers: [AuthController],
-  providers: [
-    AuthService,
-    JwtStrategy,
-    JwtAuthGuard,
-    PasswordChangeRequiredGuard,
-    RolesGuard,
-  ],
-  exports: [JwtAuthGuard, PasswordChangeRequiredGuard, RolesGuard],
+  providers: [AuthService, JwtStrategy],
+  exports: [AuthGuardsModule],
 })
 export class AuthModule {}

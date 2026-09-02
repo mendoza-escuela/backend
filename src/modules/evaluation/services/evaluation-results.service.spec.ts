@@ -11,14 +11,24 @@ import {
   type SurveyApplicabilityResult,
 } from '../../surveys/services/survey-applicability.service';
 import { SurveyEvaluationService } from '../../surveys/services/survey-evaluation.service';
+import {
+  SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_CODE,
+  SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_MESSAGE,
+  SurveyVersionCertificationService,
+} from '../../surveys/services/survey-version-certification.service';
 import { SurveyVersion } from '../../surveys/entities/survey-version.entity';
+import { SurveyVersionStatus } from '../../surveys/entities/survey-version-status.enum';
 import { OFFICIAL_SURVEY_DIMENSIONS } from '../../surveys/templates/official-survey-dimensions.template';
 import { SurveySubmission } from '../../submissions/entities/survey-submission.entity';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
+import { Campaign } from '../../campaigns/entities/campaign.entity';
 import { EvaluationDimensionResult } from '../entities/evaluation-dimension-result.entity';
 import { EvaluationResult } from '../entities/evaluation-result.entity';
 import { EVALUATION_ALGORITHM_VERSION } from '../evaluation.constants';
 import { EvaluationResultsService } from './evaluation-results.service';
+
+let authoritativeSurveyVersion: SurveyVersion | null = null;
+let authoritativeCampaignVersionId = 'version-id';
 
 describe('EvaluationResultsService', () => {
   const evaluationConfiguration = {
@@ -90,6 +100,15 @@ describe('EvaluationResultsService', () => {
     }),
     snapshot: jest.fn(() => evaluationConfiguration),
   };
+  const versionCertification = {
+    certify: jest.fn().mockReturnValue({
+      valid: true,
+      errors: [],
+      profile: 'institutional',
+      evaluable: true,
+      evaluationErrors: [],
+    }),
+  };
   const schoolsService = {
     evaluationContextForUser: jest.fn(),
   };
@@ -105,6 +124,8 @@ describe('EvaluationResultsService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    authoritativeSurveyVersion = null;
+    authoritativeCampaignVersionId = 'version-id';
     managerHarness = createManagerHarness();
     const dataSource = {
       transaction: jest.fn(
@@ -120,6 +141,7 @@ describe('EvaluationResultsService', () => {
       dataSource,
       new SurveyEvaluationService(applicabilityEngine),
       new SurveyApplicabilityService(applicabilityEngine),
+      versionCertification as unknown as SurveyVersionCertificationService,
       schoolsService as never,
       configurations as never,
     );
@@ -230,6 +252,124 @@ describe('EvaluationResultsService', () => {
     ).resolves.toMatchObject({ surveyVersionId: fixture.version.id });
   });
 
+  it('reloads the authoritative complete version before certifying and calculating', async () => {
+    const fixture = evaluationFixture();
+    const partialVersion = {
+      id: fixture.version.id,
+      dimensions: [],
+    } as SurveyVersion;
+
+    const result = await service.calculateAndPersist(
+      managerHarness.manager,
+      fixture.submission,
+      partialVersion,
+      fixture.applicability,
+      null,
+      'system',
+    );
+
+    expect(versionCertification.certify).toHaveBeenCalledWith(fixture.version);
+    expect(result.snapshot.survey.dimensions).toHaveLength(6);
+  });
+
+  it('rejects a caller version that differs from the version stored on the locked submission', async () => {
+    const fixture = evaluationFixture();
+    const foreignVersion = {
+      ...fixture.version,
+      id: 'another-version-id',
+    };
+
+    await expect(
+      service.calculateAndPersist(
+        managerHarness.manager,
+        fixture.submission,
+        foreignVersion,
+        fixture.applicability,
+        null,
+        'system',
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(versionCertification.certify).not.toHaveBeenCalled();
+  });
+
+  it('blocks a persisted submission whose version differs from its campaign', async () => {
+    const fixture = evaluationFixture();
+    authoritativeCampaignVersionId = 'another-version-id';
+
+    await expect(
+      service.calculateAndPersist(
+        managerHarness.manager,
+        fixture.submission,
+        fixture.version,
+        fixture.applicability,
+        null,
+        'system',
+      ),
+    ).rejects.toMatchObject({
+      response: {
+        code: SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_CODE,
+        errors: [
+          'La versión persistida en la presentación no coincide con la versión de su etapa.',
+        ],
+      },
+    });
+    expect(versionCertification.certify).not.toHaveBeenCalled();
+  });
+
+  it('blocks calculation when the authoritative version was never published', async () => {
+    const fixture = evaluationFixture();
+    fixture.version.status = SurveyVersionStatus.Draft;
+    fixture.version.publishedAt = null;
+
+    await expect(
+      service.calculateAndPersist(
+        managerHarness.manager,
+        fixture.submission,
+        fixture.version,
+        fixture.applicability,
+        null,
+        'system',
+      ),
+    ).rejects.toMatchObject({
+      response: {
+        code: SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_CODE,
+      },
+    });
+    expect(versionCertification.certify).not.toHaveBeenCalled();
+    expect(configurations.active).not.toHaveBeenCalled();
+  });
+
+  it('blocks a direct calculation when the authoritative version is not institutionally evaluable', async () => {
+    const fixture = evaluationFixture();
+    const evaluationErrors = ['Faltan preguntas oficiales: p060.'];
+    versionCertification.certify.mockReturnValueOnce({
+      valid: false,
+      errors: evaluationErrors,
+      profile: 'institutional',
+      evaluable: false,
+      evaluationErrors,
+    });
+
+    await expect(
+      service.calculateAndPersist(
+        managerHarness.manager,
+        fixture.submission,
+        fixture.version,
+        fixture.applicability,
+        null,
+        'system',
+      ),
+    ).rejects.toMatchObject({
+      response: {
+        code: SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_CODE,
+        message: SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_MESSAGE,
+        errors: evaluationErrors,
+      },
+    });
+    expect(configurations.active).not.toHaveBeenCalled();
+    expect(managerHarness.rootSaveCount).toBe(0);
+  });
+
   it('overwrites the same result and completely replaces its snapshot', async () => {
     const fixture = evaluationFixture();
     const originalAnswers = structuredClone(fixture.submission.answers);
@@ -325,6 +465,40 @@ describe('EvaluationResultsService', () => {
       response: { code: 'EVALUATION_RECALCULATION_ALGORITHM_DRIFT' },
     });
     expect(configurations.get).not.toHaveBeenCalled();
+  });
+
+  it('blocks recalculation when its authoritative version is no longer institutionally evaluable', async () => {
+    const fixture = evaluationFixture();
+    const previousResult = {
+      id: 'result-id',
+      submissionId: fixture.submission.id,
+      algorithmVersion: EVALUATION_ALGORITHM_VERSION,
+      evaluationConfigurationId: evaluationConfiguration.id,
+      evaluationConfigurationVersion: evaluationConfiguration.versionCode,
+    } as EvaluationResult;
+    const manager = createRecalculationManager(fixture, previousResult);
+    const evaluationErrors = ['Las reglas de aplicabilidad contienen errores.'];
+    versionCertification.certify.mockReturnValueOnce({
+      valid: false,
+      errors: evaluationErrors,
+      profile: 'institutional',
+      evaluable: false,
+      evaluationErrors,
+    });
+
+    await expect(
+      service.recalculateSubmissionWithManager(
+        manager,
+        fixture.submission.id,
+        'actor-id',
+      ),
+    ).rejects.toMatchObject({
+      response: {
+        code: SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_CODE,
+        errors: evaluationErrors,
+      },
+    });
+    expect(versionCertification.certify).toHaveBeenCalledWith(fixture.version);
   });
 
   it('blocks recalculation without an existing historical result', async () => {
@@ -606,6 +780,14 @@ describe('EvaluationResultsService', () => {
           let stagedResult = committedResult ? { ...committedResult } : null;
           const transactionalManager = {
             findOne: jest.fn((entity: unknown, options: unknown) => {
+              if (entity === SurveyVersion) {
+                return Promise.resolve(authoritativeSurveyVersion);
+              }
+              if (entity === Campaign)
+                return Promise.resolve({
+                  id: fixture.submission.campaignId,
+                  surveyVersionId: authoritativeCampaignVersionId,
+                });
               if (entity === EvaluationResult) {
                 return Promise.resolve(stagedResult);
               }
@@ -618,7 +800,12 @@ describe('EvaluationResultsService', () => {
                 return Promise.resolve(fixture.submission);
               }
               if (entity === SurveySubmission) {
-                return Promise.resolve({ id: fixture.submission.id });
+                return Promise.resolve({
+                  id: fixture.submission.id,
+                  campaignId: fixture.submission.campaignId,
+                  schoolId: fixture.submission.schoolId,
+                  surveyVersionId: fixture.submission.surveyVersionId,
+                });
               }
               return Promise.resolve(null);
             }),
@@ -655,6 +842,7 @@ describe('EvaluationResultsService', () => {
       transactionalDataSource,
       new SurveyEvaluationService(applicabilityEngine),
       new SurveyApplicabilityService(applicabilityEngine),
+      versionCertification as unknown as SurveyVersionCertificationService,
       schoolsService as never,
       configurations as never,
     );
@@ -967,7 +1155,19 @@ function createManagerHarness() {
 
   const findOne = jest.fn((entity: unknown) => {
     if (entity === SurveySubmission)
-      return Promise.resolve({ id: 'submission-id' });
+      return Promise.resolve({
+        id: 'submission-id',
+        campaignId: 'campaign-id',
+        schoolId: 'school-id',
+        surveyVersionId: 'version-id',
+      });
+    if (entity === Campaign)
+      return Promise.resolve({
+        id: 'campaign-id',
+        surveyVersionId: authoritativeCampaignVersionId,
+      });
+    if (entity === SurveyVersion)
+      return Promise.resolve(authoritativeSurveyVersion);
     if (entity === EvaluationResult) return Promise.resolve(result);
     return Promise.resolve(null);
   });
@@ -1037,17 +1237,34 @@ function createConcurrentManagerHarness() {
     let ownsSubmissionLock = false;
     return {
       findOne: jest.fn((entity: unknown) => {
+        if (entity === SurveyVersion)
+          return Promise.resolve(authoritativeSurveyVersion);
+        if (entity === Campaign)
+          return Promise.resolve({
+            id: 'campaign-id',
+            surveyVersionId: authoritativeCampaignVersionId,
+          });
         if (entity === SurveySubmission) {
           if (!locked) {
             locked = true;
             ownsSubmissionLock = true;
-            return Promise.resolve({ id: 'submission-id' });
+            return Promise.resolve({
+              id: 'submission-id',
+              campaignId: 'campaign-id',
+              schoolId: 'school-id',
+              surveyVersionId: 'version-id',
+            });
           }
           return new Promise((resolve) => {
             waiters.push(() => {
               locked = true;
               ownsSubmissionLock = true;
-              resolve({ id: 'submission-id' });
+              resolve({
+                id: 'submission-id',
+                campaignId: 'campaign-id',
+                schoolId: 'school-id',
+                surveyVersionId: 'version-id',
+              });
             });
           });
         }
@@ -1094,6 +1311,12 @@ function createRecalculationManager(
 ): EntityManager {
   return {
     findOne: jest.fn((entity: unknown, options: unknown) => {
+      if (entity === SurveyVersion) return Promise.resolve(fixture.version);
+      if (entity === Campaign)
+        return Promise.resolve({
+          id: fixture.submission.campaignId,
+          surveyVersionId: authoritativeCampaignVersionId,
+        });
       if (entity === EvaluationResult) return Promise.resolve(previousResult);
       if (
         entity === SurveySubmission &&
@@ -1104,7 +1327,12 @@ function createRecalculationManager(
         return Promise.resolve(fixture.submission);
       }
       if (entity === SurveySubmission) {
-        return Promise.resolve({ id: fixture.submission.id });
+        return Promise.resolve({
+          id: fixture.submission.id,
+          campaignId: fixture.submission.campaignId,
+          schoolId: fixture.submission.schoolId,
+          surveyVersionId: fixture.submission.surveyVersionId,
+        });
       }
       return Promise.resolve(null);
     }),
@@ -1318,6 +1546,8 @@ function evaluationFixture() {
     applicabilityDecisions,
     surveyVersion: version,
   };
+
+  authoritativeSurveyVersion = version as unknown as SurveyVersion;
 
   return {
     version: version as unknown as SurveyVersion,

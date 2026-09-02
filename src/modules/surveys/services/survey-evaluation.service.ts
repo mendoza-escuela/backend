@@ -5,7 +5,7 @@ import {
   SchoolApplicabilityFacts,
 } from './applicability-engine.service';
 
-export type EvaluationOption = { id: string; score: number | null };
+type EvaluationOption = { id: string; score: number | null };
 export type EvaluationQuestion = {
   id: string;
   code: string;

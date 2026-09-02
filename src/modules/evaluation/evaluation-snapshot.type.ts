@@ -9,7 +9,7 @@ import type { SurveyQuestionType } from '../surveys/entities/survey-question-typ
 import type { SurveyQuestionValidation } from '../surveys/entities/survey-question.entity';
 import type { EVALUATION_SNAPSHOT_SCHEMA_VERSION } from './evaluation.constants';
 
-export type EvaluationDecimalSnapshot = string;
+type EvaluationDecimalSnapshot = string;
 
 export type EvaluationOptionSnapshot = {
   id: string;

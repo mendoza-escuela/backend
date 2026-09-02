@@ -4,14 +4,26 @@ API NestJS con PostgreSQL y TypeORM.
 
 Todos los endpoints HTTP se publican bajo el prefijo `/api` (por ejemplo, `POST /api/auth/login`).
 
+## Requisitos
+
+- Node.js 22.23.2 (versión operativa fijada en `.nvmrc` y en la imagen Docker).
+- npm 11.6.1.
+
+El contrato admitido por `package.json` es Node.js `>=22.13.0 <23` y npm
+`11.6.1`. Con nvm, ejecutar `nvm use` desde este directorio selecciona la
+versión operativa del proyecto.
+
 ## Puesta en marcha local
 
-1. Copiar `.env.example` a `.env` y completar secretos.
-2. Iniciar PostgreSQL con `npm run db:up`.
-3. Ejecutar `npm run migration:run`.
-4. Completar `INITIAL_ADMIN_EMAIL` e `INITIAL_ADMIN_PASSWORD` en `.env`.
-5. Crear el administrador inicial con `npm run seed:admin`.
-6. Iniciar la API con `npm run start:dev`.
+1. Seleccionar Node.js 22.23.2 con `nvm use` (o instalar esa versión por otro medio).
+2. Activar la versión de npm del proyecto con `npm install --global npm@11.6.1`.
+3. Instalar las dependencias reproducibles con `npm ci`.
+4. Copiar `.env.example` a `.env` y completar secretos.
+5. Iniciar PostgreSQL con `npm run db:up`.
+6. Ejecutar `npm run migration:run`.
+7. Completar `INITIAL_ADMIN_EMAIL` e `INITIAL_ADMIN_PASSWORD` en `.env`.
+8. Crear el administrador inicial con `npm run seed:admin`.
+9. Iniciar la API con `npm run start:dev`.
 
 El seed es idempotente, asigna el rol `admin` y obliga a cambiar la contraseña en el primer acceso. La contraseña inicial debe tener al menos 12 caracteres, mayúscula, minúscula, número y símbolo.
 
@@ -23,6 +35,34 @@ Si una migración falla, el proceso termina con error y la API no arranca con un
 
 El seed del administrador no forma parte del arranque automático: debe ejecutarse una sola vez mediante `npm run seed:admin`.
 
+### URLs de frontend y API
+
+`FRONTEND_URL` pertenece al entorno de ejecución del backend. Debe contener el
+origen HTTP(S) exacto del frontend —esquema, host y puerto, sin `/api` ni otras
+rutas— y se utiliza para CORS, protección CSRF y enlaces enviados por correo.
+
+`VITE_API_URL` pertenece exclusivamente al frontend y define la base usada por
+su cliente HTTP. No debe agregarse al `.env` del backend. Puede ser `/api` cuando
+un proxy del mismo origen enruta las solicitudes, o una URL absoluta terminada
+en `/api` cuando la API se publica en otro host. La imagen Docker del frontend
+la resuelve al arrancar, por lo que cambiarla no requiere recompilarla.
+
+### Imagen Docker de develop
+
+Cada push a `develop` publica en Docker Hub las etiquetas `develop` y
+`develop-<sha>` bajo `<docker-id>/mendoza-backend`. El repositorio de GitHub
+debe definir la variable `DOCKERHUB_USERNAME` y el secreto `DOCKERHUB_TOKEN`.
+La imagen recibe toda su configuración al arrancar y no contiene credenciales
+de infraestructura:
+
+```bash
+docker run --rm -p 4000:4000 --env-file .env \
+  <docker-id>/mendoza-backend:develop
+```
+
+Si se cambia `PORT`, debe publicarse el mismo puerto del contenedor, por ejemplo
+`-e PORT=5000 -p 5000:5000`. El healthcheck usa también ese valor en runtime.
+
 ## Seguridad de autenticación
 
 - El JWT se entrega en una cookie `HttpOnly`, `Secure`, `SameSite=None` y particionada en producción, porque el frontend y la API se publican en hosts distintos.
@@ -32,9 +72,9 @@ El seed del administrador no forma parte del arranque automático: debe ejecutar
 - Si producción utiliza Nginx u otro proxy, configurar `TRUST_PROXY_HOPS` con la cantidad exacta de saltos confiables para que el rate limiting identifique correctamente la IP del cliente. No habilitarlo cuando la API esté expuesta directamente.
 - Cada JWT referencia una sesión persistida que puede revocarse al cerrar sesión o recuperar la contraseña.
 - Las sesiones con rol `school` exigen una asociación vigente con una escuela activa; la baja revoca sus SIDs y la reactivación requiere un login nuevo.
-- Cinco intentos fallidos bloquean temporalmente la cuenta durante 15 minutos por defecto.
-- Los tokens de recuperación se almacenan hasheados, vencen y son de un solo uso.
-- El cambio desde perfil valida la contraseña actual y revoca las demás sesiones.
+- Cinco intentos fallidos bloquean temporalmente la cuenta durante 15 minutos por defecto. Los resultados concurrentes de login se serializan por usuario; el contador, el último acceso y la nueva sesión se confirman en una única transacción.
+- Los tokens de recuperación se almacenan hasheados, vencen y son de un solo uso. Emitir uno invalida los anteriores dentro de la misma transacción; al consumirlo se cambia la contraseña, se invalidan los demás enlaces y se revocan las sesiones atómicamente.
+- El cambio desde perfil valida la contraseña actual y actualiza el hash, reinicia el bloqueo, invalida los enlaces de recuperación pendientes y revoca las demás sesiones en una única transacción.
 - Los recursos privados deben combinar `JwtAuthGuard`, `PasswordChangeRequiredGuard` y `RolesGuard`. Los recursos con `:schoolId` deben agregar `SchoolAccessGuard` para impedir acceso entre colegios.
 
 ## SMTP
@@ -49,7 +89,7 @@ El envío ocurre después de confirmar el alta. Si SMTP no está configurado o e
 
 Las rutas bajo `/admin/users` requieren sesión válida, contraseña inicial ya cambiada y rol `admin`. Incluyen listado paginado, búsqueda y filtros, alta, edición, bloqueo, desbloqueo y restablecimiento administrativo de contraseña.
 
-Las operaciones sensibles generan registros en `audit_logs`. Nunca se guardan contraseñas ni hashes dentro del detalle de auditoría. Bloquear una cuenta o restablecer su contraseña revoca sus sesiones activas.
+Las operaciones sensibles generan registros en `audit_logs`. Nunca se guardan contraseñas ni hashes dentro del detalle de auditoría. Cambiar correo, rol o estado invalida los enlaces de recuperación pendientes; bloquear una cuenta revoca además sus sesiones activas. Un restablecimiento administrativo bloquea la fila del usuario, invalida sus enlaces y revoca sus sesiones en la misma transacción.
 
 El selector de colegio consulta `GET /api/admin/users/schools?search=texto&page=1&limit=20`. La búsqueda por CUE, número o nombre se procesa en PostgreSQL, devuelve una respuesta paginada y utiliza índices trigram creados por la migración `AddSchoolSearchIndexes1720375207000`; el frontend no descarga el padrón completo.
 
@@ -84,18 +124,22 @@ consulta adicional por etapa.
 
 La importación acepta CSV/XLSX de hasta 2 MB y 500 filas, ofrece vista previa y realiza importación parcial. La plantilla se obtiene en `GET /admin/schools/import/template`. El padrón filtrado puede exportarse mediante `GET /admin/schools/export?format=csv` o `format=xlsx`; cada exportación queda auditada.
 
-Columnas de la plantilla de colegios (los campos del segundo referente son
-opcionales):
+La plantilla vigente de colegios utiliza exactamente estas columnas:
 
 ```text
-cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,nivel,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_cargo,referente_correo,referente_telefono,salud_referente_nombre,salud_referente_apellido,salud_referente_cargo,salud_referente_correo,salud_referente_telefono,matricula,caracteristicas,estado
+cue,nombre,director,numero,departamento,localidad,direccion,codigo_postal,tipo_educacion,niveles_y_matriculas,gestion,ambito,jornada,telefono,correo,referente_nombre,referente_apellido,referente_cargo,referente_correo,referente_telefono,matricula_total,plurigrado,intercultural_bilingue,estado
 ```
 
-`caracteristicas` debe ser un objeto JSON con hasta 30 valores simples, por ejemplo `{"comedor":true}`.
-Los referentes se guardan en `school_contacts` como `RESPONDENT` y
-`HEALTH_PROMOTION`; no son usuarios ni reciben credenciales automáticamente.
-Las columnas históricas del referente principal se mantienen temporalmente
-sincronizadas para compatibilidad.
+- `niveles_y_matriculas` exige al menos un nivel activo, identificado por código
+  o nombre del catálogo. Se separan los niveles con `|` y la matrícula opcional
+  de cada uno con `:`, por ejemplo `Inicial: 45 | Primario: 210`.
+- `matricula_total` puede quedar vacía o contener un entero entre 0 y 1.000.000;
+  es un dato independiente y no se infiere sumando las matrículas por nivel.
+- `plurigrado` e `intercultural_bilingue` aceptan `sí`, `no` o una celda vacía.
+  Se almacenan como características ternarias del colegio.
+- La plantilla crea un único contacto responsable (`RESPONDENT`) con los campos
+  `referente_*`; `referente_cargo` es opcional. El contacto no es un usuario ni
+  recibe credenciales automáticamente.
 
 ## Portal del establecimiento
 
@@ -139,26 +183,30 @@ Las rutas bajo `/api/admin/surveys` requieren sesión válida, contraseña inici
 - `POST /api/admin/surveys/:surveyId/versions`: alta de una versión con la plantilla `official_dimensions` (predeterminada), vacía con `blank` o clonada con `sourceVersionId`.
 - `GET`, `PUT` y `DELETE /api/admin/surveys/:surveyId/versions/:versionId`: consulta y ABM de una versión borrador.
 - `POST /api/admin/surveys/:surveyId/versions/:versionId/publish`: publicación definitiva.
-- `GET /api/admin/surveys/:surveyId/versions/:versionId/validation`: validación previa con todos los errores estructurales detectados.
+- `GET /api/admin/surveys/:surveyId/versions/:versionId/validation`: validación previa con errores estructurales y de evaluación institucional.
 - `GET /api/admin/surveys/:surveyId/versions/compare`: comparación estructural mediante `fromVersionId` y `toVersionId`.
 
-Las reglas de aplicabilidad de una versión borrador pueden crearse para una pregunta individual o aplicarse a varias mediante `POST /api/admin/surveys/:surveyId/versions/:versionId/applicability-rules/bulk`. La operación múltiple es transaccional: valida primero todas las preguntas y agrega la regla al final de la prioridad propia de cada una; si un destino es inválido o tiene una acción predeterminada incompatible, no persiste cambios parciales. La edición, eliminación, reordenamiento y previsualización continúan siendo individuales para conservar trazabilidad clara.
+Las reglas de aplicabilidad de una versión borrador pueden crearse para una pregunta individual o aplicarse a varias mediante `POST /api/admin/surveys/:surveyId/versions/:versionId/applicability-rules/bulk`. La operación múltiple es transaccional: valida primero todas las preguntas y agrega la regla al final de la prioridad propia de cada una; si un destino es inválido o tiene una acción predeterminada incompatible, no persiste cambios parciales. La edición, eliminación, reordenamiento y previsualización continúan siendo individuales para conservar trazabilidad clara. Todas las escrituras de reglas exigen `expectedUpdatedAt` —como query en `DELETE` y dentro del cuerpo en las demás—, comparado después de bloquear la versión; la nueva revisión exacta se devuelve en `X-Survey-Version-Updated-At`. El listado toma un lock compartido y devuelve reglas y revisión del mismo snapshot mediante esa cabecera, evitando combinar contenido antiguo con un token nuevo.
 
 Los borradores pueden guardarse incompletos para permitir construcción progresiva. Antes de publicar se exige, como mínimo, una dimensión, una sección por dimensión, una pregunta por sección, opciones para las preguntas de selección y puntaje en cada opción. En todos los guardados se controlan códigos repetidos, tipos incompatibles con opciones, puntajes fuera de 0–100 y rangos de validación inconsistentes.
 
+La respuesta de validación conserva `valid`, `errors` y `counts`, y agrega `profile` (`generic` o `institutional`), `evaluable` y `evaluationErrors`. `valid` indica si la versión puede publicarse: una versión genérica estructuralmente válida sigue siendo publicable, pero devuelve `evaluable: false` y no puede alimentar una etapa institucional. Una versión institucional sólo es válida y evaluable si contiene exactamente las seis dimensiones oficiales, las preguntas globales `p001` a `p060` sin faltantes ni duplicados y ubicadas en su dimensión aprobada, todas obligatorias, de selección simple y con el mapeo de puntajes oficial completo.
+
 La plantilla `official_dimensions` crea únicamente el esqueleto aprobado: nombres, descripciones, códigos internos y orden de las seis dimensiones. No precarga secciones ni preguntas. “Entorno Socioemocional” no se registra como una séptima dimensión; las preguntas 41, 42 y 43 quedan identificadas para su futura carga dentro de `salud_mental`.
 
-La importación institucional admite exclusivamente preguntas de selección simple, no genera ni permite “Otro” o “No aplica” y valida desde una política central las escalas `100/50/0` para las dimensiones generales y `100/66/33/0` para Salud Mental. La matriz confirmada aplica `100/50/0` a las ternarias generales, `100/0` a p022, p023 y p025, y `0/33/66/100` a p052. p038 y las preguntas mentales de tres opciones permanecen bloqueadas sin puntajes hasta contar con el mapeo del cliente. La columna `condicion` se incluye como reserva, pero debe permanecer vacía hasta contar con el modelo formal de reglas; no se persiste texto opaco que el motor de evaluación no pueda ejecutar.
+La importación institucional admite exclusivamente preguntas de selección simple, no genera ni permite “Otro” o “No aplica” y valida una matriz central por código y orden de opciones. Aplica `100/50/0` a las ternarias generales, `100/0` a p022, p023 y p025, `100/66/33/0` a p038, `100/50/0` a las preguntas mentales ternarias y `0/33/66/100` a p052. La columna `condicion` se incluye como reserva, pero debe permanecer vacía hasta contar con el modelo formal de reglas; no se persiste texto opaco que el motor de evaluación no pueda ejecutar.
 
-La planilla consolidada de 60 preguntas se versiona en `docs/plantilla-cuestionario-completo.xlsx` y se regenera con `npm run survey:generate-official-template`. Incorpora las correcciones funcionales cerradas para p010, p020, p032 y p046, incluye una hoja con el inventario completo de puntuación y se valida contra el importador real. La validación debe rechazar solamente los puntajes aún no definidos de p038 y las 16 preguntas mentales ternarias; la planilla no es importable hasta resolverlos. Las decisiones de contenido, puntuación y aplicabilidad se documentan en [`docs/cuestionario-oficial-sur02.md`](docs/cuestionario-oficial-sur02.md).
+La planilla consolidada de 60 preguntas se versiona en `docs/plantilla-cuestionario-completo.xlsx` y se regenera con `npm run survey:generate-official-template`. Incorpora las correcciones funcionales cerradas para p010, p020, p032 y p046, incluye una hoja con el inventario completo de puntuación y se valida contra el importador real. Sus 179 opciones importables tienen puntajes completos. Las decisiones de contenido, puntuación y aplicabilidad se documentan en [`docs/cuestionario-oficial-sur02.md`](docs/cuestionario-oficial-sur02.md).
 
 SUR-04 exige que las 60 preguntas del banco institucional se publiquen como obligatorias y que cada pregunta aplicable tenga respuesta antes del envío final. Las excluidas quedan fuera de la completitud; los cuestionarios personalizados conservan sus preguntas opcionales y usan códigos distintos del espacio reservado oficial. La política, el comportamiento transaccional y sus regresiones se documentan en [`docs/questionnaire-required-answers.md`](docs/questionnaire-required-answers.md).
 
-SUR-05 centraliza las escalas institucionales `100/50/0` y `100/66/33/0`, valida la secuencia exacta por código antes de publicar y mantiene bloqueados, sin inferencias, `p038` y los dieciséis mapeos mentales todavía no definidos por el cliente. La matriz y las decisiones pendientes se documentan en [`docs/official-survey-scoring.md`](docs/official-survey-scoring.md).
+SUR-05 centraliza la matriz institucional completa y valida la secuencia exacta por código antes de publicar, incluidas las excepciones aprobadas de p038 y las dieciséis preguntas mentales ternarias. La matriz se documenta en [`docs/official-survey-scoring.md`](docs/official-survey-scoring.md).
 
 Publicar es una operación irreversible: el servicio impide editar o eliminar la versión y la migración `ProtectPublishedSurveyVersions1720375206000` agrega triggers PostgreSQL que también protegen la versión y todos sus descendientes ante escrituras por fuera de la API. Para cambiar contenido publicado debe clonarse como una versión borrador nueva.
 
-Cada cuestionario admite una sola versión vigente. Al publicar un borrador, el backend bloquea el cuestionario, archiva automáticamente la versión publicada anterior y publica la nueva dentro de la misma transacción. Ambas transiciones se auditan con un `publicationOperationId` común. La migración `EnforceSinglePublishedSurveyVersion1720375218000` detecta inconsistencias existentes y agrega un índice único parcial para impedir más de una fila `published` por cuestionario incluso ante escrituras concurrentes.
+Cada cuestionario admite una sola versión vigente. Al publicar un borrador, el backend bloquea el cuestionario, archiva automáticamente la versión publicada anterior y publica la nueva dentro de la misma transacción. Ambas transiciones se auditan con un `publicationOperationId` común. La migración `EnforceSinglePublishedSurveyVersion1720375218000` detecta inconsistencias existentes y agrega un índice único parcial para impedir más de una fila `published` por cuestionario incluso ante escrituras concurrentes. La publicación y todas las mutaciones de dimensiones, secciones, preguntas, opciones, reglas y condiciones se serializan además sobre el mismo lock de `survey_versions`; los triggers mantienen esa garantía frente a SQL directo.
+
+`PUT /api/admin/surveys/:surveyId/versions/:versionId` exige `expectedUpdatedAt` y la identidad explícita de cada nodo (`id` con el UUID persistido o `null` para uno nuevo). Renombrar, mover o reordenar conserva los UUID y, por lo tanto, las reglas asociadas a una pregunta. Eliminar una pregunta y reutilizar su código crea otra identidad sin heredar reglas. Una revisión vencida devuelve `409 SURVEY_VERSION_EDIT_CONFLICT` sin aplicar cambios; la misma protección se aplica a altas, cambios, bajas y reordenamientos de reglas.
 
 El archivado manual se conserva para retirar una versión sin reemplazarla. Las etapas mantienen su `survey_version_id`: una versión archivada continúa disponible de forma inmutable para etapas, presentaciones y resultados históricos, pero no puede seleccionarse al crear una etapa nueva.
 
@@ -168,7 +216,9 @@ Las altas, cambios, clonaciones, publicaciones y bajas se registran en `audit_lo
 
 Las rutas bajo `/api/admin/campaigns` requieren rol `admin`. Permiten listar, crear, consultar, editar y eliminar etapas borrador, además de ejecutar el ciclo irreversible `draft → active → closed → archived`.
 
-Cada etapa es anual o semestral y referencia obligatoriamente una versión publicada de un cuestionario activo. Al activarse, su configuración queda protegida; sólo los borradores pueden editarse o eliminarse. `GET /api/admin/campaigns/survey-versions` devuelve las versiones habilitadas para el selector administrativo.
+Cada etapa es anual o semestral y referencia obligatoriamente una versión publicada, institucionalmente evaluable, de un cuestionario activo. Al activarse, su configuración queda protegida; sólo los borradores pueden editarse o eliminarse. `GET /api/admin/campaigns/survey-versions` conserva su contrato de respuesta y devuelve únicamente versiones que cumplen esa política. La misma certificación compuesta —estructura publicable, reglas de aplicabilidad y contrato/puntajes institucionales— se repite al crear, cambiar o activar una etapa, al incorporar escuelas, antes de aceptar escrituras y antes de calcular resultados.
+
+Las etapas activas históricas cuya versión ya no supera la certificación continúan visibles en administración, portal escolar y reportes para no perder trazabilidad. El portal las marca bloqueadas, impide iniciar o modificar respuestas y permite abrir un borrador existente sólo en modo lectura. Administración debe cerrar la etapa incompatible y crear un reemplazo con una versión certificada; no se reescriben versiones, presentaciones ni resultados históricos.
 
 Una etapa puede ser independiente o integrar un recorrido mediante `workflowCycle` y `sequenceOrder`. Varias etapas del mismo recorrido pueden permanecer activas simultáneamente, pero cada escuela sólo puede iniciar, guardar o enviar una etapa cuando ya envió todas las etapas anteriores que tiene asignadas. Las etapas anteriores no asignadas a esa escuela se omiten. `GET /api/admin/campaigns/workflows` lista los recorridos existentes y su último orden; la combinación recorrido/orden es única sin distinguir mayúsculas. Las etapas existentes al aplicar la migración permanecen independientes para no crear dependencias históricas artificiales.
 
@@ -224,8 +274,10 @@ El flujo escolar utiliza:
 
 - `POST /api/school/campaigns/:campaignId/submission`: crea o recupera la presentación única de la escuela.
 - `GET /api/school/campaigns/:campaignId/submission`: evalúa en lote la aplicabilidad contra el snapshot rectificado vinculado y recupera únicamente la estructura aplicable, sus respuestas, progreso, exclusiones y datos escolares faltantes.
-- `PUT /api/school/campaigns/:campaignId/submission/draft`: reemplaza atómicamente sólo las respuestas aplicables del borrador. Las respuestas anteriores de preguntas excluidas se conservan sin participar en la validación.
-- `POST /api/school/campaigns/:campaignId/submission/submit`: reevalúa aplicabilidad, bloquea datos escolares faltantes, valida únicamente preguntas aplicables y realiza el envío definitivo.
+- `PUT /api/school/campaigns/:campaignId/submission/draft`: recibe `answers` y `expectedRevision`, y reemplaza atómicamente sólo las respuestas aplicables del borrador. Las respuestas anteriores de preguntas excluidas se conservan sin participar en la validación. Si el mismo guardado adopta una rectificación que vuelve no aplicable una pregunta incluida en el request, descarta únicamente ese valor en vuelo y devuelve el workspace actualizado; enviar una respuesta a una pregunta que ya era no aplicable continúa siendo inválido.
+- `POST /api/school/campaigns/:campaignId/submission/submit`: recibe `expectedRevision`, reevalúa aplicabilidad, bloquea datos escolares faltantes, valida únicamente preguntas aplicables y realiza el envío definitivo.
+
+Cada workspace expone una `revision` monotónica. Guardado y envío bloquean la fila y rechazan con `SUBMISSION_REVISION_CONFLICT` cualquier escritura basada en una revisión anterior, evitando que otra pestaña sobrescriba respuestas nuevas. La respuesta del guardado se serializa dentro de la misma transacción, por lo que su revisión corresponde exactamente a ese `PUT`. La migración `AddSubmissionOptimisticRevision1720375223000` inicializa las presentaciones existentes en revisión cero.
 
 La escuela se obtiene siempre de la asociación del usuario autenticado. El primer borrador exige establecimiento activo, confirmación anual y un snapshot listo para evaluar; posteriores usuarios asociados a la misma escuela recuperan ese borrador porque la unicidad se define por `school_id + campaign_id`. También se conserva un snapshot del usuario que inició la carga.
 

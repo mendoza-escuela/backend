@@ -6,7 +6,7 @@
 # ip-address), ninguno proveniente del código de la aplicación ni de sus
 # dependencias. La actualización de npm sólo hace falta donde se instalan
 # paquetes, así que ahora se aplica en los stages de build y no en el runtime.
-FROM node:22-alpine AS base
+FROM node:22.23.2-alpine3.24 AS base
 WORKDIR /app
 # La etiqueta de Node puede quedar unos días detrás de los repositorios de
 # seguridad de Alpine. Aplicamos únicamente actualizaciones compatibles con la
@@ -38,7 +38,7 @@ ENV NODE_ENV=production
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/assets ./assets
-COPY scripts ./scripts
+COPY scripts/start-production.cjs ./scripts/start-production.cjs
 COPY package*.json ./
 RUN rm -rf \
     /usr/local/lib/node_modules/npm \
@@ -49,5 +49,5 @@ RUN rm -rf \
 USER node
 EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:4000/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||'4000')+'/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["node", "scripts/start-production.cjs"]

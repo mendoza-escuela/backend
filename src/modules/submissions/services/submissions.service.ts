@@ -22,11 +22,17 @@ import {
 import { SurveyVersion } from '../../surveys/entities/survey-version.entity';
 import { isHistoricallyAvailableSurveyVersion } from '../../surveys/policies/survey-version-availability.policy';
 import {
+  SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_CODE,
+  SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_MESSAGE,
+  SurveyVersionCertificationService,
+} from '../../surveys/services/survey-version-certification.service';
+import {
   QuestionApplicabilityResolution,
   SurveyApplicabilityResult,
   SurveyApplicabilityService,
 } from '../../surveys/services/survey-applicability.service';
 import { SaveSubmissionDraftDto } from '../dto/save-submission-draft.dto';
+import { SubmitSubmissionDto } from '../dto/submit-submission.dto';
 import { SubmissionQuestionApplicability } from '../entities/submission-question-applicability.entity';
 import { SubmissionStatus } from '../entities/submission-status.enum';
 import {
@@ -44,6 +50,7 @@ export class SubmissionsService {
     private readonly schoolsService: SchoolsService,
     private readonly surveyApplicability: SurveyApplicabilityService,
     private readonly evaluationResults: EvaluationResultsService,
+    private readonly versionCertification: SurveyVersionCertificationService,
   ) {}
 
   async availableCampaigns(actor: AuthenticatedUser) {
@@ -101,6 +108,10 @@ export class SubmissionsService {
       items: campaigns.map((campaign) => {
         const submission = submissionsByCampaign.get(campaign.id);
         const workflowBlocker = workflowBlockers.get(campaign.id) ?? null;
+        const versionEvaluable =
+          (!submission ||
+            submission.surveyVersionId === campaign.surveyVersionId) &&
+          this.isVersionEvaluableForExistingCampaign(campaign.surveyVersion);
         const totalQuestions =
           questionCounts.get(campaign.surveyVersionId) ?? 0;
         return {
@@ -108,20 +119,23 @@ export class SubmissionsService {
           canStart:
             school.isActive &&
             rectification.isEvaluationReady &&
+            versionEvaluable &&
             !workflowBlocker,
           workflowStatus:
             submission?.status === SubmissionStatus.Submitted
               ? 'completed'
-              : workflowBlocker
+              : !versionEvaluable || workflowBlocker
                 ? 'locked'
                 : 'available',
           blockedBy: workflowBlocker,
-          blockingReason: this.blockingReason(
-            school.isActive,
-            rectification.isConfirmed,
-            rectification.isEvaluationReady,
-            workflowBlocker?.name,
-          ),
+          blockingReason: versionEvaluable
+            ? this.blockingReason(
+                school.isActive,
+                rectification.isConfirmed,
+                rectification.isEvaluationReady,
+                workflowBlocker?.name,
+              )
+            : SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_MESSAGE,
           submission: submission
             ? this.submissionSummary(submission, totalQuestions)
             : null,
@@ -210,6 +224,7 @@ export class SubmissionsService {
             status: SubmissionStatus.Draft,
             startedAt: new Date(),
             lastSavedAt: null,
+            revision: 0,
             submittedAt: null,
           }),
         );
@@ -248,81 +263,96 @@ export class SubmissionsService {
   }
 
   async workspace(campaignId: string, actor: AuthenticatedUser) {
-    const { school, submission, applicability, campaignOpen, workflowBlocker } =
-      await this.dataSource.transaction(async (manager) => {
-        const context = await this.schoolsService.evaluationContextForUser(
+    const {
+      school,
+      submission,
+      applicability,
+      campaignOpen,
+      versionEvaluable,
+      workflowBlocker,
+    } = await this.dataSource.transaction(async (manager) => {
+      const context = await this.schoolsService.evaluationContextForUser(
+        actor.id,
+        manager,
+      );
+      await this.schoolsService.assertActiveForEvaluation(
+        context.school.id,
+        manager,
+      );
+      const accessState = await this.getSubmissionAccessState(
+        manager,
+        campaignId,
+        context.school.id,
+      );
+      const shouldLock =
+        accessState.status === SubmissionStatus.Draft &&
+        this.isCampaignOpen(accessState.campaign);
+      const loaded = await this.getSubmission(
+        manager,
+        campaignId,
+        context.school.id,
+        shouldLock,
+      );
+      const open = this.isCampaignOpen(loaded.campaign);
+      // Un borrador sólo puede recalcular o adoptar datos si fue cargado bajo
+      // bloqueo de escritura y la etapa continúa abierta al revalidarla.
+      const campaignOpen =
+        loaded.status === SubmissionStatus.Draft ? shouldLock && open : open;
+      const versionEvaluable = this.isVersionEvaluableForExistingCampaign(
+        loaded.surveyVersion,
+        loaded.campaign.surveyVersionId,
+      );
+      const writable = campaignOpen && versionEvaluable;
+      const workflowBlocker =
+        writable && loaded.status === SubmissionStatus.Draft
+          ? ((
+              await this.campaignsService.workflowBlockers(
+                [loaded.campaign],
+                context.school.id,
+                manager,
+              )
+            ).get(loaded.campaign.id) ?? null)
+          : null;
+      if (writable && loaded.status === SubmissionStatus.Draft)
+        await this.refreshDraftRectification(
+          manager,
+          loaded,
+          context.rectification,
           actor.id,
-          manager,
         );
-        await this.schoolsService.assertActiveForEvaluation(
-          context.school.id,
+      return {
+        school: context.school,
+        submission: loaded,
+        applicability: await this.resolveApplicability(
           manager,
-        );
-        const accessState = await this.getSubmissionAccessState(
-          manager,
-          campaignId,
-          context.school.id,
-        );
-        const shouldLock =
-          accessState.status === SubmissionStatus.Draft &&
-          this.isCampaignOpen(accessState.campaign);
-        const loaded = await this.getSubmission(
-          manager,
-          campaignId,
-          context.school.id,
-          shouldLock,
-        );
-        const open = this.isCampaignOpen(loaded.campaign);
-        // Un borrador sólo puede recalcular o adoptar datos si fue cargado bajo
-        // bloqueo de escritura y la etapa continúa abierta al revalidarla.
-        const campaignOpen =
-          loaded.status === SubmissionStatus.Draft ? shouldLock && open : open;
-        const workflowBlocker =
-          campaignOpen && loaded.status === SubmissionStatus.Draft
-            ? ((
-                await this.campaignsService.workflowBlockers(
-                  [loaded.campaign],
-                  context.school.id,
-                  manager,
-                )
-              ).get(loaded.campaign.id) ?? null)
-            : null;
-        if (campaignOpen && loaded.status === SubmissionStatus.Draft)
-          await this.refreshDraftRectification(
-            manager,
-            loaded,
-            context.rectification,
-            actor.id,
-          );
-        return {
-          school: context.school,
-          submission: loaded,
-          applicability: await this.resolveApplicability(
-            manager,
-            loaded,
-            loaded.surveyVersion,
-            { readOnly: !campaignOpen },
-          ),
-          campaignOpen,
-          workflowBlocker,
-        };
-      });
+          loaded,
+          loaded.surveyVersion,
+          { readOnly: !writable },
+        ),
+        campaignOpen,
+        versionEvaluable,
+        workflowBlocker,
+      };
+    });
     return this.serializeWorkspace(
       submission,
       applicability,
       school.isActive &&
         campaignOpen &&
+        versionEvaluable &&
         !workflowBlocker &&
         submission.status === SubmissionStatus.Draft,
       !school.isActive
         ? 'El establecimiento está inactivo.'
         : !campaignOpen
           ? 'La etapa ya no se encuentra abierta.'
-          : workflowBlocker
-            ? `Antes de continuar debés enviar la etapa anterior: ${workflowBlocker.name}.`
-            : submission.status === SubmissionStatus.Submitted
-              ? 'La presentación ya fue enviada y es de sólo lectura.'
-              : null,
+          : submission.status === SubmissionStatus.Submitted
+            ? 'La presentación ya fue enviada y es de sólo lectura.'
+            : !versionEvaluable
+              ? SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_MESSAGE
+              : workflowBlocker
+                ? `Antes de continuar debés enviar la etapa anterior: ${workflowBlocker.name}.`
+                : null,
     );
   }
 
@@ -331,7 +361,7 @@ export class SubmissionsService {
     dto: SaveSubmissionDraftDto,
     actor: AuthenticatedUser,
   ) {
-    await this.dataSource.transaction(async (manager) => {
+    return this.dataSource.transaction(async (manager) => {
       const context = await this.schoolsService.evaluationContextForUser(
         actor.id,
         manager,
@@ -361,8 +391,15 @@ export class SubmissionsService {
         school.id,
         true,
       );
+      this.assertSubmissionVersionMatchesCampaign(submission, campaign);
       this.assertDraft(submission);
-      await this.refreshDraftRectification(
+      this.assertExpectedRevision(submission, dto.expectedRevision);
+      const previouslyApplicableQuestionIds = new Set(
+        (submission.applicabilityDecisions ?? [])
+          .filter(({ status }) => status === 'applicable')
+          .map(({ questionId }) => questionId),
+      );
+      const rectificationChanged = await this.refreshDraftRectification(
         manager,
         submission,
         rectification,
@@ -371,38 +408,61 @@ export class SubmissionsService {
       const version =
         submission.surveyVersion ??
         (await this.getVersion(manager, submission.surveyVersionId));
+      submission.surveyVersion = version;
+      submission.campaign ??= campaign;
       const applicability = await this.resolveApplicability(
         manager,
         submission,
         version,
       );
-      const answers = this.validateAnswers(version, dto, applicability);
+      const answers = this.validateAnswers(
+        version,
+        dto,
+        applicability,
+        rectificationChanged ? previouslyApplicableQuestionIds : undefined,
+      );
 
       if (applicability.applicableQuestionIds.size)
         await manager.delete(SurveyAnswer, {
           submissionId: submission.id,
           questionId: In([...applicability.applicableQuestionIds]),
         });
-      if (answers.length)
-        await manager.save(
-          SurveyAnswer,
-          answers.map((answer) =>
-            manager.create(SurveyAnswer, {
-              submissionId: submission.id,
-              ...answer,
-            }),
-          ),
-        );
+      const persistedAnswers = answers.length
+        ? await manager.save(
+            SurveyAnswer,
+            answers.map((answer) =>
+              manager.create(SurveyAnswer, {
+                submissionId: submission.id,
+                ...answer,
+              }),
+            ),
+          )
+        : [];
+      submission.answers = [
+        ...submission.answers.filter(
+          ({ questionId }) =>
+            !applicability.applicableQuestionIds.has(questionId),
+        ),
+        ...persistedAnswers,
+      ];
       submission.lastSavedAt = new Date();
+      submission.revision += 1;
       await manager.update(SurveySubmission, submission.id, {
         lastSavedAt: submission.lastSavedAt,
+        revision: submission.revision,
       });
+      // Se serializa dentro de la misma transacción y mientras conservamos el
+      // bloqueo: la revisión devuelta es exactamente la que escribió este PUT.
+      return this.serializeWorkspace(submission, applicability, true, null);
     });
-    return this.workspace(campaignId, actor);
   }
 
-  async submit(campaignId: string, actor: AuthenticatedUser) {
-    await this.dataSource.transaction(async (manager) => {
+  async submit(
+    campaignId: string,
+    dto: SubmitSubmissionDto,
+    actor: AuthenticatedUser,
+  ) {
+    return this.dataSource.transaction(async (manager) => {
       const context = await this.schoolsService.evaluationContextForUser(
         actor.id,
         manager,
@@ -432,7 +492,9 @@ export class SubmissionsService {
         school.id,
         true,
       );
+      this.assertSubmissionVersionMatchesCampaign(submission, campaign);
       this.assertDraft(submission);
+      this.assertExpectedRevision(submission, dto.expectedRevision);
       await this.refreshDraftRectification(
         manager,
         submission,
@@ -442,6 +504,8 @@ export class SubmissionsService {
       const version =
         submission.surveyVersion ??
         (await this.getVersion(manager, submission.surveyVersionId));
+      submission.surveyVersion = version;
+      submission.campaign ??= campaign;
       const applicability = await this.resolveApplicability(
         manager,
         submission,
@@ -451,14 +515,13 @@ export class SubmissionsService {
       const applicableQuestions = this.questions(version).filter((question) =>
         applicability.applicableQuestionIds.has(question.id),
       );
+      const answeredQuestionIds = this.validatePersistedAnswers(
+        applicableQuestions,
+        submission.answers,
+      );
       const missing = applicableQuestions
         .filter((question) => question.required)
-        .filter(
-          (question) =>
-            !submission.answers.some(
-              (answer) => answer.questionId === question.id,
-            ),
-        );
+        .filter((question) => !answeredQuestionIds.has(question.id));
       if (missing.length)
         throw new BadRequestException(
           `Faltan ${missing.length} preguntas obligatorias: ${missing
@@ -470,10 +533,12 @@ export class SubmissionsService {
       submission.status = SubmissionStatus.Submitted;
       submission.submittedAt = new Date();
       submission.lastSavedAt ??= submission.submittedAt;
+      submission.revision += 1;
       await manager.update(SurveySubmission, submission.id, {
         status: submission.status,
         submittedAt: submission.submittedAt,
         lastSavedAt: submission.lastSavedAt,
+        revision: submission.revision,
       });
       const result = await this.evaluationResults.calculateAndPersist(
         manager,
@@ -507,8 +572,13 @@ export class SubmissionsService {
           originalRespondent: submission.originalRespondentSnapshot,
         },
       );
+      return this.serializeWorkspace(
+        submission,
+        applicability,
+        false,
+        'La presentación ya fue enviada y es de sólo lectura.',
+      );
     });
-    return this.workspace(campaignId, actor);
   }
 
   private async getSubmission(
@@ -688,6 +758,7 @@ export class SubmissionsService {
     version: SurveyVersion,
     dto: SaveSubmissionDraftDto,
     applicability: SurveyApplicabilityResult,
+    newlyInapplicableQuestionIds: ReadonlySet<string> = new Set(),
   ) {
     const questions = this.questions(version);
     const questionsById = new Map(
@@ -706,12 +777,19 @@ export class SubmissionsService {
           'Una de las preguntas no pertenece a la versión de la etapa.',
         );
       if (this.isEmptyAnswer(answer.optionId, answer.value)) return [];
-      if (!applicability.applicableQuestionIds.has(question.id))
+      if (!applicability.applicableQuestionIds.has(question.id)) {
+        // El cliente pudo responder con el contrato que seguía vigente cuando
+        // comenzó este PUT. Si el mismo guardado adopta una rectificación que
+        // excluye la pregunta, se ignora sólo ese valor en vuelo y se devuelve
+        // el workspace autoritativo. Una pregunta que ya era no aplicable
+        // continúa siendo un error de entrada.
+        if (newlyInapplicableQuestionIds.has(question.id)) return [];
         throw new BadRequestException(
           applicability.incompleteQuestionIds.has(question.id)
             ? `No se puede responder ${question.code} hasta completar los datos escolares requeridos.`
             : `La pregunta ${question.code} no es aplicable a este establecimiento.`,
         );
+      }
       return [this.validateAnswer(question, answer.optionId, answer.value)];
     });
   }
@@ -759,9 +837,40 @@ export class SubmissionsService {
         throw new BadRequestException(
           `Ingresá un valor válido para la pregunta ${question.code}.`,
         );
-      this.validateText(question, value);
+      const normalizedValue = value.trim();
+      this.validateText(question, normalizedValue);
+      return {
+        questionId: question.id,
+        optionId: null,
+        value: normalizedValue,
+      };
     }
     return { questionId: question.id, optionId: null, value: value ?? null };
+  }
+
+  /**
+   * Revalida el estado persistido antes del envío definitivo. Esto protege
+   * datos legados o escritos por clientes anteriores sin reescribir respuestas
+   * que el guardado normal ya persiste sanitizadas.
+   */
+  private validatePersistedAnswers(
+    applicableQuestions: SurveyQuestion[],
+    answers: SurveyAnswer[],
+  ) {
+    const applicableQuestionById = new Map(
+      applicableQuestions.map((question) => [question.id, question]),
+    );
+    const answeredQuestionIds = new Set<string>();
+
+    for (const answer of answers) {
+      const question = applicableQuestionById.get(answer.questionId);
+      if (!question || this.isEmptyAnswer(answer.optionId, answer.value))
+        continue;
+      this.validateAnswer(question, answer.optionId, answer.value);
+      answeredQuestionIds.add(question.id);
+    }
+
+    return answeredQuestionIds;
   }
 
   private validateNumber(
@@ -834,6 +943,7 @@ export class SubmissionsService {
         status: submission.status,
         startedAt: submission.startedAt,
         lastSavedAt: submission.lastSavedAt,
+        revision: submission.revision,
         submittedAt: submission.submittedAt,
         originalRespondent: submission.originalRespondentSnapshot,
         schoolRectificationId: submission.schoolRectificationId,
@@ -883,6 +993,35 @@ export class SubmissionsService {
         applicability.applicableQuestionIds,
       ),
     };
+  }
+
+  private isVersionEvaluableForExistingCampaign(
+    version: SurveyVersion | undefined,
+    campaignSurveyVersionId: string = version?.id ?? '',
+  ) {
+    if (!version) return false;
+    return (
+      version.id === campaignSurveyVersionId &&
+      isHistoricallyAvailableSurveyVersion(
+        version.status,
+        version.publishedAt,
+      ) &&
+      this.versionCertification.certify(version).evaluable
+    );
+  }
+
+  private assertSubmissionVersionMatchesCampaign(
+    submission: SurveySubmission,
+    campaign: { surveyVersionId: string },
+  ) {
+    if (submission.surveyVersionId === campaign.surveyVersionId) return;
+    throw new ConflictException({
+      code: SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_CODE,
+      message: SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_MESSAGE,
+      errors: [
+        'La versión persistida en la presentación no coincide con la versión de su etapa.',
+      ],
+    });
   }
 
   private serializeSurvey(
@@ -974,7 +1113,7 @@ export class SubmissionsService {
       (submission.schoolRectificationId === rectification.id &&
         submission.schoolProfileSnapshot)
     )
-      return;
+      return false;
     const previousRectificationId = submission.schoolRectificationId;
     submission.schoolRectificationId = rectification.id;
     submission.schoolProfileSnapshot = structuredClone(rectification.snapshot);
@@ -992,6 +1131,7 @@ export class SubmissionsService {
         schoolRectificationId: rectification.id,
       },
     );
+    return true;
   }
 
   /**
@@ -1175,6 +1315,7 @@ export class SubmissionsService {
       status: submission.status,
       startedAt: submission.startedAt,
       lastSavedAt: submission.lastSavedAt,
+      revision: submission.revision,
       submittedAt: submission.submittedAt,
       progress: {
         answered,
@@ -1271,6 +1412,24 @@ export class SubmissionsService {
       throw new ConflictException(
         'La presentación ya fue enviada y no admite modificaciones.',
       );
+  }
+
+  /**
+   * Rechaza escrituras construidas sobre una revisión anterior. El chequeo
+   * se ejecuta con la presentación bajo `pessimistic_write`, por lo que la
+   * comparación y el incremento siguiente forman una operación serializada.
+   */
+  private assertExpectedRevision(
+    submission: SurveySubmission,
+    expectedRevision: number,
+  ) {
+    if (submission.revision === expectedRevision) return;
+    throw new ConflictException({
+      code: 'SUBMISSION_REVISION_CONFLICT',
+      message:
+        'El borrador fue actualizado desde otra pestaña o sesión. Recargá la presentación antes de continuar.',
+      currentRevision: submission.revision,
+    });
   }
 
   private audit(

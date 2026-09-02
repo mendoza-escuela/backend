@@ -45,10 +45,11 @@ jobs:
           fetch-depth: 0
 
       - name: Checkout del frontend
+        # El nocturno de backend main revalida la pareja desplegable con frontend main.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mendoza-escuela/frontend
-          ref: develop
+          ref: main
           path: frontend-repo
 
       - name: Resolver el destino del DAST
@@ -110,7 +111,7 @@ jobs:
 
       - name: Limpiar el entorno
         if: always()
-        run: docker compose -f compose.security.yml --profile full --profile seed --profile tests down -v
+        run: ./security/scripts/security-compose.sh --profile full --profile seed --profile tests down -v
 
       - name: Avisar si el escaneo nocturno falla
         if: failure()

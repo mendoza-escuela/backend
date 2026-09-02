@@ -36,8 +36,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '22'
+          node-version-file: .nvmrc
           cache: npm
+      - name: Usar npm declarado por el proyecto
+        run: bash security/scripts/setup-project-npm.sh
       - run: npm ci
       - name: Lint
         run: npm run lint
@@ -75,6 +77,11 @@ jobs:
       - name: Validar excepciones de seguridad
         run: python3 security/scripts/validate-exceptions.py
 
+      - name: Regresiones del consolidador
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s security/scripts/tests -p 'test_*.py' -v
+
       - name: Análisis estático completo
         run: bash security/scripts/run-static.sh
 
@@ -87,7 +94,7 @@ jobs:
 
       - name: Consolidar resultados
         if: always()
-        run: bash security/scripts/create-summary.sh --partial
+        run: bash security/scripts/create-summary.sh --partial --require-group static
 
       - name: Publicar resumen en el PR
         if: always()
@@ -117,17 +124,25 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Checkout del frontend
-        # Repositorio público: no hace falta credencial.
+        # Se audita la misma rama objetivo que recibirá este PR (main/develop).
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mendoza-escuela/frontend
-          ref: develop
+          ref: ${{ github.base_ref }}
           path: frontend-repo
 
       - name: Construir y analizar imágenes
         env:
           SECURITY_FRONTEND_CONTEXT: ${{ github.workspace }}/frontend-repo
         run: bash security/scripts/run-container-scan.sh
+
+      - name: Consolidar resultados
+        if: always()
+        run: bash security/scripts/create-summary.sh --partial --require-group container
+
+      - name: Publicar resumen
+        if: always()
+        run: cat security/reports/summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Guardar metadatos del escaneo
         if: always()
@@ -146,31 +161,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Checkout del frontend
+        # Se audita la misma rama objetivo que recibirá este PR (main/develop).
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mendoza-escuela/frontend
-          ref: develop
+          ref: ${{ github.base_ref }}
           path: frontend-repo
 
       - name: Levantar el entorno efímero
         env:
           SECURITY_FRONTEND_CONTEXT: ${{ github.workspace }}/frontend-repo
         run: |
-          docker compose -f compose.security.yml --profile full up -d --build
+          ./security/scripts/security-compose.sh --profile full up -d --build
           bash security/scripts/wait-for-app.sh
 
       - name: Datos sintéticos
-        run: docker compose -f compose.security.yml --profile seed run --rm sec-seed
+        run: ./security/scripts/security-compose.sh --profile seed run --rm sec-seed
 
       - name: Tests de control de acceso, CSRF, CORS y uploads
-        run: docker compose -f compose.security.yml --profile tests run --rm sec-tests
+        run: ./security/scripts/security-compose.sh --profile tests run --rm sec-tests
 
       - name: ZAP baseline autenticado
         run: bash security/scripts/run-dast.sh
 
       - name: Consolidar resultados
         if: always()
-        run: bash security/scripts/create-summary.sh --partial
+        run: bash security/scripts/create-summary.sh --partial --require-group dast
 
       - name: Publicar resumen
         if: always()
@@ -178,4 +194,4 @@ jobs:
 
       - name: Destruir el entorno y sus datos
         if: always()
-        run: docker compose -f compose.security.yml --profile full --profile seed --profile tests down -v
+        run: ./security/scripts/security-compose.sh --profile full --profile seed --profile tests down -v

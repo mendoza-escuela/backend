@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 
-export const PASSWORD_MIN_LENGTH = 12;
+const PASSWORD_MIN_LENGTH = 12;
 
 /** Valida la política única de contraseñas usada por alta, cambio y recuperación. */
 export function assertStrongPassword(password: string): void {
