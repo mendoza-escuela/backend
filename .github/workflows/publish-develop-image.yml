@@ -14,18 +14,19 @@ concurrency:
 
 jobs:
   build-and-push:
-    name: Build y publicación en GHCR
+    name: Build y publicación en Docker Hub
     runs-on: ubuntu-24.04
     steps:
       - name: Validar configuración de Docker Hub
+        id: dockerhub-config
         env:
           DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          case "$DOCKERHUB_USERNAME" in
-            ''|*[!a-z0-9_-]*) echo 'DOCKERHUB_USERNAME debe ser el Docker ID en minúsculas'; exit 1 ;;
-          esac
+          test -n "$DOCKERHUB_USERNAME" || { echo 'Falta la variable de repositorio DOCKERHUB_USERNAME'; exit 1; }
+          printf '%s' "$DOCKERHUB_USERNAME" | grep -Eq '^[a-z0-9][a-z0-9_-]{1,29}$' || { echo 'DOCKERHUB_USERNAME tiene espacios, comillas, mayúsculas o caracteres no admitidos'; exit 1; }
           test -n "$DOCKERHUB_TOKEN" || { echo 'Falta el secreto DOCKERHUB_TOKEN'; exit 1; }
+          echo "username=$DOCKERHUB_USERNAME" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,14 +37,14 @@ jobs:
       - name: Autenticar en Docker Hub
         uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
+          username: ${{ steps.dockerhub-config.outputs.username }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Generar etiquetas y metadatos
         id: metadata
         uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
         with:
-          images: ${{ vars.DOCKERHUB_USERNAME }}/mendoza-backend
+          images: ${{ steps.dockerhub-config.outputs.username }}/mendoza-backend
           tags: |
             type=raw,value=develop
             type=sha,prefix=develop-
