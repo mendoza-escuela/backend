@@ -2,12 +2,10 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditLog } from '../audit/entities/audit-log.entity';
 import { AuthSession } from '../auth/entities/auth-session.entity';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AuthGuardsModule } from '../../common/guards/auth-guards.module';
 import { UserSchool } from '../users/entities/user-school.entity';
 import { User } from '../users/entities/user.entity';
 import { UsersModule } from '../users/users.module';
-import { PasswordChangeRequiredGuard } from '../../common/guards/password-change-required.guard';
-import { RolesGuard } from '../../common/guards/roles.guard';
 import { AdminSchoolsController } from './controllers/admin-schools.controller';
 import { SchoolPortalController } from './controllers/school-portal.controller';
 import { SchoolUserAssignmentHistory } from './entities/school-user-assignment-history.entity';
@@ -24,6 +22,7 @@ import { SchoolsService } from './services/schools.service';
 @Module({
   imports: [
     UsersModule,
+    AuthGuardsModule,
     TypeOrmModule.forFeature([
       School,
       SchoolContact,
@@ -40,13 +39,7 @@ import { SchoolsService } from './services/schools.service';
     ]),
   ],
   controllers: [AdminSchoolsController, SchoolPortalController],
-  providers: [
-    SchoolsService,
-    BulkSchoolImportService,
-    JwtAuthGuard,
-    PasswordChangeRequiredGuard,
-    RolesGuard,
-  ],
+  providers: [SchoolsService, BulkSchoolImportService],
   exports: [SchoolsService],
 })
 export class SchoolsModule {}

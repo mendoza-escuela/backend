@@ -211,6 +211,17 @@ describe('BulkSurveyImportService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('preserva comillas, comas y CRLF dentro de una celda CSV', async () => {
+    const question = '¿Cuenta con "espacio",\r\nactivo durante el ciclo?';
+
+    const preview = await service.preview(
+      csvFile([validRow({ pregunta: question })]),
+    );
+
+    expect(preview.canImport).toBe(true);
+    expect(preview.rows[0].question).toBe(question);
+  });
+
   it('detecta metadatos inconsistentes para un código repetido', async () => {
     const preview = await service.preview(
       csvFile([

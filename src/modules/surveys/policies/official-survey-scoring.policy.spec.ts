@@ -11,11 +11,13 @@ import {
   OFFICIAL_GENERAL_BINARY_SCORE_SEQUENCE,
   OFFICIAL_GENERAL_SCORE_PROFILE,
   OFFICIAL_GENERAL_TERNARY_QUESTION_CODES,
-  OFFICIAL_MENTAL_HEALTH_PENDING_QUESTION_CODES,
-  OFFICIAL_MENTAL_HEALTH_RESOLVED_QUESTION_CODE,
+  OFFICIAL_MENTAL_HEALTH_TERNARY_QUESTION_CODES,
+  OFFICIAL_MENTAL_HEALTH_TERNARY_SCORE_SEQUENCE,
   OFFICIAL_MENTAL_HEALTH_SCORE_PROFILE,
-  OFFICIAL_MENTAL_HEALTH_RESOLVED_SCORE_SEQUENCE,
-  OFFICIAL_UNRESOLVED_P038_CODE,
+  OFFICIAL_P038_QUESTION_CODE,
+  OFFICIAL_P038_SCORE_SEQUENCE,
+  OFFICIAL_P052_QUESTION_CODE,
+  OFFICIAL_P052_SCORE_SEQUENCE,
 } from './official-survey-scoring.policy';
 
 describe('Política de puntajes del cuestionario oficial', () => {
@@ -23,22 +25,22 @@ describe('Política de puntajes del cuestionario oficial', () => {
     expect(OFFICIAL_GENERAL_SCORE_PROFILE).toEqual([100, 50, 0]);
     expect(OFFICIAL_MENTAL_HEALTH_SCORE_PROFILE).toEqual([100, 66, 33, 0]);
     expect(OFFICIAL_GENERAL_BINARY_SCORE_SEQUENCE).toEqual([100, 0]);
-    expect(OFFICIAL_MENTAL_HEALTH_RESOLVED_SCORE_SEQUENCE).toEqual([
-      0, 33, 66, 100,
-    ]);
+    expect(OFFICIAL_P038_SCORE_SEQUENCE).toEqual([100, 66, 33, 0]);
+    expect(OFFICIAL_MENTAL_HEALTH_TERNARY_SCORE_SEQUENCE).toEqual([100, 50, 0]);
+    expect(OFFICIAL_P052_SCORE_SEQUENCE).toEqual([0, 33, 66, 100]);
     expect(OFFICIAL_GENERAL_TERNARY_QUESTION_CODES).toHaveLength(39);
     expect(OFFICIAL_GENERAL_BINARY_QUESTION_CODES).toEqual([
       'p022',
       'p023',
       'p025',
     ]);
-    expect(OFFICIAL_MENTAL_HEALTH_PENDING_QUESTION_CODES).toHaveLength(16);
+    expect(OFFICIAL_MENTAL_HEALTH_TERNARY_QUESTION_CODES).toHaveLength(16);
     const classifiedCodes = [
       ...OFFICIAL_GENERAL_TERNARY_QUESTION_CODES,
       ...OFFICIAL_GENERAL_BINARY_QUESTION_CODES,
-      OFFICIAL_UNRESOLVED_P038_CODE,
-      OFFICIAL_MENTAL_HEALTH_RESOLVED_QUESTION_CODE,
-      ...OFFICIAL_MENTAL_HEALTH_PENDING_QUESTION_CODES,
+      OFFICIAL_P038_QUESTION_CODE,
+      OFFICIAL_P052_QUESTION_CODE,
+      ...OFFICIAL_MENTAL_HEALTH_TERNARY_QUESTION_CODES,
     ];
     expect(classifiedCodes).toHaveLength(60);
     expect(new Set(classifiedCodes).size).toBe(60);
@@ -65,6 +67,10 @@ describe('Política de puntajes del cuestionario oficial', () => {
       ]),
       dimension(OfficialSurveyDimensionCode.MentalHealth, [
         question('p052', [0, 33, 66, 100]),
+        question('p041', [100, 50, 0]),
+      ]),
+      dimension(OfficialSurveyDimensionCode.PhysicalActivity, [
+        question('p038', [100, 66, 33, 0]),
       ]),
     ];
 
@@ -96,13 +102,13 @@ describe('Política de puntajes del cuestionario oficial', () => {
     );
   });
 
-  it('mantiene explícitos los dos mapeos que todavía requieren definición', () => {
+  it('rechaza secuencias incorrectas en p038 y en las preguntas ternarias de Salud Mental', () => {
     const errors = inspectOfficialSurveyScoring([
       dimension(OfficialSurveyDimensionCode.PhysicalActivity, [
         question('p038', [100, 50, 0, 0]),
       ]),
       dimension(OfficialSurveyDimensionCode.MentalHealth, [
-        question('p041', [100, 66, 33, 0]),
+        question('p041', [100, 66, 0]),
         question('p047', [100, 33, 0]),
       ]),
     ]);
@@ -110,9 +116,10 @@ describe('Política de puntajes del cuestionario oficial', () => {
     expect(errors).toEqual(
       expect.arrayContaining([
         expect.stringContaining('p038'),
-        expect.stringContaining('cuatro alternativas'),
-        expect.stringContaining('p041, p047'),
-        expect.stringContaining('puntaje exacto'),
+        expect.stringContaining('100/66/33/0'),
+        expect.stringContaining('p041'),
+        expect.stringContaining('p047'),
+        expect.stringContaining('100/50/0'),
       ]),
     );
   });

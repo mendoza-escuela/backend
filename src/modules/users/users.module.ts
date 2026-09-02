@@ -6,25 +6,26 @@ import { UsersService } from './services/users.service';
 import { SchoolAccessGuard } from '../../common/guards/school-access.guard';
 import { School } from '../schools/entities/school.entity';
 import { AuthSession } from '../auth/entities/auth-session.entity';
+import { PasswordResetToken } from '../auth/entities/password-reset-token.entity';
 import { AuditLog } from '../audit/entities/audit-log.entity';
 import { AdminUsersController } from './controllers/admin-users.controller';
 import { AdminUsersService } from './services/admin-users.service';
 import { BulkUserImportService } from './services/bulk-user-import.service';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { PasswordChangeRequiredGuard } from '../../common/guards/password-change-required.guard';
-import { RolesGuard } from '../../common/guards/roles.guard';
+import { AuthGuardsModule } from '../../common/guards/auth-guards.module';
 import { SchoolUserAssignmentHistory } from '../schools/entities/school-user-assignment-history.entity';
 import { MailModule } from '../mail/mail.module';
 
 @Module({
   imports: [
     MailModule,
+    AuthGuardsModule,
     TypeOrmModule.forFeature([
       User,
       UserSchool,
       School,
       SchoolUserAssignmentHistory,
       AuthSession,
+      PasswordResetToken,
       AuditLog,
     ]),
   ],
@@ -34,9 +35,6 @@ import { MailModule } from '../mail/mail.module';
     AdminUsersService,
     BulkUserImportService,
     SchoolAccessGuard,
-    JwtAuthGuard,
-    PasswordChangeRequiredGuard,
-    RolesGuard,
   ],
   exports: [UsersService, AdminUsersService, SchoolAccessGuard],
 })

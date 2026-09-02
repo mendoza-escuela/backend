@@ -19,7 +19,7 @@
  * limitada exclusivamente a estos datos sintéticos efímeros.
  *
  * Ejecución:
- *   docker compose -f compose.security.yml --profile seed run --rm sec-seed
+ *   ./security/scripts/security-compose.sh --profile seed run --rm sec-seed
  */
 import 'dotenv/config';
 import * as bcrypt from 'bcrypt';

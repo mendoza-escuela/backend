@@ -5,6 +5,7 @@ import { AuthModule } from '../auth/auth.module';
 import { School } from '../schools/entities/school.entity';
 import { SurveySubmission } from '../submissions/entities/survey-submission.entity';
 import { SurveyVersion } from '../surveys/entities/survey-version.entity';
+import { SurveysModule } from '../surveys/surveys.module';
 import { AdminCampaignsController } from './controllers/admin-campaigns.controller';
 import { CampaignSchool } from './entities/campaign-school.entity';
 import { Campaign } from './entities/campaign.entity';
@@ -15,6 +16,7 @@ import { CampaignTrackingService } from './services/campaign-tracking.service';
 @Module({
   imports: [
     AuthModule,
+    SurveysModule,
     TypeOrmModule.forFeature([
       Campaign,
       CampaignSchool,

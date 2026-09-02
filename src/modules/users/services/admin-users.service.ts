@@ -8,10 +8,11 @@ import {
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
-import { DataSource, EntityManager } from 'typeorm';
+import { DataSource, EntityManager, IsNull } from 'typeorm';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
 import { AuthSession } from '../../auth/entities/auth-session.entity';
+import { PasswordResetToken } from '../../auth/entities/password-reset-token.entity';
 import { assertStrongPassword } from '../../auth/utils/password-policy';
 import { MailService } from '../../mail/services/mail.service';
 import { School } from '../../schools/entities/school.entity';
@@ -26,6 +27,9 @@ import { User } from '../entities/user.entity';
 
 @Injectable()
 export class AdminUsersService {
+  private static readonly ACTIVE_ADMINISTRATOR_INVARIANT_LOCK =
+    'admin-users.active-administrator-invariant.v1';
+
   private readonly logger = new Logger(AdminUsersService.name);
 
   constructor(
@@ -228,6 +232,12 @@ export class AdminUsersService {
   async update(id: string, dto: UpdateUserDto, actor: AuthenticatedUser) {
     try {
       await this.dataSource.transaction(async (manager) => {
+        if (
+          (dto.role !== undefined && dto.role !== UserRole.Admin) ||
+          dto.isActive === false
+        ) {
+          await this.lockActiveAdministratorInvariant(manager);
+        }
         const user = await manager.getRepository(User).findOne({
           where: { id },
           lock: { mode: 'pessimistic_write' },
@@ -326,11 +336,12 @@ export class AdminUsersService {
         if (Object.keys(changes).length > 0) {
           await this.audit(manager, actor.id, 'USER_UPDATED', id, changes);
         }
-        if (
-          !user.isActive ||
+        const authenticationContextChanged =
+          before.isActive !== user.isActive ||
           before.role !== user.role ||
-          before.email !== user.email
-        ) {
+          before.email !== user.email;
+        if (authenticationContextChanged) {
+          await this.invalidatePasswordResetTokens(manager, id);
           await this.revokeSessions(
             manager,
             id,
@@ -352,6 +363,7 @@ export class AdminUsersService {
       throw new ForbiddenException('No podés bloquear tu propia cuenta.');
     }
     await this.dataSource.transaction(async (manager) => {
+      if (!isActive) await this.lockActiveAdministratorInvariant(manager);
       const user = await manager.getRepository(User).findOne({
         where: { id },
         lock: { mode: 'pessimistic_write' },
@@ -364,6 +376,7 @@ export class AdminUsersService {
       user.failedLoginAttempts = 0;
       user.lockedUntil = null;
       await manager.save(User, user);
+      await this.invalidatePasswordResetTokens(manager, id);
       if (!isActive) await this.revokeSessions(manager, id);
       await this.audit(
         manager,
@@ -382,15 +395,21 @@ export class AdminUsersService {
     actor: AuthenticatedUser,
   ) {
     assertStrongPassword(temporaryPassword);
+    const passwordHash = await bcrypt.hash(temporaryPassword, 12);
     await this.dataSource.transaction(async (manager) => {
-      const user = await manager.findOneBy(User, { id });
+      const user = await manager.getRepository(User).findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
       if (!user) throw new NotFoundException('Usuario no encontrado.');
+      const changedAt = new Date();
       await manager.update(User, id, {
-        passwordHash: await bcrypt.hash(temporaryPassword, 12),
+        passwordHash,
         mustChangePassword: true,
         failedLoginAttempts: 0,
         lockedUntil: null,
       });
+      await this.invalidatePasswordResetTokens(manager, id, changedAt);
       await this.revokeSessions(manager, id);
       await this.audit(manager, actor.id, 'USER_PASSWORD_RESET', id, {
         mustChangePassword: { from: user.mustChangePassword, to: true },
@@ -500,6 +519,20 @@ export class AdminUsersService {
       );
   }
 
+  /**
+   * Serializa las transiciones que pueden retirar un administrador activo.
+   *
+   * Debe adquirirse antes del bloqueo de la fila objetivo. De ese modo todas
+   * las mutaciones respetan el orden advisory -> fila y el recuento posterior
+   * observa cualquier transición confirmada por la operación anterior.
+   */
+  private lockActiveAdministratorInvariant(manager: EntityManager) {
+    return manager.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))',
+      [AdminUsersService.ACTIVE_ADMINISTRATOR_INVARIANT_LOCK],
+    );
+  }
+
   private revokeSessions(
     manager: EntityManager,
     userId: string,
@@ -514,6 +547,18 @@ export class AdminUsersService {
     if (exceptTokenId)
       query.andWhere('token_id <> :exceptTokenId', { exceptTokenId });
     return query.execute();
+  }
+
+  private invalidatePasswordResetTokens(
+    manager: EntityManager,
+    userId: string,
+    usedAt = new Date(),
+  ) {
+    return manager.update(
+      PasswordResetToken,
+      { userId, usedAt: IsNull() },
+      { usedAt },
+    );
   }
 
   private audit(

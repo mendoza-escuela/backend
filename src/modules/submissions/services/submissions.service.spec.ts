@@ -14,9 +14,11 @@ import { EvaluationResultsService } from '../../evaluation/services/evaluation-r
 import { School } from '../../schools/entities/school.entity';
 import { SchoolsService } from '../../schools/services/schools.service';
 import { SurveyQuestionType } from '../../surveys/entities/survey-question-type.enum';
+import type { SurveyQuestionValidation } from '../../surveys/entities/survey-question.entity';
 import { SurveyVersionStatus } from '../../surveys/entities/survey-version-status.enum';
 import { SurveyVersion } from '../../surveys/entities/survey-version.entity';
 import { SurveyApplicabilityService } from '../../surveys/services/survey-applicability.service';
+import { SurveyVersionCertificationService } from '../../surveys/services/survey-version-certification.service';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { SurveyAnswer } from '../entities/survey-answer.entity';
 import { SubmissionQuestionApplicability } from '../entities/submission-question-applicability.entity';
@@ -92,6 +94,9 @@ describe('SubmissionsService', () => {
   const evaluationResults = {
     calculateAndPersist: jest.fn(),
   };
+  const versionCertification = {
+    certify: jest.fn(),
+  };
   let service: SubmissionsService;
 
   beforeEach(() => {
@@ -102,6 +107,13 @@ describe('SubmissionsService', () => {
     submissionRepository.findOneBy.mockReset();
     campaignsService.workflowBlockers.mockResolvedValue(new Map());
     campaignsService.assertWorkflowUnlocked.mockResolvedValue(undefined);
+    versionCertification.certify.mockReturnValue({
+      valid: true,
+      errors: [],
+      profile: 'institutional',
+      evaluable: true,
+      evaluationErrors: [],
+    });
     service = new SubmissionsService(
       dataSource as unknown as DataSource,
       campaignsService as unknown as CampaignsService,
@@ -109,8 +121,53 @@ describe('SubmissionsService', () => {
       schoolsService as unknown as SchoolsService,
       surveyApplicability as unknown as SurveyApplicabilityService,
       evaluationResults as unknown as EvaluationResultsService,
+      versionCertification as unknown as SurveyVersionCertificationService,
     );
   });
+
+  function arrangeDraftQuestion({
+    type,
+    required = false,
+    validation = {},
+  }: {
+    type: SurveyQuestionType;
+    required?: boolean;
+    validation?: SurveyQuestionValidation;
+  }) {
+    const version = publishedVersion();
+    const question = version.dimensions[0].sections[0].questions[0];
+    question.type = type;
+    question.required = required;
+    question.validation = validation;
+    if (type !== SurveyQuestionType.SingleChoice) question.options = [];
+    const submission = {
+      ...workspaceSubmission(version, schoolSnapshot(), 'draft', []),
+      campaign,
+      answers: [],
+    };
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school,
+      rectification: {
+        id: submission.schoolRectificationId,
+        isEvaluationReady: true,
+        snapshot: submission.schoolProfileSnapshot,
+      },
+    });
+    campaignsService.assertOperational.mockResolvedValue(campaign);
+    surveyApplicability.evaluate.mockReturnValue(
+      applicabilityFor([question.id]),
+    );
+    manager.findOne
+      .mockResolvedValueOnce(submission)
+      .mockResolvedValueOnce(submission);
+    manager.find.mockImplementation((entity: unknown) =>
+      Promise.resolve(entity === SurveyAnswer ? submission.answers : []),
+    );
+    manager.save.mockImplementation(
+      (_entity: unknown, attributes: unknown) => attributes,
+    );
+    return { question, submission, version };
+  }
 
   it('requires annual rectification before creating the first draft', async () => {
     schoolsService.evaluationContextForUser.mockResolvedValue({
@@ -293,6 +350,48 @@ describe('SubmissionsService', () => {
     });
   });
 
+  it('mantiene visible y bloqueada una etapa activa que referencia una versión borrador corrupta', async () => {
+    const corruptVersion = workspaceVersion();
+    corruptVersion.status = SurveyVersionStatus.Draft;
+    corruptVersion.publishedAt = null;
+    const activeCampaign = {
+      ...campaign,
+      surveyVersion: corruptVersion,
+    };
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school,
+      rectification: {
+        isConfirmed: true,
+        isEvaluationReady: true,
+      },
+    });
+    campaignsService.operationalCampaigns.mockResolvedValue([activeCampaign]);
+    submissionRepository.find.mockResolvedValue([]);
+    jest
+      .spyOn(
+        service as unknown as {
+          questionCounts: (
+            versionIds: string[],
+          ) => Promise<Map<string, number>>;
+        },
+        'questionCounts',
+      )
+      .mockResolvedValue(new Map([[activeCampaign.surveyVersionId, 1]]));
+
+    const response = await service.availableCampaigns(actor);
+
+    expect(response.items).toHaveLength(1);
+    expect(response.items[0]).toMatchObject({
+      canStart: false,
+      workflowStatus: 'locked',
+      blockedBy: null,
+    });
+    expect(response.items[0].blockingReason).toContain(
+      'no es evaluable institucionalmente',
+    );
+    expect(versionCertification.certify).not.toHaveBeenCalled();
+  });
+
   it('creates one school-owned draft and preserves the original respondent', async () => {
     const schoolSnapshot = {
       name: school.name,
@@ -365,6 +464,7 @@ describe('SubmissionsService', () => {
       schoolId: school.id,
       surveyVersionId: version.id,
       status: 'draft',
+      revision: 0,
       answers: [],
     } as unknown as SurveySubmission;
     schoolsService.evaluationContextForUser.mockResolvedValue({
@@ -400,13 +500,14 @@ describe('SubmissionsService', () => {
     manager.save.mockImplementation(
       (_entity: unknown, attributes: unknown) => attributes,
     );
-    jest
+    const workspaceSpy = jest
       .spyOn(service, 'workspace')
       .mockResolvedValue({ submission: { id: submission.id } } as never);
 
-    await service.saveDraft(
+    const saved = await service.saveDraft(
       campaign.id,
       {
+        expectedRevision: 0,
         answers: [
           {
             questionId: 'c2c2d0f3-9638-4dcc-9989-a8ef2ceda2bb',
@@ -436,13 +537,224 @@ describe('SubmissionsService', () => {
       submission.id,
       expect.objectContaining({
         lastSavedAt: submission.lastSavedAt,
+        revision: 1,
       }),
     );
     expect(manager.save).not.toHaveBeenCalledWith(
       SurveySubmission,
       expect.anything(),
     );
+    expect(saved.submission.revision).toBe(1);
+    expect(workspaceSpy).not.toHaveBeenCalled();
   });
+
+  it('accepts an empty optional text answer even when it has minLength', async () => {
+    const version = publishedVersion();
+    const question = version.dimensions[0].sections[0].questions[0];
+    question.type = SurveyQuestionType.ShortText;
+    question.required = false;
+    question.validation = { minLength: 5 };
+    question.options = [];
+    const submission = {
+      ...workspaceSubmission(version, schoolSnapshot(), 'draft', []),
+      campaign,
+      answers: [],
+    };
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school,
+      rectification: {
+        id: submission.schoolRectificationId,
+        isEvaluationReady: true,
+        snapshot: submission.schoolProfileSnapshot,
+      },
+    });
+    campaignsService.assertOperational.mockResolvedValue(campaign);
+    surveyApplicability.evaluate.mockReturnValue(
+      applicabilityFor([question.id]),
+    );
+    manager.findOne
+      .mockResolvedValueOnce(submission)
+      .mockResolvedValueOnce(submission);
+    manager.find.mockResolvedValue([]);
+
+    await expect(
+      service.saveDraft(
+        campaign.id,
+        {
+          expectedRevision: 0,
+          answers: [{ questionId: question.id, value: '   ' }],
+        },
+        actor,
+      ),
+    ).resolves.toMatchObject({ submission: { revision: 1 } });
+
+    expect(
+      manager.save.mock.calls.some(([entity]) => entity === SurveyAnswer),
+    ).toBe(false);
+  });
+
+  it('rejects padded text whose normalized value is shorter than minLength', async () => {
+    const { question } = arrangeDraftQuestion({
+      type: SurveyQuestionType.ShortText,
+      validation: { minLength: 5 },
+    });
+
+    await expect(
+      service.saveDraft(
+        campaign.id,
+        {
+          expectedRevision: 0,
+          answers: [{ questionId: question.id, value: '  abc  ' }],
+        },
+        actor,
+      ),
+    ).rejects.toThrow(`La respuesta ${question.code} es demasiado corta.`);
+
+    expect(
+      manager.save.mock.calls.some(([entity]) => entity === SurveyAnswer),
+    ).toBe(false);
+  });
+
+  it('does not count padding against maxLength and persists normalized text', async () => {
+    const { question } = arrangeDraftQuestion({
+      type: SurveyQuestionType.ShortText,
+      validation: { maxLength: 5 },
+    });
+
+    const saved = await service.saveDraft(
+      campaign.id,
+      {
+        expectedRevision: 0,
+        answers: [{ questionId: question.id, value: '  abcde  ' }],
+      },
+      actor,
+    );
+
+    expect(manager.save).toHaveBeenCalledWith(
+      SurveyAnswer,
+      expect.arrayContaining([
+        expect.objectContaining({
+          questionId: question.id,
+          value: 'abcde',
+        }),
+      ]),
+    );
+    expect(saved.answers).toEqual({ [question.id]: 'abcde' });
+  });
+
+  it('normalizes a padded date before validating and persisting it', async () => {
+    const { question } = arrangeDraftQuestion({
+      type: SurveyQuestionType.Date,
+      validation: { minLength: 10, maxLength: 10 },
+    });
+
+    const saved = await service.saveDraft(
+      campaign.id,
+      {
+        expectedRevision: 0,
+        answers: [{ questionId: question.id, value: '  2026-09-01  ' }],
+      },
+      actor,
+    );
+
+    expect(manager.save).toHaveBeenCalledWith(
+      SurveyAnswer,
+      expect.arrayContaining([
+        expect.objectContaining({
+          questionId: question.id,
+          value: '2026-09-01',
+        }),
+      ]),
+    );
+    expect(saved.answers).toEqual({ [question.id]: '2026-09-01' });
+  });
+
+  it.each(['saveDraft', 'submit'] as const)(
+    'rejects stale %s writes without changing persisted answers',
+    async (operation) => {
+      const version = publishedVersion();
+      const submission = {
+        id: 'submission-id',
+        campaignId: campaign.id,
+        schoolId: school.id,
+        surveyVersionId: version.id,
+        status: 'draft',
+        revision: 4,
+        answers: [],
+        applicabilityDecisions: [],
+      } as unknown as SurveySubmission;
+      schoolsService.evaluationContextForUser.mockResolvedValue({
+        school,
+        rectification: { isRectified: true },
+      });
+      campaignsService.assertOperational.mockResolvedValue(campaign);
+      manager.findOne
+        .mockResolvedValueOnce(submission)
+        .mockResolvedValueOnce(submission);
+      manager.find.mockResolvedValue([]);
+
+      const request =
+        operation === 'saveDraft'
+          ? service.saveDraft(
+              campaign.id,
+              { expectedRevision: 3, answers: [] },
+              actor,
+            )
+          : service.submit(campaign.id, { expectedRevision: 3 }, actor);
+
+      await expect(request).rejects.toMatchObject({
+        response: {
+          code: 'SUBMISSION_REVISION_CONFLICT',
+          currentRevision: 4,
+        },
+      });
+      expect(manager.update).not.toHaveBeenCalled();
+      expect(manager.delete).not.toHaveBeenCalled();
+      expect(manager.save).not.toHaveBeenCalled();
+      expect(surveyApplicability.evaluate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['saveDraft', 'submit'] as const)(
+    'rejects %s when the persisted submission belongs to another campaign version',
+    async (operation) => {
+      const submission = {
+        id: 'submission-id',
+        campaignId: campaign.id,
+        schoolId: school.id,
+        surveyVersionId: 'another-version-id',
+        status: 'draft',
+        answers: [],
+        applicabilityDecisions: [],
+      } as unknown as SurveySubmission;
+      schoolsService.evaluationContextForUser.mockResolvedValue({
+        school,
+        rectification: { isRectified: true },
+      });
+      campaignsService.assertOperational.mockResolvedValue(campaign);
+      manager.findOne.mockResolvedValue(submission);
+      manager.find.mockResolvedValue([]);
+
+      await expect(
+        operation === 'saveDraft'
+          ? service.saveDraft(
+              campaign.id,
+              { expectedRevision: 0, answers: [] },
+              actor,
+            )
+          : service.submit(campaign.id, { expectedRevision: 0 }, actor),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE',
+          errors: [
+            'La versión persistida en la presentación no coincide con la versión de su etapa.',
+          ],
+        },
+      });
+      expect(surveyApplicability.evaluate).not.toHaveBeenCalled();
+      expect(manager.update).not.toHaveBeenCalled();
+    },
+  );
 
   it('preserves a previous answer when its question becomes excluded', async () => {
     const version = publishedVersion();
@@ -467,6 +779,7 @@ describe('SubmissionsService', () => {
       surveyVersionId: version.id,
       schoolProfileSnapshot: schoolSnapshot(),
       status: 'draft',
+      revision: 0,
       answers: [
         {
           questionId: excludedQuestion.id,
@@ -495,6 +808,7 @@ describe('SubmissionsService', () => {
     await service.saveDraft(
       campaign.id,
       {
+        expectedRevision: 0,
         answers: [
           {
             questionId: applicableQuestionId,
@@ -530,6 +844,7 @@ describe('SubmissionsService', () => {
       surveyVersionId: version.id,
       schoolProfileSnapshot: schoolSnapshot(),
       status: 'draft',
+      revision: 0,
       answers: [],
       applicabilityDecisions: [],
     } as unknown as SurveySubmission;
@@ -550,6 +865,7 @@ describe('SubmissionsService', () => {
       service.saveDraft(
         campaign.id,
         {
+          expectedRevision: 0,
           answers: [
             {
               questionId,
@@ -561,6 +877,63 @@ describe('SubmissionsService', () => {
         actor,
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('ignores an in-flight answer that becomes excluded by the rectification adopted in the same save', async () => {
+    const version = workspaceVersion();
+    const question = version.dimensions[0].sections[0].questions[0];
+    const previousApplicability = applicabilityFor([question.id]);
+    const submission = workspaceSubmission(
+      version,
+      { ...schoolSnapshot(), hasKiosk: true },
+      'draft',
+      previousApplicability.decisions,
+    );
+    submission.schoolRectificationId = 'rectification-previous';
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school,
+      rectification: {
+        id: 'rectification-current',
+        isEvaluationReady: true,
+        snapshot: { ...schoolSnapshot(), hasKiosk: false },
+      },
+    });
+    campaignsService.assertOperational.mockResolvedValue(campaign);
+    surveyApplicability.evaluate.mockReturnValue(
+      applicabilityFor([], [question.id]),
+    );
+    manager.findOne
+      .mockResolvedValueOnce(submission)
+      .mockResolvedValueOnce(submission);
+    manager.find
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(previousApplicability.decisions);
+    manager.save.mockImplementation(
+      (_entity: unknown, attributes: unknown) => attributes,
+    );
+
+    const saved = await service.saveDraft(
+      campaign.id,
+      {
+        expectedRevision: 0,
+        answers: [
+          {
+            questionId: question.id,
+            optionId: question.options[0].id,
+          },
+        ],
+      },
+      actor,
+    );
+
+    expect(saved).toMatchObject({
+      submission: { revision: 1 },
+      answers: {},
+      survey: { version: { dimensions: [] } },
+    });
+    expect(
+      manager.save.mock.calls.some(([entity]) => entity === SurveyAnswer),
+    ).toBe(false);
   });
 
   it('does not expose a presentation owned by another school', async () => {
@@ -803,6 +1176,48 @@ describe('SubmissionsService', () => {
     expect(manager.save).not.toHaveBeenCalled();
   });
 
+  it('abre un borrador activo incompatible en modo de sólo lectura', async () => {
+    const version = workspaceVersion();
+    const submission = workspaceSubmission(
+      version,
+      schoolSnapshot(),
+      'draft',
+      [],
+    );
+    schoolsService.evaluationContextForUser.mockResolvedValue({
+      school,
+      rectification: {
+        id: submission.schoolRectificationId,
+        isConfirmed: true,
+        isEvaluationReady: true,
+        snapshot: submission.schoolProfileSnapshot,
+      },
+    });
+    manager.findOne.mockResolvedValue(submission);
+    manager.find.mockResolvedValue([]);
+    versionCertification.certify.mockReturnValue({
+      valid: false,
+      errors: ['Versión incompatible.'],
+      profile: 'institutional',
+      evaluable: false,
+      evaluationErrors: ['Versión incompatible.'],
+    });
+    surveyApplicability.evaluate.mockReturnValue(
+      applicabilityFor([version.dimensions[0].sections[0].questions[0].id]),
+    );
+
+    const response = await service.workspace(campaign.id, actor);
+
+    expect(response.submission.editable).toBe(false);
+    expect(response.submission.canSubmit).toBe(false);
+    expect(response.submission.blockingReason).toContain(
+      'no es evaluable institucionalmente',
+    );
+    expect(manager.update).not.toHaveBeenCalled();
+    expect(manager.delete).not.toHaveBeenCalled();
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
   it('reconstructs an expired draft in memory when it has no stored applicability', async () => {
     const version = workspaceVersion();
     const submission = workspaceSubmission(
@@ -852,6 +1267,7 @@ describe('SubmissionsService', () => {
       surveyVersionId: version.id,
       schoolProfileSnapshot: schoolSnapshot(),
       status: 'draft',
+      revision: 0,
       answers: [],
       applicabilityDecisions: [],
     } as unknown as SurveySubmission;
@@ -873,9 +1289,9 @@ describe('SubmissionsService', () => {
       missingFields: [{ code: 'has_kiosk', label: 'Tiene kiosco' }],
     });
 
-    await expect(service.submit(campaign.id, actor)).rejects.toThrow(
-      'Tiene kiosco',
-    );
+    await expect(
+      service.submit(campaign.id, { expectedRevision: 0 }, actor),
+    ).rejects.toThrow('Tiene kiosco');
     expect(evaluationResults.calculateAndPersist).not.toHaveBeenCalled();
   });
 
@@ -903,6 +1319,7 @@ describe('SubmissionsService', () => {
       schoolRectificationId: 'rectification-id',
       schoolProfileSnapshot: snapshot,
       status: 'draft',
+      revision: 0,
       answers: [
         {
           questionId: applicableQuestion.id,
@@ -943,7 +1360,7 @@ describe('SubmissionsService', () => {
     });
     jest.spyOn(service, 'workspace').mockResolvedValue({} as never);
 
-    await service.submit(campaign.id, actor);
+    await service.submit(campaign.id, { expectedRevision: 0 }, actor);
 
     expect(surveyApplicability.evaluate).toHaveBeenCalledWith(
       version,
@@ -1000,9 +1417,108 @@ describe('SubmissionsService', () => {
       applicabilityFor([question.id]),
     );
 
-    await expect(service.submit(campaign.id, actor)).rejects.toThrow(
-      question.code,
-    );
+    await expect(
+      service.submit(campaign.id, { expectedRevision: 0 }, actor),
+    ).rejects.toThrow(question.code);
+    expect(evaluationResults.calculateAndPersist).not.toHaveBeenCalled();
+    expect(submission.status).toBe('draft');
+  });
+
+  it.each([
+    {
+      caseName: 'text below minLength',
+      type: SurveyQuestionType.ShortText,
+      validation: { minLength: 5 },
+      optionId: null,
+      value: 'abc',
+      expectedMessage: 'demasiado corta',
+    },
+    {
+      caseName: 'text above maxLength',
+      type: SurveyQuestionType.LongText,
+      validation: { maxLength: 5 },
+      optionId: null,
+      value: 'abcdef',
+      expectedMessage: 'demasiado larga',
+    },
+    {
+      caseName: 'number below min',
+      type: SurveyQuestionType.Number,
+      validation: { min: 1 },
+      optionId: null,
+      value: 0,
+      expectedMessage: 'no puede ser menor',
+    },
+    {
+      caseName: 'number above max',
+      type: SurveyQuestionType.Number,
+      validation: { max: 10 },
+      optionId: null,
+      value: 11,
+      expectedMessage: 'no puede ser mayor',
+    },
+    {
+      caseName: 'invalid date',
+      type: SurveyQuestionType.Date,
+      validation: {},
+      optionId: null,
+      value: '2026/09/01',
+      expectedMessage: 'fecha válida',
+    },
+    {
+      caseName: 'option from another question',
+      type: SurveyQuestionType.SingleChoice,
+      validation: {},
+      optionId: '00000000-0000-4000-8000-000000000999',
+      value: null,
+      expectedMessage: 'opción válida',
+    },
+  ])(
+    'rejects persisted legacy/direct $caseName before final submission',
+    async ({ type, validation, optionId, value, expectedMessage }) => {
+      const { question, submission } = arrangeDraftQuestion({
+        type,
+        required: true,
+        validation,
+      });
+      submission.answers = [
+        {
+          id: 'legacy-answer-id',
+          submissionId: submission.id,
+          questionId: question.id,
+          optionId,
+          value,
+        } as SurveyAnswer,
+      ];
+
+      await expect(
+        service.submit(campaign.id, { expectedRevision: 0 }, actor),
+      ).rejects.toThrow(expectedMessage);
+
+      expect(evaluationResults.calculateAndPersist).not.toHaveBeenCalled();
+      expect(submission.status).toBe('draft');
+    },
+  );
+
+  it('does not let a persisted blank row satisfy a required question', async () => {
+    const { question, submission } = arrangeDraftQuestion({
+      type: SurveyQuestionType.ShortText,
+      required: true,
+    });
+    submission.answers = [
+      {
+        id: 'legacy-answer-id',
+        submissionId: submission.id,
+        questionId: question.id,
+        optionId: null,
+        value: '   ',
+      } as SurveyAnswer,
+    ];
+
+    await expect(
+      service.submit(campaign.id, { expectedRevision: 0 }, actor),
+    ).rejects.toThrow(question.code);
+
     expect(evaluationResults.calculateAndPersist).not.toHaveBeenCalled();
     expect(submission.status).toBe('draft');
   });
@@ -1028,9 +1544,9 @@ describe('SubmissionsService', () => {
       .mockResolvedValueOnce(submission)
       .mockResolvedValueOnce(submission);
 
-    await expect(service.submit(campaign.id, actor)).rejects.toBeInstanceOf(
-      ConflictException,
-    );
+    await expect(
+      service.submit(campaign.id, { expectedRevision: 0 }, actor),
+    ).rejects.toBeInstanceOf(ConflictException);
     expect(surveyApplicability.evaluate).not.toHaveBeenCalled();
     expect(evaluationResults.calculateAndPersist).not.toHaveBeenCalled();
   });
@@ -1057,7 +1573,11 @@ describe('SubmissionsService', () => {
       .mockResolvedValueOnce(submission);
 
     await expect(
-      service.saveDraft(campaign.id, { answers: [] }, actor),
+      service.saveDraft(
+        campaign.id,
+        { expectedRevision: 0, answers: [] },
+        actor,
+      ),
     ).rejects.toBeInstanceOf(ConflictException);
     expect(manager.delete).not.toHaveBeenCalledWith(
       SurveyAnswer,
@@ -1124,7 +1644,9 @@ describe('SubmissionsService', () => {
       );
       evaluationResults.calculateAndPersist.mockRejectedValue(error);
 
-      await expect(service.submit(campaign.id, actor)).rejects.toBe(error);
+      await expect(
+        service.submit(campaign.id, { expectedRevision: 0 }, actor),
+      ).rejects.toBe(error);
       expect(committedStatus).toBe('draft');
     },
   );
@@ -1149,8 +1671,12 @@ describe('SubmissionsService', () => {
 
       const request =
         operation === 'saveDraft'
-          ? service.saveDraft(campaign.id, { answers: [] }, actor)
-          : service.submit(campaign.id, actor);
+          ? service.saveDraft(
+              campaign.id,
+              { expectedRevision: 0, answers: [] },
+              actor,
+            )
+          : service.submit(campaign.id, { expectedRevision: 0 }, actor);
 
       await expect(request).rejects.toBeInstanceOf(ConflictException);
       expect(manager.findOne).not.toHaveBeenCalled();
@@ -1269,6 +1795,7 @@ function workspaceSubmission(
     status,
     startedAt: new Date('2026-01-01T00:00:00.000Z'),
     lastSavedAt: null,
+    revision: 0,
     submittedAt:
       status === 'submitted' ? new Date('2026-02-01T00:00:00.000Z') : null,
     answers: [],
@@ -1279,8 +1806,16 @@ function workspaceSubmission(
 function publishedVersion() {
   return {
     id: 'version-id',
+    versionNumber: 1,
+    title: 'Cuestionario institucional',
+    instructions: null,
     status: SurveyVersionStatus.Published,
     publishedAt: new Date('2026-01-01T00:00:00.000Z'),
+    survey: {
+      code: 'institucional',
+      name: 'Cuestionario institucional',
+      description: null,
+    },
     dimensions: [
       {
         id: 'dimension-id',

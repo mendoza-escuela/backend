@@ -53,7 +53,7 @@ Las presentaciones no calculan aplicabilidad con la ficha actual: copian y conge
 
 Una versión publicada y todos sus descendientes son inmutables. Una corrección funcional se realiza clonando y publicando una nueva versión; las etapas existentes conservan la referencia histórica.
 
-La plantilla incorporada en código crea las seis dimensiones, pero deliberadamente no inventa secciones, preguntas ni opciones. El banco definitivo se incorpora mediante una planilla CSV/XLSX validada. Para el instrumento institucional, cada pregunta importada es de selección simple, debe tener código único, texto, obligatoriedad, orden y opciones puntuadas. Los puntajes admitidos son `0`, `50` y `100`; en Salud Mental también se admiten `33` y `66`. No se permiten opciones “Otro” ni “No aplica”.
+La plantilla incorporada en código crea las seis dimensiones, pero deliberadamente no inventa secciones, preguntas ni opciones. El banco definitivo se incorpora mediante una planilla CSV/XLSX validada. Para el instrumento institucional, cada pregunta importada es de selección simple, debe tener código único, texto, obligatoriedad, orden y opciones puntuadas. Los borradores admiten enteros de `0` a `100`; para publicar, cada código debe respetar su secuencia oficial exacta, incluidas p038 (`100/66/33/0`), las preguntas mentales ternarias (`100/50/0`) y p052 (`0/33/66/100`). No se permiten opciones “Otro” ni “No aplica”.
 
 El motor condicional permite combinar condiciones con lógica `all`/`any`, aplicar acciones `show`/`omit` y definir una acción predeterminada. Los hechos disponibles son existencia de kiosco, comedor/servicio alimentario y albergue, jornada, niveles educativos y matrícula total. Las reglas se procesan por prioridad y se utiliza la primera coincidencia. Si falta un dato que podría cambiar la decisión, la pregunta queda incompleta en vez de asumir una respuesta.
 
@@ -67,13 +67,13 @@ Para las preguntas oficiales `p021` a `p027`, la política validada es:
 
 ## Etapas y presentaciones
 
-| Tabla                               | Propósito                                          | Relaciones y restricciones principales                                              |
-| ----------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `campaigns`                         | Ciclos anuales o semestrales.                      | Referencia una versión publicada y recorre `draft → active → closed → archived`.    |
-| `campaign_schools`                  | Universo explícito de escuelas de una etapa.     | Par etapa/escuela único; baja lógica, fuente y actor de asignación.               |
-| `survey_submissions`                | Borrador o envío único de una escuela por etapa. | Par etapa/escuela único; snapshot escolar y respondente original.                 |
-| `survey_answers`                    | Respuestas estructuradas de la presentación.       | Una respuesta por pregunta y presentación; opción o valor según tipo.               |
-| `submission_question_applicability` | Decisión congelada para cada pregunta.             | Una decisión por pregunta/presentación, motivo, hechos relevantes y regla aplicada. |
+| Tabla                               | Propósito                                        | Relaciones y restricciones principales                                              |
+| ----------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `campaigns`                         | Ciclos anuales o semestrales.                    | Referencia una versión publicada y recorre `draft → active → closed → archived`.    |
+| `campaign_schools`                  | Universo explícito de escuelas de una etapa.     | Par etapa/escuela único; baja lógica, fuente y actor de asignación.                 |
+| `survey_submissions`                | Borrador o envío único de una escuela por etapa. | Par etapa/escuela único; snapshot escolar y respondente original.                   |
+| `survey_answers`                    | Respuestas estructuradas de la presentación.     | Una respuesta por pregunta y presentación; opción o valor según tipo.               |
+| `submission_question_applicability` | Decisión congelada para cada pregunta.           | Una decisión por pregunta/presentación, motivo, hechos relevantes y regla aplicada. |
 
 En borrador se pueden incorporar, reactivar y quitar escuelas, salvo que ya
 exista una presentación. Durante una etapa activa el universo es aditivo: el

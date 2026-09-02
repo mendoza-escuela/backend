@@ -18,7 +18,9 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-PYTHON_IMAGE="python:3.13-alpine"
+
+# shellcheck source=load-tool-versions.sh
+. "${SCRIPT_DIR}/load-tool-versions.sh" || exit $?
 
 case "$(uname -s)" in
   MINGW* | MSYS* | CYGWIN*) export MSYS_NO_PATHCONV=1 ;;

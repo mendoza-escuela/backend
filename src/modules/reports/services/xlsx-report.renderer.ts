@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import ExcelJS from 'exceljs';
 import type { Row, Worksheet } from 'exceljs';
 import type { EvaluationQuestionSnapshot } from '../../evaluation/evaluation-snapshot.type';
-import { spreadsheetSafeCell } from '../../exports/spreadsheet-cell.util';
+import { spreadsheetSafeCell } from '../../../common/spreadsheets/spreadsheet-cell.util';
 import type { IndividualReportViewModel } from '../report.types';
 import { REPORT_THEME } from '../report-theme';
 

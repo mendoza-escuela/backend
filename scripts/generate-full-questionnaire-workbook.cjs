@@ -6,8 +6,6 @@ const ExcelJS = require('exceljs');
 const {
   OFFICIAL_GENERAL_SCORE_PROFILE,
   OFFICIAL_MENTAL_HEALTH_SCORE_PROFILE,
-  OFFICIAL_UNRESOLVED_P038_CODE,
-  OFFICIAL_MENTAL_HEALTH_PENDING_QUESTION_CODES,
   getApprovedOfficialQuestionScoreSequence,
   getOfficialScoreProfile,
 } = require('../src/modules/surveys/policies/official-survey-scoring.policy.ts');
@@ -845,21 +843,6 @@ const QUESTIONS = [
   ),
 ];
 
-const PENDING_SCORE_DEFINITIONS = [
-  {
-    questionCodes: [OFFICIAL_UNRESOLVED_P038_CODE],
-    questions: '38',
-    topic: 'Cuatro respuestas en escala general',
-    detail: `La escala general confirmada es ${OFFICIAL_GENERAL_SCORE_PROFILE.join('/')}, pero la pregunta tiene cuatro niveles. Falta el mapeo exacto opción–puntaje; todas sus celdas de puntaje permanecen vacías para no repetir un valor sin aprobación.`,
-  },
-  {
-    questionCodes: [...OFFICIAL_MENTAL_HEALTH_PENDING_QUESTION_CODES],
-    questions: '41 a 43 y 47 a 51, 53 a 60',
-    topic: 'Tres respuestas en dimensión Salud Mental',
-    detail: `La escala confirmada para Salud Mental es ${OFFICIAL_MENTAL_HEALTH_SCORE_PROFILE.join('/')}, pero estas preguntas tienen tres opciones. Falta definir el mapeo exacto, en especial si la alternativa intermedia vale 66 o 33; todas sus celdas de puntaje permanecen vacías.`,
-  },
-];
-
 const PENDING_ITEMS = [
   {
     priority: 'Bloqueante para publicación',
@@ -889,12 +872,6 @@ const PENDING_ITEMS = [
     detail:
       'La pregunta refiere al personal que prepara alimentos, pero no aclara qué ocurre si el establecimiento no prepara alimentos. Confirmar si corresponde una exclusión automática.',
   },
-  ...PENDING_SCORE_DEFINITIONS.map((definition) => ({
-    priority: 'Bloqueante para importación y publicación',
-    questions: definition.questions,
-    topic: definition.topic,
-    detail: definition.detail,
-  })),
   {
     priority: 'Corrección de contenido',
     questions: '41',
@@ -923,29 +900,13 @@ function scoreMappingForQuestion(question) {
     (option) => !option.excludedFromImport,
   );
   const questionCode = `p${String(question.number).padStart(3, '0')}`;
-  const pendingDefinition = PENDING_SCORE_DEFINITIONS.find((definition) =>
-    definition.questionCodes.includes(questionCode),
-  );
-  const officialScale = [...getOfficialScoreProfile(question.dimensionCode)];
-
-  if (pendingDefinition)
-    return {
-      questionNumber: question.number,
-      questionCode,
-      dimensionCode: question.dimensionCode,
-      optionCount: scorableOptions.length,
-      officialScale,
-      scores: scorableOptions.map(() => null),
-      status: 'pending',
-      detail: pendingDefinition.detail,
-    };
-
   const approvedScores = getApprovedOfficialQuestionScoreSequence(questionCode);
   if (!approvedScores)
     throw new Error(
-      `La política no inventaría un mapeo aprobado ni pendiente para ${questionCode}.`,
+      `La política no define un mapeo aprobado para ${questionCode}.`,
     );
   const scores = [...approvedScores];
+  const officialScale = [...getOfficialScoreProfile(question.dimensionCode)];
   if (scores.length !== scorableOptions.length)
     throw new Error(
       `${questionCode} tiene ${scorableOptions.length} opciones, pero la política define ${scores.length} puntajes.`,
@@ -964,11 +925,11 @@ function scoreMappingForQuestion(question) {
     );
 
   const invalidScores = scores.filter(
-    (score) => !Number.isInteger(score) || !officialScale.includes(score),
+    (score) => !Number.isInteger(score) || score < 0 || score > 100,
   );
   if (invalidScores.length)
     throw new Error(
-      `La pregunta ${question.number} usa puntajes fuera de la escala oficial: ${invalidScores.join(', ')}.`,
+      `La pregunta ${question.number} usa puntajes fuera del rango 0–100: ${invalidScores.join(', ')}.`,
     );
 
   return {
@@ -1023,10 +984,7 @@ function recordsForQuestion(question, includeExcluded) {
         condicion: '',
         estado_importacion: option.excludedFromImport
           ? 'Excluida: debe reemplazarse por condición automática'
-          : scoreMapping.status === 'pending'
-            ? 'Pendiente: puntaje sin definición funcional'
-            : 'Incluida',
-        estado_puntuacion: scoreMapping.status,
+          : 'Incluida',
       };
     });
 }
@@ -1080,19 +1038,9 @@ function addImportSheet(workbook) {
     views: [{ state: 'frozen', ySplit: 1 }],
   });
   sheet.addRow(HEADERS);
-  IMPORT_RECORDS.forEach((record) => {
-    const row = sheet.addRow(HEADERS.map((header) => record[header]));
-    if (record.estado_puntuacion === 'pending') {
-      const scoreCell = row.getCell(9);
-      scoreCell.fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: colors.warning },
-      };
-      scoreCell.note =
-        'Puntaje pendiente de definición funcional. No completar sin aprobación del cliente.';
-    }
-  });
+  IMPORT_RECORDS.forEach((record) =>
+    sheet.addRow(HEADERS.map((header) => record[header])),
+  );
   styleHeader(sheet.getRow(1));
   styleBody(sheet, 'L');
   const widths = [28, 25, 38, 18, 75, 28, 18, 75, 11, 13, 9, 28];
@@ -1156,15 +1104,15 @@ function addInstructionsSheet(workbook) {
     ],
     [
       'Inventario de puntuación',
-      'La hoja “Mapeo de puntajes” enumera las 60 preguntas, su escala oficial, el mapeo aplicado en el orden de las opciones y cualquier definición pendiente.',
+      'La hoja “Mapeo de puntajes” enumera las 60 preguntas, su perfil de referencia, el mapeo aprobado en el orden de las opciones y su trazabilidad.',
     ],
     [
       'Puntajes generales',
-      `La escala oficial es ${OFFICIAL_GENERAL_SCORE_PROFILE.join('/')}. Las ternarias confirmadas usan ${OFFICIAL_GENERAL_SCORE_PROFILE.join('/')} y las binarias p022, p023 y p025 usan 100/0. p038 permanece completamente sin puntuar porque tiene cuatro alternativas y no existe un mapeo aprobado.`,
+      `La escala general es ${OFFICIAL_GENERAL_SCORE_PROFILE.join('/')}. Las ternarias generales usan esa secuencia, las binarias p022, p023 y p025 usan 100/0, y la excepción aprobada p038 usa 100/66/33/0.`,
     ],
     [
       'Puntajes de Salud Mental',
-      `La escala oficial es ${OFFICIAL_MENTAL_HEALTH_SCORE_PROFILE.join('/')}. p052 usa 0/33/66/100 según el orden creciente de madurez confirmado. Las preguntas mentales de tres alternativas permanecen completamente sin puntuar hasta definir si la opción intermedia vale 66 o 33.`,
+      `La escala de cuatro niveles es ${OFFICIAL_MENTAL_HEALTH_SCORE_PROFILE.join('/')}. p052 usa 0/33/66/100 según el orden creciente de madurez confirmado y las preguntas mentales de tres alternativas usan 100/50/0.`,
     ],
     [
       'Obligatoriedad',
@@ -1176,7 +1124,7 @@ function addInstructionsSheet(workbook) {
     ],
     [
       'Estado de la versión',
-      'La planilla no puede importarse mientras existan puntajes vacíos. La vista previa del backend debe rechazar exclusivamente p038 y las preguntas mentales de tres opciones. La hoja “Pendientes” enumera las definiciones requeridas.',
+      'La planilla contiene puntajes completos y puede validarse con el importador. La hoja “Pendientes” enumera las definiciones de contenido y aplicabilidad todavía requeridas.',
     ],
     [
       'Origen',
@@ -1226,25 +1174,17 @@ function addScoreMappingSheet(workbook) {
     'estado',
     'detalle',
   ]);
-  SCORE_MAPPING_INVENTORY.forEach((mapping) => {
-    const row = sheet.addRow([
+  SCORE_MAPPING_INVENTORY.forEach((mapping) =>
+    sheet.addRow([
       mapping.questionCode,
       mapping.dimensionCode,
       mapping.optionCount,
       mapping.officialScale.join('/'),
-      mapping.scores.every((score) => score === null)
-        ? 'SIN DEFINIR'
-        : mapping.scores.join('/'),
-      mapping.status === 'confirmed' ? 'Confirmado' : 'Pendiente',
+      mapping.scores.join('/'),
+      'Confirmado',
       mapping.detail,
-    ]);
-    if (mapping.status === 'pending')
-      row.fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: colors.warning },
-      };
-  });
+    ]),
+  );
   styleHeader(sheet.getRow(1));
   styleBody(sheet, 'G');
 }
@@ -1334,43 +1274,19 @@ function assertDataset() {
   if (SCORE_MAPPING_INVENTORY.length !== QUESTIONS.length)
     throw new Error('El inventario de puntuación no cubre las 60 preguntas.');
 
-  const expectedPendingCodes = PENDING_SCORE_DEFINITIONS.flatMap(
-    (definition) => definition.questionCodes,
-  ).sort();
-  const pendingMappings = SCORE_MAPPING_INVENTORY.filter(
-    (mapping) => mapping.status === 'pending',
-  );
-  const actualPendingCodes = pendingMappings
-    .map((mapping) => mapping.questionCode)
-    .sort();
-  if (
-    JSON.stringify(actualPendingCodes) !== JSON.stringify(expectedPendingCodes)
-  )
-    throw new Error(
-      `Los pendientes de puntuación no coinciden: ${actualPendingCodes.join(', ')}.`,
-    );
-
   SCORE_MAPPING_INVENTORY.forEach((mapping) => {
     if (mapping.scores.length !== mapping.optionCount)
       throw new Error(
         `El mapeo de ${mapping.questionCode} no cubre todas sus opciones.`,
       );
     if (
-      mapping.status === 'pending' &&
-      mapping.scores.some((score) => score !== null)
-    )
-      throw new Error(
-        `${mapping.questionCode} es pendiente y no debe tener puntajes provisorios.`,
-      );
-    if (
-      mapping.status === 'confirmed' &&
+      mapping.status !== 'confirmed' ||
       mapping.scores.some(
-        (score) =>
-          !Number.isInteger(score) || !mapping.officialScale.includes(score),
+        (score) => !Number.isInteger(score) || score < 0 || score > 100,
       )
     )
       throw new Error(
-        `${mapping.questionCode} contiene valores fuera de su escala oficial.`,
+        `${mapping.questionCode} no posee un mapeo confirmado dentro del rango 0–100.`,
       );
   });
 
@@ -1425,29 +1341,10 @@ async function validateWithBackend() {
     new SurveyImportFileService(),
   );
   const preview = await service.preview(file);
-  const pendingQuestionCodes = new Set(
-    SCORE_MAPPING_INVENTORY.filter(
-      (mapping) => mapping.status === 'pending',
-    ).map((mapping) => mapping.questionCode),
-  );
-  const expectedPendingRows = SCORE_MAPPING_INVENTORY.filter(
-    (mapping) => mapping.status === 'pending',
-  ).reduce((total, mapping) => total + mapping.optionCount, 0);
   const invalidRows = preview.rows.filter((row) => row.errors.length);
-  const unexpectedErrors = invalidRows.filter(
-    (row) =>
-      !pendingQuestionCodes.has(row.questionCode) ||
-      row.errors.some(
-        (error) => error !== 'puntaje: debe ser un entero entre 0 y 100.',
-      ),
-  );
-  if (
-    preview.canImport ||
-    preview.errorCount !== expectedPendingRows ||
-    unexpectedErrors.length
-  )
+  if (!preview.canImport || preview.errorCount !== 0 || invalidRows.length)
     throw new Error(
-      `La validación del backend no coincide con los puntajes pendientes: ${JSON.stringify(
+      `La validación del backend rechazó la matriz de puntajes aprobada: ${JSON.stringify(
         invalidRows,
         null,
         2,
@@ -1483,9 +1380,7 @@ async function main() {
         sourceQuestions: QUESTIONS.length,
         sourceOptions: SOURCE_RECORDS.length,
         importRows: IMPORT_RECORDS.length,
-        pendingScoreQuestions: SCORE_MAPPING_INVENTORY.filter(
-          (mapping) => mapping.status === 'pending',
-        ).length,
+        confirmedScoreQuestions: SCORE_MAPPING_INVENTORY.length,
         backendPreview: {
           canImport: preview.canImport,
           errorCount: preview.errorCount,

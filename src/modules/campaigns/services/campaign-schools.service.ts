@@ -30,6 +30,7 @@ import {
   CampaignSchoolAssignmentSource,
 } from '../entities/campaign-school.entity';
 import { Campaign } from '../entities/campaign.entity';
+import { CampaignsService } from './campaigns.service';
 
 // TypeORM debe propagar este valor por su subconsulta DISTINCT al paginar joins.
 const SCHOOL_NAME_SORT_ALIAS = 'school_name_sort';
@@ -38,7 +39,10 @@ const SCHOOL_NAME_SORT_ALIAS = 'school_name_sort';
 export class CampaignSchoolsService {
   private readonly logger = new Logger(CampaignSchoolsService.name);
 
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly campaignsService: CampaignsService,
+  ) {}
 
   async list(campaignId: string, query: ListCampaignSchoolsQueryDto) {
     await this.getCampaign(campaignId);
@@ -443,6 +447,16 @@ export class CampaignSchoolsService {
     )
       throw new ConflictException(
         'No se pueden incorporar escuelas porque la etapa ya finalizó.',
+      );
+    if (campaign.status === CampaignStatus.Draft)
+      await this.campaignsService.assertVersionEligibleForCampaign(
+        campaign.surveyVersionId,
+        manager,
+      );
+    else
+      await this.campaignsService.assertVersionCertifiedForExistingCampaign(
+        campaign.surveyVersionId,
+        manager,
       );
     return campaign;
   }

@@ -25,6 +25,8 @@ import { SchoolRectification } from '../schools/entities/school-rectification.en
 import { EducationLevelCatalog } from '../schools/entities/education-level-catalog.entity';
 import { SchoolShiftCatalog } from '../schools/entities/school-shift-catalog.entity';
 import { SurveyApplicabilityService } from './services/survey-applicability.service';
+import { InstitutionalSurveyEvaluabilityPolicy } from './policies/institutional-survey-evaluability.policy';
+import { SurveyVersionCertificationService } from './services/survey-version-certification.service';
 
 @Module({
   imports: [
@@ -56,7 +58,13 @@ import { SurveyApplicabilityService } from './services/survey-applicability.serv
     ApplicabilityRulesService,
     SurveyApplicabilityService,
     SurveyEvaluationService,
+    InstitutionalSurveyEvaluabilityPolicy,
+    SurveyVersionCertificationService,
   ],
-  exports: [SurveyApplicabilityService, SurveyEvaluationService],
+  exports: [
+    SurveyApplicabilityService,
+    SurveyEvaluationService,
+    SurveyVersionCertificationService,
+  ],
 })
 export class SurveysModule {}

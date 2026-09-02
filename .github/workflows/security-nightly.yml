@@ -111,7 +111,7 @@ jobs:
 
       - name: Limpiar el entorno
         if: always()
-        run: docker compose -f compose.security.yml --profile full --profile seed --profile tests down -v
+        run: ./security/scripts/security-compose.sh --profile full --profile seed --profile tests down -v
 
       - name: Avisar si el escaneo nocturno falla
         if: failure()

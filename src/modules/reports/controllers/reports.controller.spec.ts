@@ -14,7 +14,7 @@ import { PasswordChangeRequiredGuard } from '../../../common/guards/password-cha
 import { RolesGuard } from '../../../common/guards/roles.guard';
 import type { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { JwtAuthGuard } from '../../../common/guards/jwt-auth.guard';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { UserSchool } from '../../users/entities/user-school.entity';
 import { IndividualReportService } from '../services/individual-report.service';

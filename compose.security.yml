@@ -9,10 +9,10 @@
 #   - Único punto de entrada: el proxy, publicado SOLO en 127.0.0.1.
 #
 # Uso:
-#   docker compose -f compose.security.yml up -d --build            (API + base)
-#   docker compose -f compose.security.yml --profile full up -d --build   (+ SPA)
+#   ./security/scripts/security-compose.sh up -d --build            (API + base)
+#   ./security/scripts/security-compose.sh --profile full up -d --build   (+ SPA)
 #   ./security/scripts/run-all.sh
-#   docker compose -f compose.security.yml --profile full down -v
+#   ./security/scripts/security-compose.sh --profile full down -v
 #
 # El servicio `sec-web` construye el repositorio del frontend, que vive aparte.
 # Ruta configurable con SECURITY_FRONTEND_CONTEXT (por defecto ../frontend).
@@ -36,7 +36,7 @@ services:
   # ---------------------------------------------------------------------------
   sec-db:
     <<: *hardening
-    image: ${SECURITY_POSTGRES_IMAGE:-postgres:17.6-alpine}
+    image: ${SECURITY_POSTGRES_IMAGE:?Ejecutar mediante security/scripts/security-compose.sh}
     container_name: mendoza-sec-db
     environment:
       # Credenciales sintéticas de un entorno descartable. No son secretos:
@@ -181,7 +181,7 @@ services:
   # ---------------------------------------------------------------------------
   sec-proxy:
     <<: *hardening
-    image: ${SECURITY_NGINX_IMAGE:-nginx:1.29.3-alpine}
+    image: ${SECURITY_NGINX_IMAGE:?Ejecutar mediante security/scripts/security-compose.sh}
     container_name: mendoza-sec-proxy
     ports:
       # 127.0.0.1 evita que el entorno de pruebas quede accesible en la red.
@@ -220,7 +220,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # Datos sintéticos: usuarios de prueba para el DAST autenticado
-  #   docker compose -f compose.security.yml --profile seed run --rm sec-seed
+  #   ./security/scripts/security-compose.sh --profile seed run --rm sec-seed
   # ---------------------------------------------------------------------------
   sec-seed:
     <<: *hardening
@@ -267,7 +267,7 @@ services:
   # ---------------------------------------------------------------------------
   # Tests de seguridad (control de acceso, JWT, CSRF, CORS, headers, uploads).
   # Corren DENTRO de la red interna: la base nunca se expone al host.
-  #   docker compose -f compose.security.yml --profile tests run --rm sec-tests
+  #   ./security/scripts/security-compose.sh --profile tests run --rm sec-tests
   # ---------------------------------------------------------------------------
   sec-tests:
     <<: *hardening

@@ -38,8 +38,8 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      - name: Usar npm 11.6.1
-        run: npm install --global npm@11.6.1
+      - name: Usar npm declarado por el proyecto
+        run: bash security/scripts/setup-project-npm.sh
       - run: npm ci
       - name: Lint
         run: npm run lint
@@ -168,21 +168,18 @@ jobs:
           ref: ${{ github.base_ref }}
           path: frontend-repo
 
-      - name: Cargar versiones centralizadas del stack
-        run: sed -n '/^[A-Z_][A-Z0-9_]*=/p' security/config/tool-versions.env >> "$GITHUB_ENV"
-
       - name: Levantar el entorno efímero
         env:
           SECURITY_FRONTEND_CONTEXT: ${{ github.workspace }}/frontend-repo
         run: |
-          docker compose -f compose.security.yml --profile full up -d --build
+          ./security/scripts/security-compose.sh --profile full up -d --build
           bash security/scripts/wait-for-app.sh
 
       - name: Datos sintéticos
-        run: docker compose -f compose.security.yml --profile seed run --rm sec-seed
+        run: ./security/scripts/security-compose.sh --profile seed run --rm sec-seed
 
       - name: Tests de control de acceso, CSRF, CORS y uploads
-        run: docker compose -f compose.security.yml --profile tests run --rm sec-tests
+        run: ./security/scripts/security-compose.sh --profile tests run --rm sec-tests
 
       - name: ZAP baseline autenticado
         run: bash security/scripts/run-dast.sh
@@ -197,4 +194,4 @@ jobs:
 
       - name: Destruir el entorno y sus datos
         if: always()
-        run: docker compose -f compose.security.yml --profile full --profile seed --profile tests down -v
+        run: ./security/scripts/security-compose.sh --profile full --profile seed --profile tests down -v

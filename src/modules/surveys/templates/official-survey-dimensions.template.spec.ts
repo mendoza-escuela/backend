@@ -1,6 +1,7 @@
 import {
   createOfficialSurveyDimensionInputs,
   getOfficialDimensionCodeForQuestion,
+  getRequiredOfficialDimensionCodeForQuestion,
   isOfficialSurveyStructure,
   OFFICIAL_SURVEY_DIMENSIONS,
   OfficialSurveyDimensionCode,
@@ -36,6 +37,33 @@ describe('Official survey dimensions template', () => {
     expect(getOfficialDimensionCodeForQuestion(40)).toBeNull();
     expect(getOfficialDimensionCodeForQuestion(44)).toBeNull();
   });
+
+  it.each([
+    ['p001', OfficialSurveyDimensionCode.InstitutionalCommitment],
+    ['P006', OfficialSurveyDimensionCode.HealthTeamCoordination],
+    ['p008', OfficialSurveyDimensionCode.HealthyFoodEnvironment],
+    ['p035', OfficialSurveyDimensionCode.PhysicalActivity],
+    ['p041', OfficialSurveyDimensionCode.MentalHealth],
+    ['p044', OfficialSurveyDimensionCode.SmokeFreeSpaces],
+    ['p047', OfficialSurveyDimensionCode.MentalHealth],
+    ['p060', OfficialSurveyDimensionCode.MentalHealth],
+  ])(
+    'ubica %s en su dimensión institucional',
+    (questionCode, dimensionCode) => {
+      expect(getRequiredOfficialDimensionCodeForQuestion(questionCode)).toBe(
+        dimensionCode,
+      );
+    },
+  );
+
+  it.each(['p000', 'p061', 'personalizada'])(
+    'no asigna una dimensión institucional a %s',
+    (questionCode) => {
+      expect(
+        getRequiredOfficialDimensionCodeForQuestion(questionCode),
+      ).toBeNull();
+    },
+  );
 
   it('genera copias independientes sin secciones ni preguntas precargadas', () => {
     const first = createOfficialSurveyDimensionInputs();

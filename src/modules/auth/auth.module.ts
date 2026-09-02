@@ -10,14 +10,13 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { AuthSession } from './entities/auth-session.entity';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { MailModule } from '../mail/mail.module';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { PasswordChangeRequiredGuard } from '../../common/guards/password-change-required.guard';
-import { RolesGuard } from '../../common/guards/roles.guard';
+import { AuthGuardsModule } from '../../common/guards/auth-guards.module';
 
 @Module({
   imports: [
     UsersModule,
     MailModule,
+    AuthGuardsModule,
     TypeOrmModule.forFeature([AuthSession, PasswordResetToken]),
     PassportModule,
     JwtModule.registerAsync({
@@ -35,13 +34,7 @@ import { RolesGuard } from '../../common/guards/roles.guard';
     }),
   ],
   controllers: [AuthController],
-  providers: [
-    AuthService,
-    JwtStrategy,
-    JwtAuthGuard,
-    PasswordChangeRequiredGuard,
-    RolesGuard,
-  ],
-  exports: [JwtAuthGuard, PasswordChangeRequiredGuard, RolesGuard],
+  providers: [AuthService, JwtStrategy],
+  exports: [AuthGuardsModule],
 })
 export class AuthModule {}

@@ -5,6 +5,7 @@ import {
   IsArray,
   IsDefined,
   IsEnum,
+  IsISO8601,
   IsInt,
   IsString,
   IsUUID,
@@ -31,7 +32,7 @@ export class ApplicabilityConditionDto {
   order: number;
 }
 
-export class WriteApplicabilityRuleDto {
+export class ApplicabilityRuleDefinitionDto {
   @IsEnum(ApplicabilityGroupOperator)
   groupOperator: ApplicabilityGroupOperator;
 
@@ -52,14 +53,24 @@ export class WriteApplicabilityRuleDto {
   conditions: ApplicabilityConditionDto[];
 }
 
-export class ReorderApplicabilityRulesDto {
+export class SurveyVersionRevisionDto {
+  @IsISO8601({ strict: true })
+  expectedUpdatedAt: string;
+}
+
+export class WriteApplicabilityRuleDto extends ApplicabilityRuleDefinitionDto {
+  @IsISO8601({ strict: true })
+  expectedUpdatedAt: string;
+}
+
+export class ReorderApplicabilityRulesDto extends SurveyVersionRevisionDto {
   @IsArray()
   @ArrayMinSize(1)
   @IsUUID('4', { each: true })
   ruleIds: string[];
 }
 
-export class BulkCreateApplicabilityRuleDto {
+export class BulkCreateApplicabilityRuleDto extends SurveyVersionRevisionDto {
   @IsArray()
   @ArrayMinSize(2)
   @ArrayUnique()
@@ -67,8 +78,8 @@ export class BulkCreateApplicabilityRuleDto {
   questionIds: string[];
 
   @ValidateNested()
-  @Type(() => WriteApplicabilityRuleDto)
-  rule: WriteApplicabilityRuleDto;
+  @Type(() => ApplicabilityRuleDefinitionDto)
+  rule: ApplicabilityRuleDefinitionDto;
 }
 
 export class PreviewApplicabilityDto {

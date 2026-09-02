@@ -9,6 +9,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import type { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
+import { Campaign } from '../../campaigns/entities/campaign.entity';
 import { EvaluationConfiguration } from '../../evaluation-config/entities/evaluation-configuration.entity';
 import { EvaluationConfigurationsService } from '../../evaluation-config/services/evaluation-configurations.service';
 import { SchoolsService } from '../../schools/services/schools.service';
@@ -30,6 +31,11 @@ import {
   type EvaluationQuestion,
   type SurveyEvaluationResult,
 } from '../../surveys/services/survey-evaluation.service';
+import {
+  SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_CODE,
+  SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_MESSAGE,
+  SurveyVersionCertificationService,
+} from '../../surveys/services/survey-version-certification.service';
 import {
   OFFICIAL_SURVEY_DIMENSIONS,
   OfficialSurveyDimensionCode,
@@ -108,6 +114,7 @@ export class EvaluationResultsService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly evaluationService: SurveyEvaluationService,
     private readonly applicabilityService: SurveyApplicabilityService,
+    private readonly versionCertification: SurveyVersionCertificationService,
     private readonly schoolsService: SchoolsService,
     private readonly configurations: EvaluationConfigurationsService,
   ) {}
@@ -129,18 +136,49 @@ export class EvaluationResultsService {
   ): Promise<EvaluationResult> {
     const lockedSubmission = await manager.findOne(SurveySubmission, {
       where: { id: submission.id },
-      select: { id: true },
+      select: {
+        id: true,
+        campaignId: true,
+        schoolId: true,
+        surveyVersionId: true,
+      },
       lock: { mode: 'pessimistic_write' },
     });
     if (!lockedSubmission) {
       throw new NotFoundException('La presentación indicada no existe.');
     }
+    if (
+      submission.campaignId !== lockedSubmission.campaignId ||
+      submission.schoolId !== lockedSubmission.schoolId ||
+      submission.surveyVersionId !== lockedSubmission.surveyVersionId ||
+      surveyVersion.id !== lockedSubmission.surveyVersionId ||
+      applicability.surveyVersionId !== lockedSubmission.surveyVersionId
+    )
+      throw new BadRequestException(
+        'Los datos asociados a la presentación no coinciden con su registro persistido.',
+      );
 
+    const persistedCampaign = await manager.findOne(Campaign, {
+      where: { id: lockedSubmission.campaignId },
+      select: { id: true, surveyVersionId: true },
+    });
+    if (
+      !persistedCampaign ||
+      persistedCampaign.surveyVersionId !== lockedSubmission.surveyVersionId
+    )
+      throw this.notInstitutionallyEvaluable([
+        'La versión persistida en la presentación no coincide con la versión de su etapa.',
+      ]);
+
+    const certifiedVersion = await this.certifiedVersion(
+      manager,
+      lockedSubmission.surveyVersionId,
+    );
     const configuration =
       options.configuration ?? (await this.configurations.active(manager));
     const calculation = this.prepareCalculation(
       submission,
-      surveyVersion,
+      certifiedVersion,
       applicability,
       configuration,
     );
@@ -154,9 +192,9 @@ export class EvaluationResultsService {
 
     Object.assign(result, {
       submissionId: submission.id,
-      campaignId: submission.campaignId,
-      schoolId: submission.schoolId,
-      surveyVersionId: surveyVersion.id,
+      campaignId: lockedSubmission.campaignId,
+      schoolId: lockedSubmission.schoolId,
+      surveyVersionId: certifiedVersion.id,
       generalScore: calculation.evaluation.general.average,
       generalNumerator: String(calculation.evaluation.general.numerator),
       generalDenominator: calculation.evaluation.general.denominator,
@@ -164,7 +202,7 @@ export class EvaluationResultsService {
       snapshotSchemaVersion: EVALUATION_SNAPSHOT_SCHEMA_VERSION,
       snapshot: this.buildSnapshot(
         submission,
-        surveyVersion,
+        certifiedVersion,
         applicability,
         calculation.evaluation,
         calculation.answerByQuestionId,
@@ -214,9 +252,9 @@ export class EvaluationResultsService {
           entityId: savedResult.id,
           changes: {
             submissionId: submission.id,
-            campaignId: submission.campaignId,
-            schoolId: submission.schoolId,
-            surveyVersionId: surveyVersion.id,
+            campaignId: lockedSubmission.campaignId,
+            schoolId: lockedSubmission.schoolId,
+            surveyVersionId: certifiedVersion.id,
             algorithmVersion: EVALUATION_ALGORITHM_VERSION,
             calculationSource: source,
             generalScore: savedResult.generalScore,
@@ -242,6 +280,92 @@ export class EvaluationResultsService {
         'No fue posible guardar el resultado completo. No se conservaron cambios parciales.',
       );
     }
+  }
+
+  /**
+   * Recarga y certifica la estructura autoritativa dentro de la transacción.
+   * Ningún llamador puede habilitar un cálculo entregando una entidad parcial o
+   * una estructura que ya no coincide con la versión persistida.
+   */
+  private async certifiedVersion(
+    manager: EntityManager,
+    surveyVersionId: string,
+  ): Promise<SurveyVersion> {
+    const version = await manager.findOne(SurveyVersion, {
+      where: { id: surveyVersionId },
+      relations: {
+        survey: true,
+        dimensions: {
+          sections: {
+            questions: {
+              options: true,
+              applicabilityRules: { conditions: true },
+            },
+          },
+        },
+      },
+      order: {
+        dimensions: {
+          order: 'ASC',
+          sections: {
+            order: 'ASC',
+            questions: {
+              order: 'ASC',
+              options: { order: 'ASC' },
+              applicabilityRules: {
+                order: 'ASC',
+                conditions: { order: 'ASC' },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!version || !this.hasCompleteCertificationStructure(version))
+      throw this.notInstitutionallyEvaluable([
+        'No fue posible cargar la estructura completa de la versión asociada a la presentación.',
+      ]);
+    if (
+      !isHistoricallyAvailableSurveyVersion(version.status, version.publishedAt)
+    )
+      throw this.notInstitutionallyEvaluable([
+        'La versión asociada a la presentación no está disponible.',
+      ]);
+
+    const certification = this.versionCertification.certify(version);
+    if (!certification.evaluable)
+      throw this.notInstitutionallyEvaluable(certification.evaluationErrors);
+    return version;
+  }
+
+  private hasCompleteCertificationStructure(version: SurveyVersion): boolean {
+    return (
+      Array.isArray(version.dimensions) &&
+      version.dimensions.every(
+        (dimension) =>
+          Array.isArray(dimension.sections) &&
+          dimension.sections.every(
+            (section) =>
+              Array.isArray(section.questions) &&
+              section.questions.every(
+                (question) =>
+                  Array.isArray(question.options) &&
+                  Array.isArray(question.applicabilityRules) &&
+                  question.applicabilityRules.every((rule) =>
+                    Array.isArray(rule.conditions),
+                  ),
+              ),
+          ),
+      )
+    );
+  }
+
+  private notInstitutionallyEvaluable(errors: string[]): ConflictException {
+    return new ConflictException({
+      code: SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_CODE,
+      message: SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE_MESSAGE,
+      errors,
+    });
   }
 
   /**

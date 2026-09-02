@@ -19,7 +19,10 @@ import {
 } from 'typeorm';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
 import { AuditLog } from '../../audit/entities/audit-log.entity';
-import { spreadsheetSafeCell } from '../../exports/spreadsheet-cell.util';
+import {
+  spreadsheetSafeCell,
+  spreadsheetSafeCsvCell,
+} from '../../../common/spreadsheets/spreadsheet-cell.util';
 import { AuthSession } from '../../auth/entities/auth-session.entity';
 import { Campaign } from '../../campaigns/entities/campaign.entity';
 import {
@@ -1112,7 +1115,7 @@ export class SchoolsService {
           '\uFEFF' +
             [headers, ...rows]
               .map((row) =>
-                row.map((value) => this.csvCell(String(value))).join(','),
+                row.map((value) => spreadsheetSafeCsvCell(value)).join(','),
               )
               .join('\r\n'),
           'utf8',
@@ -1124,9 +1127,8 @@ export class SchoolsService {
     const sheet = workbook.addWorksheet('Padrón');
     sheet.addRow(headers);
     // El padrón contiene texto cargado por usuarios (nombre de la escuela,
-    // dirección, referentes). Sin neutralizar, un valor que empiece con
-    // = + - @ se ejecuta como fórmula al abrir el archivo. La exportación CSV
-    // de este mismo endpoint ya lo hacía con csvCell(); el XLSX no.
+    // dirección, referentes). Ambos formatos usan la misma neutralización para
+    // evitar que una planilla ejecute valores que comienzan con = + - o @.
     rows.forEach((row) => sheet.addRow(row.map(spreadsheetSafeCell)));
     sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
     sheet.getRow(1).fill = {
@@ -2002,11 +2004,5 @@ export class SchoolsService {
           email: user.email,
         }
       : null;
-  }
-  private csvCell(value: string) {
-    const safeValue = /^[=+\-@]/.test(value) ? `'${value}` : value;
-    return /[",\r\n]/.test(safeValue)
-      ? `"${safeValue.replace(/"/g, '""')}"`
-      : safeValue;
   }
 }

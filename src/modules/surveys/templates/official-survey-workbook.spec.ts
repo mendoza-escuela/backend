@@ -4,11 +4,13 @@ import {
   OFFICIAL_GENERAL_BINARY_QUESTION_CODES,
   OFFICIAL_GENERAL_SCORE_PROFILE,
   OFFICIAL_GENERAL_TERNARY_QUESTION_CODES,
-  OFFICIAL_MENTAL_HEALTH_PENDING_QUESTION_CODES,
-  OFFICIAL_MENTAL_HEALTH_RESOLVED_QUESTION_CODE,
-  OFFICIAL_MENTAL_HEALTH_RESOLVED_SCORE_SEQUENCE,
+  OFFICIAL_MENTAL_HEALTH_TERNARY_QUESTION_CODES,
   OFFICIAL_MENTAL_HEALTH_SCORE_PROFILE,
-  OFFICIAL_UNRESOLVED_P038_CODE,
+  OFFICIAL_P038_QUESTION_CODE,
+  OFFICIAL_P038_SCORE_SEQUENCE,
+  OFFICIAL_MENTAL_HEALTH_TERNARY_SCORE_SEQUENCE,
+  OFFICIAL_P052_QUESTION_CODE,
+  OFFICIAL_P052_SCORE_SEQUENCE,
   getApprovedOfficialQuestionScoreSequence,
 } from '../policies/official-survey-scoring.policy';
 
@@ -118,17 +120,12 @@ describe('Planilla consolidada del cuestionario institucional', () => {
       new Set(scoreMappingRows.map((row) => row.pregunta_codigo)).size,
     ).toBe(60);
 
-    const pendingCodes = new Set([
-      OFFICIAL_UNRESOLVED_P038_CODE,
-      ...OFFICIAL_MENTAL_HEALTH_PENDING_QUESTION_CODES,
-    ]);
     const actualPendingCodes = new Set(
       scoreMappingRows
         .filter((row) => row.estado === 'Pendiente')
         .map((row) => row.pregunta_codigo),
     );
-    expect(actualPendingCodes).toEqual(pendingCodes);
-    expect(actualPendingCodes.size).toBe(17);
+    expect(actualPendingCodes.size).toBe(0);
 
     for (const mapping of scoreMappingRows) {
       const expected = getApprovedOfficialQuestionScoreSequence(
@@ -138,28 +135,19 @@ describe('Planilla consolidada del cuestionario institucional', () => {
         questionnaireRows,
         mapping.pregunta_codigo,
       );
-      const expectedScale =
+      expect(expected).not.toBeNull();
+      const expectedProfile =
         mapping.dimension_codigo === 'salud_mental'
-          ? OFFICIAL_MENTAL_HEALTH_SCORE_PROFILE.join('/')
-          : OFFICIAL_GENERAL_SCORE_PROFILE.join('/');
-      expect(mapping.escala_oficial).toBe(expectedScale);
-
-      if (pendingCodes.has(mapping.pregunta_codigo)) {
-        expect(expected).toBeNull();
-        expect(mapping.mapeo_segun_orden_opciones).toBe('SIN DEFINIR');
-        expect(questionRows.every((row) => row.puntaje === '')).toBe(true);
-      } else {
-        expect(expected).not.toBeNull();
-        expect(mapping.estado).toBe('Confirmado');
-        expect(mapping.mapeo_segun_orden_opciones).toBe(expected?.join('/'));
-        expect(questionRows.map((row) => Number(row.puntaje))).toEqual(
-          expected,
-        );
-      }
+          ? OFFICIAL_MENTAL_HEALTH_SCORE_PROFILE
+          : OFFICIAL_GENERAL_SCORE_PROFILE;
+      expect(mapping.escala_oficial).toBe(expectedProfile.join('/'));
+      expect(mapping.estado).toBe('Confirmado');
+      expect(mapping.mapeo_segun_orden_opciones).toBe(expected?.join('/'));
+      expect(questionRows.map((row) => Number(row.puntaje))).toEqual(expected);
     }
   });
 
-  it('conserva únicamente los mapeos cerrados y no asigna puntajes provisorios', () => {
+  it('conserva todos los mapeos aprobados, incluidas sus excepciones', () => {
     expect(OFFICIAL_GENERAL_TERNARY_QUESTION_CODES).toHaveLength(39);
     expect(OFFICIAL_GENERAL_BINARY_QUESTION_CODES).toEqual([
       'p022',
@@ -170,17 +158,26 @@ describe('Planilla consolidada del cuestionario institucional', () => {
       rowsForQuestion(questionnaireRows, 'p022').map((row) => row.puntaje),
     ).toEqual(['100', '0']);
     expect(
-      rowsForQuestion(
-        questionnaireRows,
-        OFFICIAL_MENTAL_HEALTH_RESOLVED_QUESTION_CODE,
-      ).map((row) => Number(row.puntaje)),
-    ).toEqual(OFFICIAL_MENTAL_HEALTH_RESOLVED_SCORE_SEQUENCE);
+      rowsForQuestion(questionnaireRows, OFFICIAL_P052_QUESTION_CODE).map(
+        (row) => Number(row.puntaje),
+      ),
+    ).toEqual(OFFICIAL_P052_SCORE_SEQUENCE);
+    expect(
+      rowsForQuestion(questionnaireRows, OFFICIAL_P038_QUESTION_CODE).map(
+        (row) => Number(row.puntaje),
+      ),
+    ).toEqual(OFFICIAL_P038_SCORE_SEQUENCE);
+    for (const code of OFFICIAL_MENTAL_HEALTH_TERNARY_QUESTION_CODES)
+      expect(
+        rowsForQuestion(questionnaireRows, code).map((row) =>
+          Number(row.puntaje),
+        ),
+      ).toEqual(OFFICIAL_MENTAL_HEALTH_TERNARY_SCORE_SEQUENCE);
 
     const pendingSheetText = worksheetText(workbook.getWorksheet('Pendientes'));
-    expect(pendingSheetText).toContain(
-      'todas sus celdas de puntaje permanecen vacías',
-    );
     const normalizedPendingText = pendingSheetText.toLowerCase();
+    expect(normalizedPendingText).not.toContain('puntaje permanece');
+    expect(normalizedPendingText).not.toContain('puntajes permanecen');
     expect(normalizedPendingText).not.toContain('provisional');
     expect(normalizedPendingText).not.toContain('provisori');
     expect(normalizedPendingText).not.toContain('condición por kiosco');

@@ -24,8 +24,8 @@ case "$(uname -s)" in
   MINGW* | MSYS* | CYGWIN*) export MSYS_NO_PATHCONV=1 ;;
 esac
 
-# shellcheck source=/dev/null
-set -a && . "${CONFIG_DIR}/tool-versions.env" && set +a
+# shellcheck source=load-tool-versions.sh
+. "${SCRIPT_DIR}/load-tool-versions.sh" || exit $?
 
 mkdir -p "${REPORTS_DIR}"
 rm -f \

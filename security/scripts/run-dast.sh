@@ -27,8 +27,8 @@ case "$(uname -s)" in
   MINGW* | MSYS* | CYGWIN*) export MSYS_NO_PATHCONV=1 ;;
 esac
 
-# shellcheck source=/dev/null
-set -a && . "${CONFIG_DIR}/tool-versions.env" && set +a
+# shellcheck source=load-tool-versions.sh
+. "${SCRIPT_DIR}/load-tool-versions.sh" || exit $?
 
 mkdir -p "${REPORTS_DIR}"
 
@@ -108,7 +108,7 @@ obtain_token() {
 
   if [ "${response}" != "200" ]; then
     log AUTH "AVISO: el login devolvió ${response:-sin respuesta}. El DAST correrá SIN autenticar."
-    log AUTH "Creá los datos sintéticos con: docker compose -f compose.security.yml --profile seed run --rm sec-seed"
+    log AUTH "Creá los datos sintéticos con: ./security/scripts/security-compose.sh --profile seed run --rm sec-seed"
     return 1
   fi
 

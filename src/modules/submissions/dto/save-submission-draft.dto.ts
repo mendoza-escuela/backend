@@ -2,8 +2,10 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsInt,
   IsOptional,
   IsUUID,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import type { SurveyAnswerValue } from '../entities/survey-answer.entity';
@@ -21,6 +23,10 @@ export class SubmissionAnswerDto {
 }
 
 export class SaveSubmissionDraftDto {
+  @IsInt()
+  @Min(0)
+  expectedRevision: number;
+
   @IsArray()
   @ArrayMaxSize(500)
   @ValidateNested({ each: true })

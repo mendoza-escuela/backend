@@ -1,5 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import ExcelJS from 'exceljs';
+import { escapeCsvCell } from '../../../common/spreadsheets/spreadsheet-cell.util';
+import {
+  readCsvImportRecords,
+  readXlsxImportRecords,
+} from '../../../common/spreadsheets/spreadsheet-import.util';
 import {
   OFFICIAL_SURVEY_DIMENSIONS,
   OfficialSurveyDimensionCode,
@@ -96,7 +101,7 @@ export class SurveyImportFileService {
       SURVEY_IMPORT_HEADERS.join(','),
       ...records.map((record) =>
         SURVEY_IMPORT_HEADERS.map((header) =>
-          this.escapeCsv(record[header] ?? ''),
+          escapeCsvCell(record[header] ?? ''),
         ).join(','),
       ),
     ];
@@ -231,51 +236,16 @@ export class SurveyImportFileService {
   }
 
   private readCsv(buffer: Buffer): SurveyImportRawRecord[] {
-    const lines = buffer
-      .toString('utf8')
-      .replace(/^\uFEFF/, '')
-      .split(/\r?\n/)
-      .filter((line) => line.trim());
-    if (lines.length < 2) return [];
-    const parsedHeaders = this.csvLine(lines[0]).map((value) =>
-      this.header(value),
-    );
-    this.assertHeaders(parsedHeaders);
-    return lines.slice(1).map((line) => {
-      const values = this.csvLine(line);
-      return Object.fromEntries(
-        parsedHeaders.map((header, index) => [
-          header,
-          values[index]?.trim() ?? '',
-        ]),
-      );
+    return readCsvImportRecords(buffer, {
+      assertHeaders: (headers) => this.assertHeaders(headers),
+      unterminatedQuoteMessage: 'El CSV contiene comillas sin cerrar.',
     });
   }
 
   private async readWorkbook(buffer: Buffer): Promise<SurveyImportRawRecord[]> {
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
-    const sheet = workbook.worksheets[0];
-    if (!sheet || sheet.rowCount < 2) return [];
-    const parsedHeaders = (sheet.getRow(1).values as unknown[])
-      .slice(1)
-      .map((value) => this.header(this.cell(value)));
-    this.assertHeaders(parsedHeaders);
-    const rows: SurveyImportRawRecord[] = [];
-    sheet.eachRow((row, number) => {
-      if (number === 1) return;
-      const values = (row.values as unknown[]).slice(1);
-      if (values.every((value) => !this.cell(value).trim())) return;
-      rows.push(
-        Object.fromEntries(
-          parsedHeaders.map((header, index) => [
-            header,
-            this.cell(values[index]).trim(),
-          ]),
-        ),
-      );
+    return readXlsxImportRecords(buffer, {
+      assertHeaders: (headers) => this.assertHeaders(headers),
     });
-    return rows;
   }
 
   private assertHeaders(receivedHeaders: string[]) {
@@ -304,59 +274,5 @@ export class SurveyImportFileService {
       throw new BadRequestException(
         `La plantilla contiene columnas desconocidas: ${unknown.join(', ')}.`,
       );
-  }
-
-  private header(value: string) {
-    return value
-      .trim()
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/\s+/g, '_');
-  }
-
-  private csvLine(line: string) {
-    const values: string[] = [];
-    let value = '';
-    let quoted = false;
-    for (let index = 0; index < line.length; index += 1) {
-      const char = line[index];
-      if (char === '"' && quoted && line[index + 1] === '"') {
-        value += '"';
-        index += 1;
-      } else if (char === '"') quoted = !quoted;
-      else if (char === ',' && !quoted) {
-        values.push(value);
-        value = '';
-      } else value += char;
-    }
-    if (quoted)
-      throw new BadRequestException('El CSV contiene comillas sin cerrar.');
-    values.push(value);
-    return values;
-  }
-
-  private escapeCsv(value: string) {
-    return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-  }
-
-  private cell(value: unknown): string {
-    if (value === null || value === undefined) return '';
-    if (typeof value === 'string') return value;
-    if (typeof value === 'number' || typeof value === 'boolean')
-      return value.toString();
-    if (value instanceof Date) return value.toISOString();
-    if (typeof value === 'object') {
-      const cell = value as {
-        text?: string;
-        result?: unknown;
-        richText?: Array<{ text?: string }>;
-      };
-      if (cell.text) return cell.text;
-      if (cell.result !== undefined) return this.cell(cell.result);
-      if (cell.richText)
-        return cell.richText.map((part) => part.text ?? '').join('');
-    }
-    return '';
   }
 }

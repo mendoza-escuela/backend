@@ -14,9 +14,10 @@ import { Roles } from '../../../common/decorators/roles.decorator';
 import { PasswordChangeRequiredGuard } from '../../../common/guards/password-change-required.guard';
 import { RolesGuard } from '../../../common/guards/roles.guard';
 import { AuthenticatedUser } from '../../../common/types/authenticated-user.type';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { JwtAuthGuard } from '../../../common/guards/jwt-auth.guard';
 import { UserRole } from '../../users/entities/user-role.enum';
 import { SaveSubmissionDraftDto } from '../dto/save-submission-draft.dto';
+import { SubmitSubmissionDto } from '../dto/submit-submission.dto';
 import { SubmissionsService } from '../services/submissions.service';
 
 @Controller('school/campaigns')
@@ -58,8 +59,9 @@ export class SchoolSubmissionsController {
   @Post(':campaignId/submission/submit')
   submit(
     @Param('campaignId', ParseUUIDPipe) campaignId: string,
+    @Body() dto: SubmitSubmissionDto,
     @Req() request: Request & { user: AuthenticatedUser },
   ) {
-    return this.submissionsService.submit(campaignId, request.user);
+    return this.submissionsService.submit(campaignId, dto, request.user);
   }
 }

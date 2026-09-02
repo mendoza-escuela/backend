@@ -14,6 +14,7 @@ import {
   CampaignSchoolAssignmentSource,
 } from '../entities/campaign-school.entity';
 import { CampaignSchoolsService } from './campaign-schools.service';
+import { CampaignsService } from './campaigns.service';
 
 describe('CampaignSchoolsService', () => {
   const schoolIds = [
@@ -87,6 +88,10 @@ describe('CampaignSchoolsService', () => {
         : repositories.schools,
     ),
   };
+  const campaignsService = {
+    assertVersionEligibleForCampaign: jest.fn(),
+    assertVersionCertifiedForExistingCampaign: jest.fn(),
+  };
   let service: CampaignSchoolsService;
 
   beforeEach(() => {
@@ -108,10 +113,44 @@ describe('CampaignSchoolsService', () => {
     manager.findOne.mockResolvedValue({
       id: campaignId,
       status: CampaignStatus.Draft,
+      surveyVersionId: 'survey-version-id',
       endsAt: new Date('2099-12-31T02:59:59.999Z'),
     });
     manager.find.mockResolvedValue([]);
-    service = new CampaignSchoolsService(dataSource as unknown as DataSource);
+    campaignsService.assertVersionEligibleForCampaign.mockResolvedValue({});
+    campaignsService.assertVersionCertifiedForExistingCampaign.mockResolvedValue(
+      {},
+    );
+    service = new CampaignSchoolsService(
+      dataSource as unknown as DataSource,
+      campaignsService as unknown as CampaignsService,
+    );
+  });
+
+  it('bloquea la vista previa y la asignación si la versión dejó de ser evaluable', async () => {
+    campaignsService.assertVersionEligibleForCampaign.mockRejectedValue(
+      new ConflictException({
+        code: 'SURVEY_VERSION_NOT_INSTITUTIONALLY_EVALUABLE',
+      }),
+    );
+
+    await expect(
+      service.preview(campaignId, {
+        source: CampaignSchoolAssignmentSource.Manual,
+        schoolIds: [schoolIds[0]],
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    await expect(
+      service.assign(
+        campaignId,
+        {
+          source: CampaignSchoolAssignmentSource.Manual,
+          schoolIds: [schoolIds[0]],
+        },
+        actor,
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(manager.save).not.toHaveBeenCalled();
   });
 
   it('compone la paginación con un alias seleccionable para el orden por nombre', async () => {
@@ -195,6 +234,7 @@ describe('CampaignSchoolsService', () => {
     manager.findOne.mockResolvedValue({
       id: campaignId,
       status: CampaignStatus.Active,
+      surveyVersionId: 'archived-certified-version-id',
       endsAt: new Date('2099-12-31T02:59:59.999Z'),
     });
     manager.find.mockResolvedValue([
@@ -217,6 +257,12 @@ describe('CampaignSchoolsService', () => {
     );
 
     expect(response.assigned).toBe(1);
+    expect(
+      campaignsService.assertVersionCertifiedForExistingCampaign,
+    ).toHaveBeenCalledWith('archived-certified-version-id', manager);
+    expect(
+      campaignsService.assertVersionEligibleForCampaign,
+    ).not.toHaveBeenCalled();
     expect(manager.save).toHaveBeenCalledWith(CampaignSchool, [
       expect.objectContaining({
         id: 'assignment-2',

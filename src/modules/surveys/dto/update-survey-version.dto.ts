@@ -5,11 +5,13 @@ import {
   IsBoolean,
   IsEnum,
   IsInt,
+  IsISO8601,
   IsNotEmpty,
   IsNumber,
   IsObject,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   Max,
   MaxLength,
@@ -54,6 +56,10 @@ export class SurveyQuestionValidationDto {
 }
 
 export class SurveyOptionInputDto {
+  @IsOptional()
+  @IsUUID('4')
+  id?: string | null;
+
   @IsString()
   @IsNotEmpty()
   @MaxLength(120)
@@ -80,6 +86,10 @@ export class SurveyOptionInputDto {
 }
 
 export class SurveyQuestionInputDto {
+  @IsOptional()
+  @IsUUID('4')
+  id?: string | null;
+
   @IsString()
   @IsNotEmpty()
   @MaxLength(80)
@@ -116,6 +126,10 @@ export class SurveyQuestionInputDto {
 }
 
 export class SurveySectionInputDto {
+  @IsOptional()
+  @IsUUID('4')
+  id?: string | null;
+
   @IsString()
   @IsNotEmpty()
   @MaxLength(80)
@@ -140,6 +154,10 @@ export class SurveySectionInputDto {
 }
 
 export class SurveyDimensionInputDto {
+  @IsOptional()
+  @IsUUID('4')
+  id?: string | null;
+
   @IsString()
   @IsNotEmpty()
   @MaxLength(80)
@@ -164,6 +182,9 @@ export class SurveyDimensionInputDto {
 }
 
 export class UpdateSurveyVersionDto {
+  @IsISO8601({ strict: true })
+  expectedUpdatedAt: string;
+
   @IsString()
   @IsNotEmpty()
   @MaxLength(255)

@@ -22,13 +22,11 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-COMPOSE_FILE="${REPO_ROOT}/compose.security.yml"
-CONFIG_DIR="${REPO_ROOT}/security/config"
+COMPOSE_SCRIPT="${SCRIPT_DIR}/security-compose.sh"
 
-# Compose expande las imágenes base desde esta misma fuente versionada que usan
-# los scanners. `set -a` las exporta para que la centralización sea efectiva.
-# shellcheck source=/dev/null
-set -a && . "${CONFIG_DIR}/tool-versions.env" && set +a
+# Expone PYTHON_IMAGE para el fallback que corre dentro de `bash -c`.
+# shellcheck source=load-tool-versions.sh
+. "${SCRIPT_DIR}/load-tool-versions.sh" || exit $?
 
 STATIC_ONLY=0
 FULL_DAST=0
@@ -63,7 +61,7 @@ skip_stage() {
   printf '\n\033[1;33m======== %s (NOT_EXECUTED) ========\033[0m\n%s\n' "$1" "$2"
 }
 
-compose() { docker compose -f "${COMPOSE_FILE}" "$@"; }
+compose() { "${COMPOSE_SCRIPT}" "$@"; }
 
 cleanup_env() {
   if [ "${STATIC_ONLY}" -eq 1 ]; then
@@ -71,7 +69,7 @@ cleanup_env() {
   fi
   if [ "${KEEP_ENV}" -eq 1 ]; then
     printf '\nEntorno conservado (--keep-env). Para destruirlo:\n'
-    printf '  docker compose -f compose.security.yml --profile full down -v\n'
+    printf '  ./security/scripts/security-compose.sh --profile full down -v\n'
     return
   fi
   printf '\n[LIMPIEZA] Destruyendo el entorno efímero y sus datos\n'
@@ -91,7 +89,7 @@ stage "Excepciones de seguridad" bash -c '
   if python3 -c "import sys" >/dev/null 2>&1; then
     python3 security/scripts/validate-exceptions.py
   else
-    docker run --rm -v "$(pwd)":/src -w /src python:3.13-alpine \
+    docker run --rm -v "$(pwd)":/src -w /src "${PYTHON_IMAGE}" \
       python security/scripts/validate-exceptions.py
   fi'
 
@@ -108,12 +106,12 @@ if [ "${STATIC_ONLY}" -eq 1 ]; then
 else
   # --- 4. Entorno + tests ----------------------------------------------------
   stage "Entorno efímero" bash -c "
-    docker compose -f '${COMPOSE_FILE}' --profile full up -d --build &&
+    '${COMPOSE_SCRIPT}' --profile full up -d --build &&
     bash '${SCRIPT_DIR}/wait-for-app.sh' &&
-    docker compose -f '${COMPOSE_FILE}' --profile seed run --rm sec-seed"
+    '${COMPOSE_SCRIPT}' --profile seed run --rm sec-seed"
 
   stage "Tests de control de acceso" bash -c "
-    docker compose -f '${COMPOSE_FILE}' --profile tests run --rm sec-tests"
+    '${COMPOSE_SCRIPT}' --profile tests run --rm sec-tests"
 
   # --- 5. DAST ---------------------------------------------------------------
   if [ "${FULL_DAST}" -eq 1 ]; then

@@ -46,8 +46,8 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - name: Usar npm 11.6.1
-        run: npm install --global npm@11.6.1
+      - name: Usar npm declarado por el proyecto
+        run: bash security/scripts/setup-project-npm.sh
       - run: npm ci
       - run: npm run lint
       - run: npm run build
@@ -105,7 +105,7 @@ jobs:
 
       - name: Limpiar el entorno
         if: always()
-        run: docker compose -f compose.security.yml --profile full --profile seed --profile tests down -v
+        run: ./security/scripts/security-compose.sh --profile full --profile seed --profile tests down -v
 
   # ---------------------------------------------------------------------------
   # CodeQL. El repositorio es público, así que está disponible sin coste.
