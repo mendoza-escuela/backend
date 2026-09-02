@@ -52,18 +52,36 @@ un proxy del mismo origen enruta las solicitudes, o una URL absoluta terminada
 en `/api` cuando la API se publica en otro host. La imagen Docker del frontend
 la resuelve al arrancar, por lo que cambiarla no requiere recompilarla.
 
-### Imagen Docker de develop
+### Publicación y versionado de la imagen Docker
 
 Cada push a `develop` publica en Docker Hub las etiquetas `develop` y
-`develop-<sha>` bajo `<docker-id>/mendoza-backend`. El repositorio de GitHub
-debe definir la variable `DOCKERHUB_USERNAME` y el secreto `DOCKERHUB_TOKEN`.
-La imagen recibe toda su configuración al arrancar y no contiene credenciales
-de infraestructura:
+`develop-<sha>` bajo `<docker-id>/eps-backend`. Al publicar un tag Git SemVer,
+por ejemplo `v1.0.0`, el pipeline publica además
+`<docker-id>/eps-backend:v1.0.0`. Las versiones ya publicadas no deben moverse
+ni reutilizarse; el siguiente cambio debe recibir un tag nuevo, como `v1.0.1`.
+
+El repositorio de GitHub debe definir la variable `DOCKERHUB_USERNAME` y el
+secreto `DOCKERHUB_TOKEN`. La imagen recibe toda su configuración al arrancar
+y no contiene credenciales de infraestructura:
 
 ```bash
 docker run --rm -p 4000:4000 --env-file .env \
-  <docker-id>/mendoza-backend:develop
+  <docker-id>/eps-backend:v1.0.0
 ```
+
+Para publicar una versión desde un commit aprobado de `develop`:
+
+```bash
+git switch develop
+git pull --ff-only
+git tag -a v1.0.0 -m "Backend v1.0.0"
+git push origin v1.0.0
+```
+
+También puede publicarse manualmente desde GitHub en **Actions → Publicar
+imagen Docker → Run workflow**. Se debe seleccionar la rama `develop` y
+completar `version` con un valor SemVer como `v1.0.0`. Este mecanismo crea el
+tag de la imagen Docker, pero no crea un tag Git.
 
 Si se cambia `PORT`, debe publicarse el mismo puerto del contenedor, por ejemplo
 `-e PORT=5000 -p 5000:5000`. El healthcheck usa también ese valor en runtime.

@@ -1,15 +1,21 @@
-name: Publicar imagen de develop
+name: Publicar imagen Docker
 
 on:
   push:
     branches: [develop]
+    tags: ['v*.*.*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Tag Docker SemVer a publicar (por ejemplo, v1.0.0)'
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-develop-${{ github.ref }}
+  group: publish-image-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -27,6 +33,26 @@ jobs:
           printf '%s' "$DOCKERHUB_USERNAME" | grep -Eq '^[a-z0-9][a-z0-9_-]{1,29}$' || { echo 'DOCKERHUB_USERNAME tiene espacios, comillas, mayúsculas o caracteres no admitidos'; exit 1; }
           test -n "$DOCKERHUB_TOKEN" || { echo 'Falta el secreto DOCKERHUB_TOKEN'; exit 1; }
           echo "username=$DOCKERHUB_USERNAME" >> "$GITHUB_OUTPUT"
+
+      - name: Validar versión
+        if: github.ref_type == 'tag'
+        env:
+          IMAGE_VERSION: ${{ github.ref_name }}
+        run: |
+          printf '%s' "$IMAGE_VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$' || {
+            echo 'El tag debe usar SemVer, por ejemplo v1.0.0 o v1.1.0-rc.1'
+            exit 1
+          }
+
+      - name: Validar versión manual
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          IMAGE_VERSION: ${{ inputs.version }}
+        run: |
+          printf '%s' "$IMAGE_VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$' || {
+            echo 'La versión debe usar SemVer, por ejemplo v1.0.0 o v1.1.0-rc.1'
+            exit 1
+          }
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,8 +72,10 @@ jobs:
         with:
           images: ${{ steps.dockerhub-config.outputs.username }}/eps-backend
           tags: |
-            type=raw,value=develop
-            type=sha,prefix=develop-
+            type=raw,value=develop,enable=${{ github.ref == 'refs/heads/develop' }}
+            type=sha,prefix=develop-,enable=${{ github.ref == 'refs/heads/develop' }}
+            type=ref,event=tag
+            type=raw,value=${{ inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Construir y publicar
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
