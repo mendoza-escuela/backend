@@ -62,7 +62,7 @@ describe('PdfReportRenderer', () => {
       ...view,
       branding: {
         ...view.branding,
-        organizations: 'Gobierno de Mendoza · OPS',
+        organizations: 'Gobierno de Mendoza',
         logos: ['data:image/png;base64,bG9nbw=='],
       },
     };
@@ -70,7 +70,7 @@ describe('PdfReportRenderer', () => {
     renderer.report(brandedView);
 
     const definition = create.mock.calls[0][0];
-    expect(JSON.stringify(definition)).toContain('Gobierno de Mendoza · OPS');
+    expect(JSON.stringify(definition)).toContain('Gobierno de Mendoza');
     create.mockRestore();
   });
 

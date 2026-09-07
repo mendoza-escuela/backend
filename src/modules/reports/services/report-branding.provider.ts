@@ -9,10 +9,6 @@ const DEFAULT_REPORT_LOGOS = {
     __dirname,
     '../../../../assets/brand/official/mendoza/marca-gobierno-mendoza.png',
   ),
-  ops: resolve(
-    __dirname,
-    '../../../../assets/brand/official/ops/ops-blue-horizontal.png',
-  ),
 } as const;
 
 @Injectable()
@@ -25,7 +21,6 @@ export class ReportBrandingProvider {
         'REPORT_LOGO_MENDOZA_PATH',
         DEFAULT_REPORT_LOGOS.mendoza,
       ),
-      this.pathOrDefault('REPORT_LOGO_OPS_PATH', DEFAULT_REPORT_LOGOS.ops),
     ].filter((value): value is string => Boolean(value));
     return {
       programName:
@@ -33,7 +28,7 @@ export class ReportBrandingProvider {
         'Escuelas Promotoras de Salud',
       organizations:
         this.config.get<string>('REPORT_ORGANIZATIONS') ||
-        'Gobierno de Mendoza · OPS',
+        'Gobierno de Mendoza',
       logos: logoPaths.flatMap((path) => {
         const image = this.image(path);
         return image ? [image] : [];
