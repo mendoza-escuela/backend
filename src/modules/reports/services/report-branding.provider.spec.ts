@@ -22,7 +22,7 @@ describe('ReportBrandingProvider', () => {
     mockedReadFileSync.mockReturnValue(Buffer.from('brand-image'));
   });
 
-  it('uses the bundled Mendoza and OPS assets when overrides are absent', () => {
+  it('uses the bundled Mendoza asset when overrides are absent', () => {
     const provider = new ReportBrandingProvider(config());
 
     const branding = provider.get();
@@ -34,25 +34,16 @@ describe('ReportBrandingProvider', () => {
         '../../../../assets/brand/official/mendoza/marca-gobierno-mendoza.png',
       ),
     );
-    expect(mockedExistsSync).toHaveBeenNthCalledWith(
-      2,
-      resolve(
-        __dirname,
-        '../../../../assets/brand/official/ops/ops-blue-horizontal.png',
-      ),
-    );
     expect(branding.logos).toEqual([
       `data:image/png;base64,${Buffer.from('brand-image').toString('base64')}`,
-      `data:image/png;base64,${Buffer.from('brand-image').toString('base64')}`,
     ]);
-    expect(branding.organizations).toBe('Gobierno de Mendoza · OPS');
+    expect(branding.organizations).toBe('Gobierno de Mendoza');
   });
 
-  it('prefers configured paths for Mendoza and OPS', () => {
+  it('prefers configured paths for Mendoza', () => {
     const provider = new ReportBrandingProvider(
       config({
         REPORT_LOGO_MENDOZA_PATH: ' /branding/mendoza.png ',
-        REPORT_LOGO_OPS_PATH: '/branding/ops.png',
       }),
     );
 
@@ -60,27 +51,27 @@ describe('ReportBrandingProvider', () => {
 
     expect(mockedExistsSync.mock.calls.map(([path]) => path)).toEqual([
       '/branding/mendoza.png',
-      '/branding/ops.png',
     ]);
-    expect(branding.logos).toHaveLength(2);
-  });
-
-  it('keeps the textual fallback when an image is missing or unsupported', () => {
-    mockedExistsSync.mockImplementation((path) =>
-      String(path).endsWith('marca-gobierno-mendoza.png'),
-    );
-    const provider = new ReportBrandingProvider(
-      config({
-        REPORT_PROGRAM_NAME: 'Programa de prueba',
-        REPORT_ORGANIZATIONS: 'Organismos de prueba',
-        REPORT_LOGO_OPS_PATH: '/branding/ops.svg',
-      }),
-    );
-
-    const branding = provider.get();
-
-    expect(branding.programName).toBe('Programa de prueba');
-    expect(branding.organizations).toBe('Organismos de prueba');
     expect(branding.logos).toHaveLength(1);
   });
+
+  it.each(['missing.png', 'unsupported.svg'])(
+    'keeps the textual fallback for %s',
+    (filename) => {
+      mockedExistsSync.mockReturnValue(filename !== 'missing.png');
+      const provider = new ReportBrandingProvider(
+        config({
+          REPORT_PROGRAM_NAME: 'Programa de prueba',
+          REPORT_ORGANIZATIONS: 'Organismos de prueba',
+          REPORT_LOGO_MENDOZA_PATH: `/branding/${filename}`,
+        }),
+      );
+
+      const branding = provider.get();
+
+      expect(branding.programName).toBe('Programa de prueba');
+      expect(branding.organizations).toBe('Organismos de prueba');
+      expect(branding.logos).toHaveLength(0);
+    },
+  );
 });
