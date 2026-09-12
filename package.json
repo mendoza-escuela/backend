@@ -13,9 +13,9 @@
   "scripts": {
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
-    "start": "nest start",
-    "start:dev": "nest start --watch",
-    "start:debug": "nest start --debug --watch",
+    "start": "node scripts/start-development.cjs",
+    "start:dev": "node scripts/start-development.cjs --watch",
+    "start:debug": "node scripts/start-development.cjs --debug --watch",
     "start:prod": "node scripts/start-production.cjs",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "lint:fix": "npm run lint -- --fix",

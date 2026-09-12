@@ -70,9 +70,15 @@ export class MonitoringService implements OnModuleInit, OnModuleDestroy {
         latest,
       },
       alerts: {
-        responsible: 'Usuarios activos con rol administrador',
+        responsible: 'Todos los administradores activos',
         channel: 'email',
         ready: latest.smtpConfigured && latest.recipientCount > 0,
+        notifiedEvents: [
+          'Bloqueo automático de una cuenta por intentos fallidos',
+          'Bloqueo de un usuario realizado por un administrador',
+          'Caída de la base de datos o de la aplicación web',
+          'Recuperación del servicio después de una caída',
+        ],
       },
       retention: {
         minimumDays: 365,

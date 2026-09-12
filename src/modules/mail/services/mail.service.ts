@@ -1,6 +1,14 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
 import nodemailer, { Transporter } from 'nodemailer';
+import { Repository } from 'typeorm';
+import { UserRole } from '../../users/entities/user-role.enum';
+import { User } from '../../users/entities/user.entity';
 
 export type AccountWelcomeEmailInput = {
   firstName: string;
@@ -263,9 +271,14 @@ export function buildServiceHealthEmail(
 
 @Injectable()
 export class MailService {
+  private readonly logger = new Logger(MailService.name);
   private readonly transporter: Transporter | null;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
+  ) {
     const host = configService.get<string>('SMTP_HOST');
     const user = configService.get<string>('SMTP_USER');
     const password = configService.get<string>('SMTP_PASSWORD');
@@ -315,6 +328,44 @@ export class MailService {
     services: { database: boolean; frontend: boolean },
   ): Promise<void> {
     await this.send(email, buildServiceHealthEmail(healthy, services));
+  }
+
+  async notifyAdministratorsAboutAccountBlock(
+    account: Pick<User, 'firstName' | 'lastName' | 'email'>,
+    automatic: boolean,
+  ): Promise<void> {
+    if (!this.transporter) return;
+    const administrators = await this.usersRepository.find({
+      where: { role: UserRole.Admin, isActive: true },
+      select: { email: true },
+    });
+    const fullName = `${account.firstName} ${account.lastName}`.trim();
+    const reason = automatic
+      ? 'Se alcanzó el límite de intentos fallidos de inicio de sesión.'
+      : 'La cuenta fue bloqueada desde la administración de usuarios.';
+    const content: MailContent = {
+      subject: 'Alerta: cuenta de usuario bloqueada',
+      text: [
+        'Se bloqueó una cuenta de usuario.',
+        `Usuario: ${fullName} (${account.email})`,
+        `Motivo: ${reason}`,
+        `Fecha y hora: ${new Date().toISOString()}`,
+      ].join('\n'),
+      html: `<!doctype html><html lang="es"><body style="font-family:REM,Inter,Arial,sans-serif"><h1 style="color:#000f9f">Cuenta de usuario bloqueada</h1><p><strong>Usuario:</strong> ${escapeHtml(fullName)} (${escapeHtml(account.email)})</p><p><strong>Motivo:</strong> ${reason}</p></body></html>`,
+    };
+    const deliveries = await Promise.allSettled(
+      administrators.map((administrator) =>
+        this.send(administrator.email, content),
+      ),
+    );
+    const failedDeliveries = deliveries.filter(
+      (delivery) => delivery.status === 'rejected',
+    ).length;
+    if (failedDeliveries > 0) {
+      this.logger.error(
+        `No se pudieron entregar ${failedDeliveries} alertas de bloqueo de cuenta.`,
+      );
+    }
   }
 
   private async send(email: string, content: MailContent): Promise<void> {

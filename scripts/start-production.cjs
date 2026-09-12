@@ -2,8 +2,14 @@ const path = require('node:path');
 
 const projectRoot = path.resolve(__dirname, '..');
 const migrationLockId = 748_330_021;
+const {
+  configureRuntimeDatabase,
+  runtimeEnvironment,
+  runtimePassword,
+} = require('./configure-runtime-database.cjs');
 
 async function startProduction() {
+  const password = runtimePassword();
   const dataSourceModule = require(
     path.join(projectRoot, 'dist', 'database', 'data-source.js'),
   );
@@ -38,6 +44,8 @@ async function startProduction() {
       );
       console.log('Ensuring the initial administrator exists...');
       await ensureInitialAdmin(dataSource);
+      console.log('Configuring the restricted application database role...');
+      await configureRuntimeDatabase(dataSource, password);
     } finally {
       await dataSource.query('SELECT pg_advisory_unlock($1)', [
         migrationLockId,
@@ -47,6 +55,10 @@ async function startProduction() {
     await dataSource.destroy();
   }
 
+  const restrictedEnvironment = runtimeEnvironment(process.env, password);
+  Object.assign(process.env, restrictedEnvironment);
+  delete process.env.EPS_RUNTIME_PASSWORD;
+  delete process.env.POSTGRES_PASSWORD;
   console.log('Database schema is up to date. Starting the API...');
   require(path.join(projectRoot, 'dist', 'main.js'));
 }

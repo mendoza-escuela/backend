@@ -47,6 +47,11 @@ type CompletedLogin = {
   previousLastLoginAt: Date | null;
 };
 
+type LockedLogin = {
+  accountLocked: true;
+  user: Pick<User, 'firstName' | 'lastName' | 'email'>;
+};
+
 /**
  * Hash señuelo con el mismo coste (12 rondas) que los reales. Se compara contra
  * él cuando la cuenta no existe para que el login tarde lo mismo en ambos casos
@@ -126,6 +131,20 @@ export class AuthService {
       tokenId,
       expiresAt,
     });
+    if (completed && 'accountLocked' in completed) {
+      try {
+        await this.mailService.notifyAdministratorsAboutAccountBlock(
+          completed.user,
+          true,
+        );
+      } catch {
+        this.logger.error(
+          'No se pudo notificar por correo el bloqueo automático de la cuenta.',
+        );
+      }
+      markSecurityReason('INVALID_CREDENTIALS_OR_LOCKED');
+      throw invalidCredentials;
+    }
     if (!completed) {
       markSecurityReason('INVALID_CREDENTIALS_OR_LOCKED');
       throw invalidCredentials;
@@ -396,7 +415,7 @@ export class AuthService {
     initialRole: UserRole;
     tokenId: string;
     expiresAt: Date;
-  }): Promise<CompletedLogin | null> {
+  }): Promise<CompletedLogin | LockedLogin | null> {
     return this.dataSource.transaction(async (manager) => {
       // assignUser toma School→User. Mantener el mismo orden evita un ciclo de
       // espera entre una reasignación y un login escolar concurrentes.
@@ -439,6 +458,14 @@ export class AuthService {
             severity: 'warning',
             changes: { attempts, lockMinutes: this.lockMinutes },
           });
+          return {
+            accountLocked: true,
+            user: {
+              firstName: user.firstName,
+              lastName: user.lastName,
+              email: user.email,
+            },
+          };
         }
         return null;
       }

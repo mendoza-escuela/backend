@@ -56,7 +56,8 @@ export class AuditService {
     }
     const query = this.dataSource
       .getRepository(AuditLog)
-      .createQueryBuilder('audit');
+      .createQueryBuilder('audit')
+      .leftJoinAndSelect('audit.actor', 'actor');
     for (const field of [
       'action',
       'severity',
@@ -80,8 +81,21 @@ export class AuditService {
       .getManyAndCount();
     return {
       items: events.map((event) => ({
-        ...event,
+        id: event.id,
+        createdAt: event.createdAt,
+        actorUserId: event.actorUserId,
+        actorName: event.actor
+          ? `${event.actor.firstName} ${event.actor.lastName}`.trim()
+          : null,
+        actorEmail: event.actor?.email ?? null,
+        action: event.action,
+        entityType: event.entityType,
+        entityId: event.entityId,
         changes: sanitizeAuditChanges(event.changes),
+        requestId: event.requestId,
+        sourceIp: event.sourceIp,
+        service: event.service,
+        severity: event.severity,
       })),
       total,
       page: filters.page,

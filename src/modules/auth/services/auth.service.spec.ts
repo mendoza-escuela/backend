@@ -30,7 +30,10 @@ describe('AuthService', () => {
     update: jest.fn(),
   };
   const jwtService = { signAsync: jest.fn().mockResolvedValue('signed-token') };
-  const mailService = { sendPasswordReset: jest.fn() };
+  const mailService = {
+    sendPasswordReset: jest.fn(),
+    notifyAdministratorsAboutAccountBlock: jest.fn(),
+  };
 
   const lockedUserQuery = chainable({
     addSelect: jest.fn(),
@@ -103,6 +106,9 @@ describe('AuthService', () => {
     resetTokensRepository.findOne.mockResolvedValue(null);
     usersService.findById.mockResolvedValue(null);
     mailService.sendPasswordReset.mockResolvedValue(undefined);
+    mailService.notifyAdministratorsAboutAccountBlock.mockResolvedValue(
+      undefined,
+    );
   });
 
   it('serializes a successful login and commits its counter reset with the session', async () => {
@@ -163,6 +169,26 @@ describe('AuthService', () => {
       lockedUntil: null,
     });
     expect(transactionalSessionsRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('notifica a los administradores cuando los intentos fallidos bloquean la cuenta', async () => {
+    const staleUser = await adminUser({ failedLoginAttempts: 4 });
+    usersService.findByEmailWithPassword.mockResolvedValue(staleUser);
+    lockedUserQuery.getOne.mockResolvedValue(staleUser);
+
+    await expect(
+      service.login(staleUser.email, 'Contraseña incorrecta'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+
+    expect(
+      mailService.notifyAdministratorsAboutAccountBlock,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ email: staleUser.email }),
+      true,
+    );
+    expect(transactionalAuditRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'AUTH_ACCOUNT_LOCKED' }),
+    );
   });
 
   it('does not clear or increment a lock established while another login was hashing', async () => {

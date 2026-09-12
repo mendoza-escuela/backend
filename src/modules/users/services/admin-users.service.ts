@@ -367,6 +367,8 @@ export class AdminUsersService {
     if (actor.id === id && !isActive) {
       throw new ForbiddenException('No podés bloquear tu propia cuenta.');
     }
+    let blockedAccount: Pick<User, 'firstName' | 'lastName' | 'email'> | null =
+      null;
     await this.dataSource.transaction(async (manager) => {
       if (!isActive) await this.lockActiveAdministratorInvariant(manager);
       const user = await manager.getRepository(User).findOne({
@@ -381,6 +383,13 @@ export class AdminUsersService {
       user.failedLoginAttempts = 0;
       user.lockedUntil = null;
       await manager.save(User, user);
+      if (!isActive) {
+        blockedAccount = {
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+        };
+      }
       await this.invalidatePasswordResetTokens(manager, id);
       if (!isActive) await this.revokeSessions(manager, id);
       await this.audit(
@@ -391,6 +400,18 @@ export class AdminUsersService {
         { isActive: { from: !isActive, to: isActive } },
       );
     });
+    if (blockedAccount && this.mailService) {
+      try {
+        await this.mailService.notifyAdministratorsAboutAccountBlock(
+          blockedAccount,
+          false,
+        );
+      } catch {
+        this.logger.error(
+          'No se pudo notificar por correo el bloqueo administrativo de la cuenta.',
+        );
+      }
+    }
     return this.findOne(id);
   }
 
