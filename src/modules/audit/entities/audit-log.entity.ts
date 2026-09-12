@@ -18,7 +18,7 @@ export class AuditLog {
   @Column({ name: 'actor_user_id', type: 'uuid', nullable: true })
   actorUserId: string | null;
 
-  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @ManyToOne(() => User, { nullable: true, createForeignKeyConstraints: false })
   @JoinColumn({ name: 'actor_user_id' })
   actor: User | null;
 
@@ -34,6 +34,18 @@ export class AuditLog {
 
   @Column({ type: 'jsonb', default: () => "'{}'::jsonb" })
   changes: Record<string, unknown>;
+
+  @Column({ name: 'request_id', type: 'uuid', nullable: true })
+  requestId: string | null;
+
+  @Column({ name: 'source_ip', type: 'varchar', length: 45, nullable: true })
+  sourceIp: string | null;
+
+  @Column({ type: 'varchar', length: 40, default: 'backend' })
+  service: string;
+
+  @Column({ type: 'varchar', length: 10, default: 'info' })
+  severity: 'info' | 'warning' | 'error';
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

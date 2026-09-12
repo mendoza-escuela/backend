@@ -19,6 +19,8 @@ import { ExportsModule } from './modules/exports/exports.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { CsrfProtectionGuard } from './common/guards/csrf-protection.guard';
 import { ThrottlerExceptionFilter } from './common/filters/throttler-exception.filter';
+import { AuditModule } from './modules/audit/audit.module';
+import { SafeHttpExceptionFilter } from './common/filters/safe-http-exception.filter';
 
 @Module({
   imports: [
@@ -34,6 +36,7 @@ import { ThrottlerExceptionFilter } from './common/filters/throttler-exception.f
     ]),
     ScheduleModule.forRoot(),
     DatabaseModule,
+    AuditModule,
     HealthModule,
     UsersModule,
     SchoolsModule,
@@ -48,6 +51,7 @@ import { ThrottlerExceptionFilter } from './common/filters/throttler-exception.f
     AuthModule,
   ],
   providers: [
+    { provide: APP_FILTER, useClass: SafeHttpExceptionFilter },
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,

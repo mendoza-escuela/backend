@@ -1,6 +1,7 @@
 import {
   buildAccountWelcomeEmail,
   buildPasswordResetEmail,
+  buildServiceHealthEmail,
 } from './mail.service';
 
 describe('buildAccountWelcomeEmail', () => {
@@ -40,6 +41,24 @@ describe('buildAccountWelcomeEmail', () => {
     expect(content.html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
     expect(content.html).toContain('Pérez &amp; Asociados');
     expect(content.html).toContain('Clave&lt;temporal&gt;&amp;&quot;');
+  });
+});
+
+describe('buildServiceHealthEmail', () => {
+  it('identifica el componente afectado y la recuperación', () => {
+    const alert = buildServiceHealthEmail(false, {
+      database: true,
+      frontend: false,
+    });
+    const recovery = buildServiceHealthEmail(true, {
+      database: true,
+      frontend: true,
+    });
+
+    expect(alert.subject).toContain('Alerta de disponibilidad');
+    expect(alert.text).toContain('Aplicación web: No disponible');
+    expect(recovery.subject).toContain('Servicio recuperado');
+    expect(recovery.text).toContain('Base de datos: Disponible');
   });
 });
 

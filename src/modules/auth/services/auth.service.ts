@@ -26,6 +26,11 @@ import { AuthSession } from '../entities/auth-session.entity';
 import { PasswordResetToken } from '../entities/password-reset-token.entity';
 import { assertStrongPassword } from '../utils/password-policy';
 import { MailService } from '../../mail/services/mail.service';
+import { AuditLog } from '../../audit/entities/audit-log.entity';
+import {
+  identifyAuditActor,
+  markSecurityReason,
+} from '../../audit/audit-context';
 
 type SessionUser = AuthenticatedUser & {
   mustChangePassword: boolean;
@@ -87,11 +92,13 @@ export class AuthService {
     const normalizedEmail = email.trim().toLowerCase();
     const user =
       await this.usersService.findByEmailWithPassword(normalizedEmail);
+    identifyAuditActor(user?.id);
     const invalidCredentials = new UnauthorizedException(
       'Correo o contraseña incorrectos.',
     );
 
     if (!user || !user.isActive) {
+      markSecurityReason('INVALID_CREDENTIALS_OR_INACTIVE');
       // Se compara igual contra un hash señuelo para que el tiempo de respuesta
       // no delate si la cuenta existe. Sin esto, la ausencia de bcrypt.compare
       // hace que la respuesta vuelva mucho antes y permite enumerar usuarios
@@ -119,7 +126,10 @@ export class AuthService {
       tokenId,
       expiresAt,
     });
-    if (!completed) throw invalidCredentials;
+    if (!completed) {
+      markSecurityReason('INVALID_CREDENTIALS_OR_LOCKED');
+      throw invalidCredentials;
+    }
 
     return {
       accessToken: await this.jwtService.signAsync({
@@ -244,6 +254,7 @@ export class AuthService {
       where: { tokenHash },
     });
     if (!tokenReference) throw this.invalidResetToken();
+    identifyAuditActor(tokenReference.userId);
 
     await this.dataSource.transaction(async (manager) => {
       const user = await manager.getRepository(User).findOne({
@@ -419,6 +430,16 @@ export class AuthService {
           failedLoginAttempts: lockedUntil ? 0 : attempts,
           lockedUntil,
         });
+        if (lockedUntil) {
+          await manager.getRepository(AuditLog).save({
+            actorUserId: user.id,
+            action: 'AUTH_ACCOUNT_LOCKED',
+            entityType: 'user',
+            entityId: user.id,
+            severity: 'warning',
+            changes: { attempts, lockMinutes: this.lockMinutes },
+          });
+        }
         return null;
       }
 
@@ -446,6 +467,13 @@ export class AuthService {
         revokedAt: null,
       };
       await manager.getRepository(AuthSession).save(session);
+      await manager.getRepository(AuditLog).save({
+        actorUserId: user.id,
+        action: 'AUTH_SESSION_CREATED',
+        entityType: 'user',
+        entityId: user.id,
+        changes: { role: user.role },
+      });
       return { user, previousLastLoginAt };
     });
   }

@@ -1,5 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
+import { AuditSubscriber } from '../modules/audit/audit.subscriber';
 
 export function createTypeOrmOptions(
   configService: ConfigService,
@@ -20,6 +21,7 @@ export function createTypeOrmOptions(
     entities: [__dirname + '/../modules/**/*.entity{.ts,.js}'],
     migrations: [__dirname + '/../migrations/*{.ts,.js}'],
     synchronize: false,
+    subscribers: [AuditSubscriber],
     migrationsRun: false,
   };
 }

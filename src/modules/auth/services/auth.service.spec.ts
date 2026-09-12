@@ -13,6 +13,7 @@ import { UsersService } from '../../users/services/users.service';
 import { AuthSession } from '../entities/auth-session.entity';
 import { PasswordResetToken } from '../entities/password-reset-token.entity';
 import { AuthService } from './auth.service';
+import { AuditLog } from '../../audit/entities/audit-log.entity';
 
 describe('AuthService', () => {
   const usersService = {
@@ -50,6 +51,7 @@ describe('AuthService', () => {
   };
   const schoolRepository = { findOne: jest.fn() };
   const transactionalSessionsRepository = { save: jest.fn() };
+  const transactionalAuditRepository = { save: jest.fn() };
   const transactionalResetTokensRepository = {
     findOne: jest.fn(),
     save: jest.fn(),
@@ -63,6 +65,7 @@ describe('AuthService', () => {
       if (entity === User) return userRepository;
       if (entity === School) return schoolRepository;
       if (entity === AuthSession) return transactionalSessionsRepository;
+      if (entity === AuditLog) return transactionalAuditRepository;
       if (entity === PasswordResetToken)
         return transactionalResetTokensRepository;
       throw new Error('Repositorio transaccional inesperado.');
@@ -114,6 +117,12 @@ describe('AuthService', () => {
     const login = await service.login(
       ' ADMIN@MENDOZA.GOV.AR ',
       'Clave!Segura2026',
+    );
+    expect(transactionalAuditRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'AUTH_SESSION_CREATED',
+        actorUserId: user.id,
+      }),
     );
 
     expect(usersService.findByEmailWithPassword).toHaveBeenCalledWith(

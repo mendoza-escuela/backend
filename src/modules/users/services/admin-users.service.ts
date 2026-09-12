@@ -336,6 +336,11 @@ export class AdminUsersService {
         if (Object.keys(changes).length > 0) {
           await this.audit(manager, actor.id, 'USER_UPDATED', id, changes);
         }
+        if (before.role !== user.role) {
+          await this.audit(manager, actor.id, 'USER_PRIVILEGES_CHANGED', id, {
+            role: { from: before.role, to: user.role },
+          });
+        }
         const authenticationContextChanged =
           before.isActive !== user.isActive ||
           before.role !== user.role ||

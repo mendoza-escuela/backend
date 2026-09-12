@@ -25,7 +25,12 @@ async function startProduction() {
     await dataSource.query('SELECT pg_advisory_lock($1)', [migrationLockId]);
     try {
       console.log('Running pending database migrations...');
-      const executedMigrations = await dataSource.runMigrations();
+      const executedMigrations = process.env.MIGRATIONS_ON_START === 'false'
+        ? []
+        : await dataSource.runMigrations();
+      if (process.env.MIGRATIONS_ON_START === 'false' && await dataSource.showMigrations()) {
+        throw new Error('Pending migrations must be applied by the release job.');
+      }
       console.log(
         executedMigrations.length === 0
           ? 'No migrations are pending.'
@@ -46,10 +51,9 @@ async function startProduction() {
   require(path.join(projectRoot, 'dist', 'main.js'));
 }
 
-startProduction().catch((error) => {
+startProduction().catch(() => {
   console.error(
     'Production initialization failed. The API will not start.',
-    error,
   );
   process.exit(1);
 });

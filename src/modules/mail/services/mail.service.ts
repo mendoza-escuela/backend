@@ -236,6 +236,31 @@ export function buildPasswordResetEmail(
   return { subject, text, html };
 }
 
+export function buildServiceHealthEmail(
+  healthy: boolean,
+  services: { database: boolean; frontend: boolean },
+): MailContent {
+  const title = healthy ? 'Servicio recuperado' : 'Alerta de disponibilidad';
+  const subject = `${title} - Escuelas Promotoras de Salud`;
+  const status = healthy
+    ? 'La aplicación volvió a operar normalmente.'
+    : 'La supervisión interna detectó un problema que requiere atención.';
+  const database = services.database ? 'Disponible' : 'No disponible';
+  const frontend = services.frontend ? 'Disponible' : 'No disponible';
+  const text = [
+    title,
+    '',
+    status,
+    `Base de datos: ${database}`,
+    `Aplicación web: ${frontend}`,
+    `Fecha y hora: ${new Date().toISOString()}`,
+    '',
+    'Programa Escuelas Promotoras de Salud',
+  ].join('\n');
+  const html = `<!doctype html><html lang="es"><body style="margin:0;background:#f7f4ef;color:#1f2937;font-family:REM,Inter,Arial,sans-serif"><div style="max-width:640px;margin:32px auto;padding:32px;border:1px solid #e5e7eb;border-radius:16px;background:#fff"><h1 style="color:#000f9f">${title}</h1><p>${status}</p><ul><li>Base de datos: <strong>${database}</strong></li><li>Aplicación web: <strong>${frontend}</strong></li></ul><p style="color:#6b7280">${new Date().toISOString()}</p></div></body></html>`;
+  return { subject, text, html };
+}
+
 @Injectable()
 export class MailService {
   private readonly transporter: Transporter | null;
@@ -282,6 +307,14 @@ export class MailService {
     );
 
     await this.send(email, buildPasswordResetEmail(resetUrl, expiresMinutes));
+  }
+
+  async sendServiceHealthAlert(
+    email: string,
+    healthy: boolean,
+    services: { database: boolean; frontend: boolean },
+  ): Promise<void> {
+    await this.send(email, buildServiceHealthEmail(healthy, services));
   }
 
   private async send(email: string, content: MailContent): Promise<void> {

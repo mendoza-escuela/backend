@@ -41,7 +41,11 @@ async function bootstrap() {
     ),
     credentials: true,
     allowedHeaders: ['Authorization', 'Content-Type', 'X-CSRF-Protection'],
-    exposedHeaders: ['Content-Disposition', 'X-Survey-Version-Updated-At'],
+    exposedHeaders: [
+      'Content-Disposition',
+      'X-Survey-Version-Updated-At',
+      'X-Request-Id',
+    ],
   });
   app.useGlobalPipes(
     new ValidationPipe({
