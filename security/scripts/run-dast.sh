@@ -305,6 +305,19 @@ run_testssl_target() {
     "${url}"
 }
 
+run_with_retry() {
+  local label="$1"
+  shift
+
+  if "$@"; then
+    return 0
+  fi
+
+  log "${label}" "La herramienta tuvo un fallo técnico. Reintentando una vez."
+  sleep 5
+  "$@"
+}
+
 # -----------------------------------------------------------------------------
 main() {
   assert_target_allowed
@@ -317,8 +330,8 @@ main() {
   obtain_token || true
 
   local status=0
-  run_zap    || status=1
-  run_nuclei || status=1
+  run_with_retry ZAP run_zap       || status=1
+  run_with_retry NUCLEI run_nuclei || status=1
   run_testssl || status=1
 
   printf '\n=== DAST finalizado (modo %s) ===\n' "${MODE}"
