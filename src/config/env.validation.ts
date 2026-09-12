@@ -56,6 +56,12 @@ export function validateEnvironment(config: Environment) {
 }
 
 function validateNumericEnvironment(config: Environment) {
+  if (
+    config.MIGRATIONS_ON_START !== undefined &&
+    !['true', 'false'].includes(String(config.MIGRATIONS_ON_START))
+  ) {
+    throw new Error('MIGRATIONS_ON_START must be true or false.');
+  }
   for (const variableName of [
     'SESSION_DURATION_HOURS',
     'LOGIN_MAX_ATTEMPTS',

@@ -13,10 +13,11 @@
   "scripts": {
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
-    "start": "nest start",
-    "start:dev": "nest start --watch",
-    "start:debug": "nest start --debug --watch",
+    "start": "node scripts/start-development.cjs",
+    "start:dev": "node scripts/start-development.cjs --watch",
+    "start:debug": "node scripts/start-development.cjs --debug --watch",
     "start:prod": "node scripts/start-production.cjs",
+    "pretest": "npm run survey:generate-official-template",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\"",
     "lint:fix": "npm run lint -- --fix",
     "test": "jest",
@@ -53,7 +54,7 @@
     "dotenv": "^17.4.2",
     "exceljs": "^4.4.0",
     "helmet": "^8.3.0",
-    "nodemailer": "^9.0.5",
+    "nodemailer": "^9.1.1",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pdfmake": "^0.2.20",
@@ -64,8 +65,14 @@
   },
   "overrides": {
     "browserslist": "^4.28.8",
-    "multer": "^2.2.0",
-    "uuid": "^11.1.1"
+    "multer": "2.3.0",
+    "uuid": "^11.1.1",
+    "fast-uri": "3.1.6",
+    "qs": "6.16.0",
+    "js-yaml": "4.3.2",
+    "@istanbuljs/load-nyc-config": {
+      "js-yaml": "3.15.2"
+    }
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",

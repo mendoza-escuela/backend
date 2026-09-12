@@ -20,16 +20,31 @@ versión operativa del proyecto.
 3. Instalar las dependencias reproducibles con `npm ci`.
 4. Copiar `.env.example` a `.env` y completar secretos.
 5. Iniciar PostgreSQL con `npm run db:up`.
-6. Ejecutar `npm run migration:run`.
+6. Ejecutar `npm run migration:run` la primera vez si se necesita crear el administrador antes de iniciar el servidor. `npm run start:dev` también aplica automáticamente las migraciones pendientes.
 7. Completar `INITIAL_ADMIN_EMAIL` e `INITIAL_ADMIN_PASSWORD` en `.env`.
 8. Crear el administrador inicial con `npm run seed:admin`.
 9. Iniciar la API con `npm run start:dev`.
 
 El seed es idempotente, asigna el rol `admin` y obliga a cambiar la contraseña en el primer acceso. La contraseña inicial debe tener al menos 12 caracteres, mayúscula, minúscula, número y símbolo.
 
+Al ejecutar `npm start`, `npm run start:dev` o `npm run start:debug`, el arranque
+crea o actualiza automáticamente el rol restringido `eps_runtime`. En desarrollo
+genera una contraseña temporal en memoria y entrega al proceso de NestJS
+solamente esa conexión restringida. No se debe ejecutar manualmente
+`operations/configure-audit-roles.sql` durante el uso habitual.
+
 ## Despliegue en producción
 
-`npm run start:prod` ejecuta primero todas las migraciones pendientes y solo inicia la API cuando terminan correctamente. La imagen Docker usa este mismo comando, por lo que cada despliegue actualiza automáticamente el esquema. Un bloqueo transaccional de PostgreSQL evita que varias réplicas intenten migrar simultáneamente.
+`npm run start:prod` ejecuta primero todas las migraciones pendientes, configura
+los permisos de auditoría y solo entonces inicia la API como `eps_runtime`. La
+imagen Docker usa este mismo comando, por lo que cada despliegue realiza el
+proceso automáticamente. Un bloqueo transaccional de PostgreSQL evita que
+varias réplicas intenten migrar o configurar permisos simultáneamente.
+
+Producción debe proporcionar `EPS_RUNTIME_PASSWORD` como secreto estable y
+distinto de la contraseña propietaria de `DATABASE_URL`. La cuenta propietaria
+se utiliza únicamente durante la preparación del arranque y se elimina del
+entorno entregado a la API.
 
 Si una migración falla, el proceso termina con error y la API no arranca con un esquema incompleto. Las migraciones deben mantener operaciones compatibles con despliegues graduales cuando se ejecuten varias réplicas de la aplicación.
 

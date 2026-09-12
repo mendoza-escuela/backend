@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
 @Injectable()
@@ -15,7 +15,13 @@ export class HealthService {
 
   async getDatabaseStatus() {
     const startedAt = Date.now();
-    await this.dataSource.query('SELECT 1');
+    try {
+      await this.dataSource.query('SELECT 1');
+    } catch {
+      throw new ServiceUnavailableException(
+        'El servicio no está disponible temporalmente.',
+      );
+    }
 
     return {
       status: 'ok' as const,

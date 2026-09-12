@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { DataSource } from 'typeorm';
+import { AuditSubscriber } from '../modules/audit/audit.subscriber';
 
 export default new DataSource({
   type: 'postgres',
@@ -15,4 +16,5 @@ export default new DataSource({
   entities: [__dirname + '/../modules/**/*.entity{.ts,.js}'],
   migrations: [__dirname + '/../migrations/*{.ts,.js}'],
   synchronize: false,
+  subscribers: [AuditSubscriber],
 });

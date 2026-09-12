@@ -39,6 +39,7 @@ COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/assets ./assets
 COPY scripts/start-production.cjs ./scripts/start-production.cjs
+COPY scripts/configure-runtime-database.cjs ./scripts/configure-runtime-database.cjs
 COPY package*.json ./
 RUN rm -rf \
     /usr/local/lib/node_modules/npm \
