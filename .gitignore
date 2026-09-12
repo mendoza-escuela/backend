@@ -1,6 +1,7 @@
 node_modules/
 dist/
 coverage/
+docs/plantilla-cuestionario-completo.xlsx
 
 # Artefactos de los scripts Python de seguridad
 __pycache__/
