@@ -78,11 +78,9 @@ async function runStandaloneSeed(): Promise<void> {
 }
 
 if (require.main === module) {
-  void runStandaloneSeed().catch((error: unknown) => {
+  void runStandaloneSeed().catch(() => {
     console.error(
-      error instanceof Error
-        ? error.message
-        : 'Unable to seed initial administrator.',
+      'Unable to seed initial administrator. Check database and configuration.',
     );
     process.exitCode = 1;
   });

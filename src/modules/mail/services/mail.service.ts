@@ -1,6 +1,14 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
 import nodemailer, { Transporter } from 'nodemailer';
+import { Repository } from 'typeorm';
+import { UserRole } from '../../users/entities/user-role.enum';
+import { User } from '../../users/entities/user.entity';
 
 export type AccountWelcomeEmailInput = {
   firstName: string;
@@ -236,11 +244,41 @@ export function buildPasswordResetEmail(
   return { subject, text, html };
 }
 
+export function buildServiceHealthEmail(
+  healthy: boolean,
+  services: { database: boolean; frontend: boolean },
+): MailContent {
+  const title = healthy ? 'Servicio recuperado' : 'Alerta de disponibilidad';
+  const subject = `${title} - Escuelas Promotoras de Salud`;
+  const status = healthy
+    ? 'La aplicación volvió a operar normalmente.'
+    : 'La supervisión interna detectó un problema que requiere atención.';
+  const database = services.database ? 'Disponible' : 'No disponible';
+  const frontend = services.frontend ? 'Disponible' : 'No disponible';
+  const text = [
+    title,
+    '',
+    status,
+    `Base de datos: ${database}`,
+    `Aplicación web: ${frontend}`,
+    `Fecha y hora: ${new Date().toISOString()}`,
+    '',
+    'Programa Escuelas Promotoras de Salud',
+  ].join('\n');
+  const html = `<!doctype html><html lang="es"><body style="margin:0;background:#f7f4ef;color:#1f2937;font-family:REM,Inter,Arial,sans-serif"><div style="max-width:640px;margin:32px auto;padding:32px;border:1px solid #e5e7eb;border-radius:16px;background:#fff"><h1 style="color:#000f9f">${title}</h1><p>${status}</p><ul><li>Base de datos: <strong>${database}</strong></li><li>Aplicación web: <strong>${frontend}</strong></li></ul><p style="color:#6b7280">${new Date().toISOString()}</p></div></body></html>`;
+  return { subject, text, html };
+}
+
 @Injectable()
 export class MailService {
+  private readonly logger = new Logger(MailService.name);
   private readonly transporter: Transporter | null;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    @InjectRepository(User)
+    private readonly usersRepository: Repository<User>,
+  ) {
     const host = configService.get<string>('SMTP_HOST');
     const user = configService.get<string>('SMTP_USER');
     const password = configService.get<string>('SMTP_PASSWORD');
@@ -282,6 +320,52 @@ export class MailService {
     );
 
     await this.send(email, buildPasswordResetEmail(resetUrl, expiresMinutes));
+  }
+
+  async sendServiceHealthAlert(
+    email: string,
+    healthy: boolean,
+    services: { database: boolean; frontend: boolean },
+  ): Promise<void> {
+    await this.send(email, buildServiceHealthEmail(healthy, services));
+  }
+
+  async notifyAdministratorsAboutAccountBlock(
+    account: Pick<User, 'firstName' | 'lastName' | 'email'>,
+    automatic: boolean,
+  ): Promise<void> {
+    if (!this.transporter) return;
+    const administrators = await this.usersRepository.find({
+      where: { role: UserRole.Admin, isActive: true },
+      select: { email: true },
+    });
+    const fullName = `${account.firstName} ${account.lastName}`.trim();
+    const reason = automatic
+      ? 'Se alcanzó el límite de intentos fallidos de inicio de sesión.'
+      : 'La cuenta fue bloqueada desde la administración de usuarios.';
+    const content: MailContent = {
+      subject: 'Alerta: cuenta de usuario bloqueada',
+      text: [
+        'Se bloqueó una cuenta de usuario.',
+        `Usuario: ${fullName} (${account.email})`,
+        `Motivo: ${reason}`,
+        `Fecha y hora: ${new Date().toISOString()}`,
+      ].join('\n'),
+      html: `<!doctype html><html lang="es"><body style="font-family:REM,Inter,Arial,sans-serif"><h1 style="color:#000f9f">Cuenta de usuario bloqueada</h1><p><strong>Usuario:</strong> ${escapeHtml(fullName)} (${escapeHtml(account.email)})</p><p><strong>Motivo:</strong> ${reason}</p></body></html>`,
+    };
+    const deliveries = await Promise.allSettled(
+      administrators.map((administrator) =>
+        this.send(administrator.email, content),
+      ),
+    );
+    const failedDeliveries = deliveries.filter(
+      (delivery) => delivery.status === 'rejected',
+    ).length;
+    if (failedDeliveries > 0) {
+      this.logger.error(
+        `No se pudieron entregar ${failedDeliveries} alertas de bloqueo de cuenta.`,
+      );
+    }
   }
 
   private async send(email: string, content: MailContent): Promise<void> {

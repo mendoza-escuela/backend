@@ -28,6 +28,7 @@ regexTarget = "match"
 regexes = [
   '''(?i)(change_me|changeme|CAMBIAR|placeholder|example|ejemplo|your[_-]?secret)''',
   '''ci-ephemeral-jwt-secret-not-used-in-production''',
+  '''isolated-test-signing-secret-not-a-production-credential''',
 ]
 
 [[rules]]
@@ -43,6 +44,8 @@ regexes = [
   # Valor sintetico de los workflows: el job de tests unitarios no tiene base
   # de datos, la variable existe solo porque AppModule valida el entorno.
   '''ci-unit-tests-not-a-secret''',
+  '''owner-secret''',
+  '''(?i)(DATABASE_PASSWORD|POSTGRES_PASSWORD)[ \t]*[:=][ \t]*password''',
 ]
 
 [[rules]]
@@ -54,6 +57,7 @@ tags = ["secret", "smtp", "mendoza"]
 regexTarget = "match"
 regexes = [
   '''(?i)(change_me|changeme|CAMBIAR|placeholder|example|ejemplo)''',
+  '''SMTP_USER[ \t]*=[ \t]*\r?\nSMTP_PASSWORD[ \t]*=''',
 ]
 
 [[rules]]
@@ -73,6 +77,8 @@ regexes = [
   # solo existe dentro de la red interna del compose de seguridad y se destruye
   # con `down -v`. La contrasena es la sintetica ya declarada arriba.
   '''@sec-db:5432''',
+  '''owner:owner-secret@localhost''',
+  '''postgres:\$\{password\}@127\.0\.0\.1''',
 ]
 
 # -----------------------------------------------------------------------------

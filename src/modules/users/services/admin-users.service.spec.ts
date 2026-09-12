@@ -572,6 +572,8 @@ describe('AdminUsersService', () => {
       delete: jest.fn().mockResolvedValue({ affected: 0 }),
       update,
       createQueryBuilder: jest.fn(() => sessionQuery),
+      query: jest.fn().mockResolvedValue([]),
+      countBy: jest.fn().mockResolvedValue(2),
     };
     const dataSource = {
       transaction: jest.fn(
@@ -631,6 +633,56 @@ describe('AdminUsersService', () => {
       PasswordResetToken,
       expect.objectContaining({ userId: user.id }),
       expect.objectContaining({}),
+    );
+  });
+
+  it('notifica a los administradores cuando se bloquea un usuario', async () => {
+    const user = {
+      id: 'user-id',
+      firstName: 'Ana',
+      lastName: 'Pérez',
+      email: 'ana@example.com',
+      role: UserRole.School,
+      isActive: true,
+      mustChangePassword: false,
+      userSchools: [],
+    } as User;
+    const sessionQuery = {
+      update: jest.fn().mockReturnThis(),
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+    const manager = {
+      getRepository: jest.fn(() => ({
+        findOne: jest.fn().mockResolvedValue(user),
+      })),
+      save: jest.fn().mockResolvedValue({}),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      createQueryBuilder: jest.fn(() => sessionQuery),
+      query: jest.fn().mockResolvedValue([]),
+      countBy: jest.fn().mockResolvedValue(2),
+    };
+    const dataSource = {
+      transaction: jest.fn(
+        (callback: (transactionManager: typeof manager) => Promise<void>) =>
+          callback(manager),
+      ),
+    } as unknown as DataSource;
+    const notifyAdministratorsAboutAccountBlock = jest
+      .fn()
+      .mockResolvedValue(undefined);
+    const service = new AdminUsersService(dataSource, {
+      notifyAdministratorsAboutAccountBlock,
+    } as unknown as MailService);
+    jest.spyOn(service, 'findOne').mockResolvedValue(user as never);
+
+    await service.setStatus(user.id, false, { id: 'actor-id' } as never);
+
+    expect(notifyAdministratorsAboutAccountBlock).toHaveBeenCalledWith(
+      expect.objectContaining({ email: user.email }),
+      false,
     );
   });
 

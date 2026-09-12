@@ -13,6 +13,7 @@ import { UsersService } from '../../users/services/users.service';
 import { AuthSession } from '../entities/auth-session.entity';
 import { PasswordResetToken } from '../entities/password-reset-token.entity';
 import { AuthService } from './auth.service';
+import { AuditLog } from '../../audit/entities/audit-log.entity';
 
 describe('AuthService', () => {
   const usersService = {
@@ -29,7 +30,10 @@ describe('AuthService', () => {
     update: jest.fn(),
   };
   const jwtService = { signAsync: jest.fn().mockResolvedValue('signed-token') };
-  const mailService = { sendPasswordReset: jest.fn() };
+  const mailService = {
+    sendPasswordReset: jest.fn(),
+    notifyAdministratorsAboutAccountBlock: jest.fn(),
+  };
 
   const lockedUserQuery = chainable({
     addSelect: jest.fn(),
@@ -50,6 +54,7 @@ describe('AuthService', () => {
   };
   const schoolRepository = { findOne: jest.fn() };
   const transactionalSessionsRepository = { save: jest.fn() };
+  const transactionalAuditRepository = { save: jest.fn() };
   const transactionalResetTokensRepository = {
     findOne: jest.fn(),
     save: jest.fn(),
@@ -63,6 +68,7 @@ describe('AuthService', () => {
       if (entity === User) return userRepository;
       if (entity === School) return schoolRepository;
       if (entity === AuthSession) return transactionalSessionsRepository;
+      if (entity === AuditLog) return transactionalAuditRepository;
       if (entity === PasswordResetToken)
         return transactionalResetTokensRepository;
       throw new Error('Repositorio transaccional inesperado.');
@@ -100,6 +106,9 @@ describe('AuthService', () => {
     resetTokensRepository.findOne.mockResolvedValue(null);
     usersService.findById.mockResolvedValue(null);
     mailService.sendPasswordReset.mockResolvedValue(undefined);
+    mailService.notifyAdministratorsAboutAccountBlock.mockResolvedValue(
+      undefined,
+    );
   });
 
   it('serializes a successful login and commits its counter reset with the session', async () => {
@@ -114,6 +123,12 @@ describe('AuthService', () => {
     const login = await service.login(
       ' ADMIN@MENDOZA.GOV.AR ',
       'Clave!Segura2026',
+    );
+    expect(transactionalAuditRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'AUTH_SESSION_CREATED',
+        actorUserId: user.id,
+      }),
     );
 
     expect(usersService.findByEmailWithPassword).toHaveBeenCalledWith(
@@ -154,6 +169,26 @@ describe('AuthService', () => {
       lockedUntil: null,
     });
     expect(transactionalSessionsRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('notifica a los administradores cuando los intentos fallidos bloquean la cuenta', async () => {
+    const staleUser = await adminUser({ failedLoginAttempts: 4 });
+    usersService.findByEmailWithPassword.mockResolvedValue(staleUser);
+    lockedUserQuery.getOne.mockResolvedValue(staleUser);
+
+    await expect(
+      service.login(staleUser.email, 'Contraseña incorrecta'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+
+    expect(
+      mailService.notifyAdministratorsAboutAccountBlock,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ email: staleUser.email }),
+      true,
+    );
+    expect(transactionalAuditRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'AUTH_ACCOUNT_LOCKED' }),
+    );
   });
 
   it('does not clear or increment a lock established while another login was hashing', async () => {

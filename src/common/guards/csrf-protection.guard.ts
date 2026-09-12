@@ -7,6 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
 import { parseFrontendOrigin } from '../../config/frontend-origins';
+import { markSecurityReason } from '../../modules/audit/audit-context';
 
 const CSRF_PROTECTION_HEADER = 'x-csrf-protection';
 const CSRF_PROTECTION_HEADER_VALUE = '1';
@@ -100,6 +101,7 @@ export class CsrfProtectionGuard implements CanActivate {
   }
 
   private invalidRequest(): ForbiddenException {
+    markSecurityReason('CSRF_REJECTED');
     return new ForbiddenException(
       'No se pudo validar el origen de la solicitud. Actualizá la página e intentá nuevamente.',
     );

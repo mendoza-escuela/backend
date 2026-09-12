@@ -99,6 +99,7 @@ services:
       DATABASE_USER: ${SECURITY_DB_USER:-security_user}
       DATABASE_PASSWORD: ${SECURITY_DB_PASSWORD:-ci-ephemeral-not-a-secret}
       DATABASE_NAME: ${SECURITY_DB_NAME:-security_db}
+      EPS_RUNTIME_PASSWORD: ${SECURITY_RUNTIME_DB_PASSWORD:-ci-ephemeral-not-a-secret}
       # SMTP deliberadamente vacío: la API degrada el envío y CI no manda correos.
       SMTP_HOST: ""
       SMTP_PORT: "587"
@@ -156,7 +157,6 @@ services:
       - "8080"
     networks:
       - sec-edge
-    read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
       - /var/cache/nginx:size=32m

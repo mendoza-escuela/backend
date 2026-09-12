@@ -1355,6 +1355,7 @@ async function validateWithBackend() {
 
 async function main() {
   assertDataset();
+  fs.mkdirSync(path.dirname(OUTPUT_PATH), { recursive: true });
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Escuelas Promotoras de Salud Mendoza';
   workbook.lastModifiedBy = 'Equipo de desarrollo';
