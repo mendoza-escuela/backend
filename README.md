@@ -168,6 +168,8 @@ Las rutas bajo `/api/admin/campaigns` requieren rol `admin`. Permiten listar, cr
 
 Cada etapa es anual o semestral y referencia obligatoriamente una versión publicada de un cuestionario activo. Al activarse, su configuración queda protegida; sólo los borradores pueden editarse o eliminarse. `GET /api/admin/campaigns/survey-versions` devuelve las versiones habilitadas para el selector administrativo.
 
+Una etapa puede ser independiente o integrar un recorrido mediante `workflowCycle` y `sequenceOrder`. Varias etapas del mismo recorrido pueden permanecer activas simultáneamente, pero cada escuela sólo puede iniciar, guardar o enviar una etapa cuando ya envió todas las etapas anteriores que tiene asignadas. Las etapas anteriores no asignadas a esa escuela se omiten. `GET /api/admin/campaigns/workflows` lista los recorridos existentes y su último orden; la combinación recorrido/orden es única sin distinguir mayúsculas. Las etapas existentes al aplicar la migración permanecen independientes para no crear dependencias históricas artificiales.
+
 Las fechas ingresan como fechas civiles `AAAA-MM-DD`. El inicio se almacena a las `00:00:00` y el cierre a las `23:59:59.999` de Mendoza (`America/Argentina/Mendoza`, UTC-3). Un proceso periódico cierra las etapas activas vencidas y registra el evento en `audit_logs`; el valor de `closed_at` conserva el instante exacto configurado, aunque la detección ocurra unos segundos después.
 
 La migración `AddCampaignManagement1720375211000` crea la tabla, enumeraciones, índice de estado/fechas y la relación protegida con `survey_versions`.
@@ -205,6 +207,8 @@ las decisiones de aplicabilidad congeladas o las reconstruye únicamente en
 memoria desde el snapshot histórico. No adopta una rectificación posterior ni
 actualiza respuestas, decisiones o auditoría. Los endpoints de guardado y
 envío continúan rechazando cualquier etapa fuera de su período operativo.
+
+Para etapas ordenadas, cada elemento operativo informa `workflowStatus`, `blockedBy` y `blockingReason`. La precedencia se valida nuevamente en backend al crear o recuperar la presentación, guardar un borrador y realizar el envío final; deshabilitar controles en el frontend no constituye la protección de negocio.
 
 El seguimiento administrativo se expone mediante
 `GET /api/admin/campaigns/:id/tracking/summary` y

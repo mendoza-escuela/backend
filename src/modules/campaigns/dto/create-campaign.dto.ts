@@ -1,12 +1,15 @@
 import {
   IsEnum,
   IsNotEmpty,
+  IsInt,
   IsOptional,
   IsString,
   IsUUID,
   Matches,
   MaxLength,
   MinLength,
+  Min,
+  Max,
 } from 'class-validator';
 import { CampaignType } from '../entities/campaign-type.enum';
 
@@ -26,6 +29,18 @@ export class CreateCampaignDto {
 
   @IsEnum(CampaignType)
   type: CampaignType;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(120)
+  workflowCycle?: string | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  sequenceOrder?: number | null;
 
   @IsUUID('4')
   surveyVersionId: string;

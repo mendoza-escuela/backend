@@ -153,4 +153,84 @@ describe('CampaignsService', () => {
       expect.anything(),
     );
   });
+
+  it('blocks an assigned stage until the previous assigned stage is submitted', async () => {
+    const queryBuilder = {
+      innerJoin: jest.fn().mockReturnThis(),
+      leftJoin: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([
+        {
+          id: 'stage-1',
+          name: 'Diagnóstico inicial',
+          cycle: 'programa 2026',
+          sequenceOrder: '1',
+          submissionStatus: 'draft',
+        },
+      ]),
+    };
+    const workflowManager = {
+      getRepository: jest.fn(() => ({
+        createQueryBuilder: jest.fn(() => queryBuilder),
+      })),
+    } as unknown as EntityManager;
+    const current = {
+      id: 'stage-2',
+      name: 'Plan de mejora',
+      workflowCycle: 'Programa 2026',
+      sequenceOrder: 2,
+    } as Campaign;
+
+    const blockers = await service.workflowBlockers(
+      [current],
+      'school-id',
+      workflowManager,
+    );
+
+    expect(blockers.get(current.id)).toEqual({
+      id: 'stage-1',
+      name: 'Diagnóstico inicial',
+      sequenceOrder: 1,
+    });
+    await expect(
+      service.assertWorkflowUnlocked(current, 'school-id', workflowManager),
+    ).rejects.toThrow('Diagnóstico inicial');
+  });
+
+  it('ignores a previous stage once its submission was sent', async () => {
+    const queryBuilder = {
+      innerJoin: jest.fn().mockReturnThis(),
+      leftJoin: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([
+        {
+          id: 'stage-1',
+          name: 'Diagnóstico inicial',
+          cycle: 'programa 2026',
+          sequenceOrder: '1',
+          submissionStatus: 'submitted',
+        },
+      ]),
+    };
+    const workflowManager = {
+      getRepository: jest.fn(() => ({
+        createQueryBuilder: jest.fn(() => queryBuilder),
+      })),
+    } as unknown as EntityManager;
+    const current = {
+      id: 'stage-2',
+      workflowCycle: 'Programa 2026',
+      sequenceOrder: 2,
+    } as Campaign;
+
+    await expect(
+      service.assertWorkflowUnlocked(current, 'school-id', workflowManager),
+    ).resolves.toBeUndefined();
+  });
 });

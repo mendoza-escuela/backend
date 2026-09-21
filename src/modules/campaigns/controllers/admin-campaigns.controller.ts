@@ -53,6 +53,11 @@ export class AdminCampaignsController {
     return this.campaignsService.publishedVersionOptions();
   }
 
+  @Get('workflows')
+  workflowOptions() {
+    return this.campaignsService.workflowOptions();
+  }
+
   @Get('tracking/options')
   trackingOptions() {
     return this.campaignsService.trackingOptions();

@@ -69,6 +69,10 @@ export class SubmissionsService {
       })
     ).filter((submission) => this.isExpiredDraft(submission, now.getTime()));
     const campaignIds = campaigns.map((campaign) => campaign.id);
+    const workflowBlockers = await this.campaignsService.workflowBlockers(
+      campaigns,
+      school.id,
+    );
     const submissions = campaignIds.length
       ? await this.dataSource.getRepository(SurveySubmission).find({
           where: {
@@ -96,15 +100,27 @@ export class SubmissionsService {
       rectification,
       items: campaigns.map((campaign) => {
         const submission = submissionsByCampaign.get(campaign.id);
+        const workflowBlocker = workflowBlockers.get(campaign.id) ?? null;
         const totalQuestions =
           questionCounts.get(campaign.surveyVersionId) ?? 0;
         return {
           ...this.campaignSummary(campaign),
-          canStart: school.isActive && rectification.isEvaluationReady,
+          canStart:
+            school.isActive &&
+            rectification.isEvaluationReady &&
+            !workflowBlocker,
+          workflowStatus:
+            submission?.status === SubmissionStatus.Submitted
+              ? 'completed'
+              : workflowBlocker
+                ? 'locked'
+                : 'available',
+          blockedBy: workflowBlocker,
           blockingReason: this.blockingReason(
             school.isActive,
             rectification.isConfirmed,
             rectification.isEvaluationReady,
+            workflowBlocker?.name,
           ),
           submission: submission
             ? this.submissionSummary(submission, totalQuestions)
@@ -115,6 +131,8 @@ export class SubmissionsService {
         ...this.campaignSummary(submission.campaign),
         canStart: false,
         readOnly: true,
+        workflowStatus: 'locked',
+        blockedBy: null,
         blockingReason:
           'La etapa ya no se encuentra abierta. El borrador está disponible en modo de sólo lectura.',
         submission: this.submissionSummary(
@@ -144,6 +162,11 @@ export class SubmissionsService {
         );
         await this.campaignSchoolsService.assertAssigned(
           campaignId,
+          school.id,
+          manager,
+        );
+        await this.campaignsService.assertWorkflowUnlocked(
+          campaign,
           school.id,
           manager,
         );
@@ -225,7 +248,7 @@ export class SubmissionsService {
   }
 
   async workspace(campaignId: string, actor: AuthenticatedUser) {
-    const { school, submission, applicability, campaignOpen } =
+    const { school, submission, applicability, campaignOpen, workflowBlocker } =
       await this.dataSource.transaction(async (manager) => {
         const context = await this.schoolsService.evaluationContextForUser(
           actor.id,
@@ -254,6 +277,16 @@ export class SubmissionsService {
         // bloqueo de escritura y la etapa continúa abierta al revalidarla.
         const campaignOpen =
           loaded.status === SubmissionStatus.Draft ? shouldLock && open : open;
+        const workflowBlocker =
+          campaignOpen && loaded.status === SubmissionStatus.Draft
+            ? ((
+                await this.campaignsService.workflowBlockers(
+                  [loaded.campaign],
+                  context.school.id,
+                  manager,
+                )
+              ).get(loaded.campaign.id) ?? null)
+            : null;
         if (campaignOpen && loaded.status === SubmissionStatus.Draft)
           await this.refreshDraftRectification(
             manager,
@@ -271,6 +304,7 @@ export class SubmissionsService {
             { readOnly: !campaignOpen },
           ),
           campaignOpen,
+          workflowBlocker,
         };
       });
     return this.serializeWorkspace(
@@ -278,14 +312,17 @@ export class SubmissionsService {
       applicability,
       school.isActive &&
         campaignOpen &&
+        !workflowBlocker &&
         submission.status === SubmissionStatus.Draft,
       !school.isActive
         ? 'El establecimiento está inactivo.'
         : !campaignOpen
           ? 'La etapa ya no se encuentra abierta.'
-          : submission.status === SubmissionStatus.Submitted
-            ? 'La presentación ya fue enviada y es de sólo lectura.'
-            : null,
+          : workflowBlocker
+            ? `Antes de continuar debés enviar la etapa anterior: ${workflowBlocker.name}.`
+            : submission.status === SubmissionStatus.Submitted
+              ? 'La presentación ya fue enviada y es de sólo lectura.'
+              : null,
     );
   }
 
@@ -304,9 +341,17 @@ export class SubmissionsService {
         manager,
       );
       const { school, rectification } = context;
-      await this.campaignsService.assertOperational(campaignId, manager);
+      const campaign = await this.campaignsService.assertOperational(
+        campaignId,
+        manager,
+      );
       await this.campaignSchoolsService.assertAssigned(
         campaignId,
+        school.id,
+        manager,
+      );
+      await this.campaignsService.assertWorkflowUnlocked(
+        campaign,
         school.id,
         manager,
       );
@@ -367,9 +412,17 @@ export class SubmissionsService {
         manager,
       );
       const { school, rectification } = context;
-      await this.campaignsService.assertOperational(campaignId, manager);
+      const campaign = await this.campaignsService.assertOperational(
+        campaignId,
+        manager,
+      );
       await this.campaignSchoolsService.assertAssigned(
         campaignId,
+        school.id,
+        manager,
+      );
+      await this.campaignsService.assertWorkflowUnlocked(
+        campaign,
         school.id,
         manager,
       );
@@ -1138,6 +1191,8 @@ export class SubmissionsService {
       description: campaign.description,
       type: campaign.type,
       status: campaign.status,
+      workflowCycle: campaign.workflowCycle,
+      sequenceOrder: campaign.sequenceOrder,
       startsAt: campaign.startsAt,
       endsAt: campaign.endsAt,
       surveyVersion: campaign.surveyVersion
@@ -1158,6 +1213,7 @@ export class SubmissionsService {
     schoolActive: boolean,
     isConfirmed: boolean,
     isEvaluationReady: boolean,
+    workflowBlockerName?: string,
   ) {
     if (!schoolActive)
       return 'El establecimiento está inactivo y no puede iniciar evaluaciones.';
@@ -1165,6 +1221,8 @@ export class SubmissionsService {
       return 'Debés confirmar la ficha institucional anual antes de comenzar.';
     if (!isEvaluationReady)
       return 'La ficha anual está confirmada, pero requiere actualización antes de comenzar.';
+    if (workflowBlockerName)
+      return `Antes de continuar debés enviar la etapa anterior: ${workflowBlockerName}.`;
     return null;
   }
 
